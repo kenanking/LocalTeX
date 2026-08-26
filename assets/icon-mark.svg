@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="LocalTeX mark">
+  <g fill="currentColor">
+    <path d="M66 48h32v10H166V48h32v34h-20V70H86v12H66z"/>
+    <path d="M66 174h20v12H178V174h20v34h-32V198H98v10H66z"/>
+    <polygon points="88,73 120,73 160,126 128,126"/>
+    <polygon points="88,183 120,183 160,130 128,130"/>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+# If cargo fails with `-lgbm` / `cannot find -lgbm`:
+# libgbm.so.1 is present on many Linux systems, but the unversioned
+# libgbm.so lives in libgbm-dev. Without sudo, symlink it locally:
+#
+#   mkdir -p ~/.local/lib
+#   ln -sf /usr/lib/x86_64-linux-gnu/libgbm.so.1 ~/.local/lib/libgbm.so
+#
+# then copy this file to config.toml and set the path:
+#
+# [build]
+# rustflags = ["-L", "/home/YOU/.local/lib"]
+#
+# Faster linking (Ubuntu: apt install mold). Safe with or without LTO:
+# rustflags = ["-L", "/home/YOU/.local/lib", "-C", "link-arg=-fuse-ld=mold"]
