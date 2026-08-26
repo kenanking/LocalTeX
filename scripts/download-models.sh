@@ -52,8 +52,9 @@ download_assets "$WORKDIR"
 )
 
 tar -xzf "$WORKDIR/$TARBALL" -C "$DEST"
-# manifest.json is also a release asset for inspection without the tarball
 cp -f "$WORKDIR/manifest.json" "$DEST/manifest.json"
+cp -f "$WORKDIR/$SUMS" "$DEST/$SUMS"
+(cd "$DEST" && sha256sum -c "$SUMS" --ignore-missing)
 
 echo "localtex: OpenDoc ship ready in $DEST"
 ls -lh "$DEST"/layout.onnx "$DEST"/encoder.onnx "$DEST"/decoder.onnx \
