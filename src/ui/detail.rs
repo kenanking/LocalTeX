@@ -120,6 +120,12 @@ impl MainWindow {
                     .border_color(rgb(theme::BORDER))
                     .bg(rgb(theme::BG))
                     .overflow_hidden()
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        if this.preview.hover != *hovered {
+                            this.preview.hover = *hovered;
+                            cx.notify();
+                        }
+                    }))
                     .child(
                         div()
                             .id("preview-scroll")
@@ -156,6 +162,14 @@ impl MainWindow {
                         ScrollAxis::Vertical,
                         &self.preview.vscroll,
                         &self.preview.thumb,
+                        self.preview.hover
+                            || !self.preview.hscroll_hover.borrow().is_empty()
+                            || self
+                                .preview
+                                .thumb
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|d| d.vertical),
                     )),
             )
             .when(ready && (!copy_rows.is_empty() || ocr.is_some()), |d| {
@@ -460,6 +474,7 @@ impl MainWindow {
                     layout.height,
                     false,
                     &self.preview.thumb,
+                    &self.preview.hscroll_hover,
                     view,
                     table_el,
                 )
@@ -520,6 +535,7 @@ impl MainWindow {
                     content_h,
                     false,
                     &self.preview.thumb,
+                    &self.preview.hscroll_hover,
                     view,
                     row,
                 ))
@@ -535,6 +551,7 @@ impl MainWindow {
                 math.height,
                 true,
                 &self.preview.thumb,
+                &self.preview.hscroll_hover,
                 view,
                 img,
             )

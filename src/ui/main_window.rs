@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,6 +38,8 @@ pub(crate) struct PreviewPane {
     hscrolls: HashMap<String, ScrollHandle>,
     pub(crate) sel: Rc<RefCell<PreviewSel>>,
     pub(crate) thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
+    pub(crate) hover: bool,
+    pub(crate) hscroll_hover: Rc<RefCell<HashSet<String>>>,
     doc: Option<Uuid>,
     pub(crate) bar_pending: bool,
 }
@@ -49,6 +51,8 @@ impl PreviewPane {
             hscrolls: HashMap::new(),
             sel: Rc::new(RefCell::new(PreviewSel::default())),
             thumb: Rc::new(RefCell::new(None)),
+            hover: false,
+            hscroll_hover: Rc::new(RefCell::new(HashSet::new())),
             doc: None,
             bar_pending: false,
         }
@@ -61,6 +65,8 @@ impl PreviewPane {
         self.vscroll.set_offset(point(px(0.), px(0.)));
         self.hscrolls.clear();
         self.thumb.borrow_mut().take();
+        self.hover = false;
+        self.hscroll_hover.borrow_mut().clear();
         self.doc = Some(doc_id);
         self.bar_pending = true;
         self.sel.borrow_mut().clear();

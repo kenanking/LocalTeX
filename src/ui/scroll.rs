@@ -1,6 +1,7 @@
 //! Overlay scrollbars and nested horizontal panes for the preview.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
@@ -166,6 +167,14 @@ impl Element for ThumbDragCatcher {
     }
 }
 
+fn thumb_visible(hovered: bool, drag: &RefCell<Option<ScrollThumbDrag>>, vertical: bool) -> bool {
+    hovered
+        || drag
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.vertical == vertical)
+}
+
 fn begin_thumb_drag(
     drag: &Rc<RefCell<Option<ScrollThumbDrag>>>,
     vertical: bool,
@@ -194,6 +203,7 @@ pub fn overlay_scrollbar(
     axis: ScrollAxis,
     handle: &ScrollHandle,
     drag: &Rc<RefCell<Option<ScrollThumbDrag>>>,
+    visible: bool,
 ) -> AnyElement {
     let vertical = matches!(axis, ScrollAxis::Vertical);
     let max: f32 = if vertical {
@@ -211,7 +221,7 @@ pub fn overlay_scrollbar(
     } else {
         handle.offset().x.into()
     };
-    let show = max > 1.0 && view > 1.0;
+    let show = max > 1.0 && view > 1.0 && visible;
     let thumb_len = if show {
         (view * view / (view + max)).clamp(24.0, view)
     } else {
@@ -289,10 +299,12 @@ pub fn h_scroll_pane(
     content_h: f32,
     center: bool,
     drag: &Rc<RefCell<Option<ScrollThumbDrag>>>,
+    hover: &Rc<RefCell<HashSet<String>>>,
     view: EntityId,
     content: impl IntoElement,
 ) -> AnyElement {
     let id = id.into();
+    let pane_key = id.to_string();
     let scroll_id = SharedString::from(format!("{id}-h"));
     let inner_id = SharedString::from(format!("{id}-inner"));
     let thumb_id = SharedString::from(format!("{id}-thumb"));
@@ -354,17 +366,37 @@ pub fn h_scroll_pane(
         })
         .child(inner);
 
+    let hovered = hover.borrow().contains(&pane_key);
+    let chrome_id = SharedString::from(format!("{id}-chrome"));
     div()
+        .id(chrome_id)
         .relative()
         .w_full()
         .min_w_0()
         .pb(px(10.))
+        .on_hover({
+            let hover = hover.clone();
+            let pane_key = pane_key.clone();
+            move |hovered, _, cx| {
+                let mut set = hover.borrow_mut();
+                let was = set.contains(&pane_key);
+                if *hovered {
+                    set.insert(pane_key.clone());
+                } else {
+                    set.remove(&pane_key);
+                }
+                if was != *hovered {
+                    cx.notify(view);
+                }
+            }
+        })
         .child(scroller)
         .child(overlay_scrollbar(
             thumb_id,
             ScrollAxis::Horizontal,
             handle,
             drag,
+            thumb_visible(hovered, drag, false),
         ))
         .into_any()
 }
