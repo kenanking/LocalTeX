@@ -5,7 +5,7 @@ use ratex_parser::parser::parse;
 use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
 use ratex_types::math_style::MathStyle;
 
-use crate::doc::{snip_kind, split_math, Block, BlockKind, CopyRow, MathRun, SnipKind};
+use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, CopyRow, MathRun, SnipKind};
 use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::table::{self, Slot, Table};
 use uuid::Uuid;
@@ -61,7 +61,15 @@ impl Eqno {
 #[derive(Clone, Debug)]
 pub enum PreviewBlock {
     Paragraph(Vec<InlineSeg>),
-    Display { math: SvgMath, eqno: Option<Eqno> },
+    Heading {
+        role: crate::doc::BlockRole,
+        segs: Vec<InlineSeg>,
+    },
+    Caption(Vec<InlineSeg>),
+    Display {
+        math: SvgMath,
+        eqno: Option<Eqno>,
+    },
     Table(PreviewLayout),
     Fallback(String),
 }
@@ -241,12 +249,23 @@ fn math_seg(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
 }
 
 fn segs_from_text(text: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    segs_from_normalized(
+        &text.split_whitespace().collect::<Vec<_>>().join(" "),
+        math,
+        dpr,
+    )
+}
+
+fn segs_from_cell(text: &str, dpr: f64) -> Vec<InlineSeg> {
+    segs_from_normalized(&table::cell_display_text(text), MathStyle::Text, dpr)
+}
+
+fn segs_from_normalized(normalized: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
     if normalized.is_empty() {
         return Vec::new();
     }
     let mut segs = Vec::new();
-    for run in split_math(&normalized) {
+    for run in split_math(normalized) {
         match run {
             MathRun::Text(t) if !t.is_empty() => segs.push(InlineSeg::Text(t)),
             MathRun::Inline(tex) | MathRun::Display(tex) => segs.push(math_seg(&tex, math, dpr)),
@@ -254,6 +273,40 @@ fn segs_from_text(text: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
         }
     }
     segs
+}
+
+/// Split inline segs on `\n` so table list cells can stack as lines.
+pub(crate) fn segs_lines(segs: &[InlineSeg]) -> Vec<Vec<InlineSeg>> {
+    let mut lines = vec![Vec::new()];
+    for seg in segs {
+        match seg {
+            InlineSeg::Text(t) => {
+                let mut parts = t.split('\n');
+                if let Some(first) = parts.next() {
+                    if !first.is_empty() {
+                        lines
+                            .last_mut()
+                            .unwrap()
+                            .push(InlineSeg::Text(first.to_string()));
+                    }
+                }
+                for part in parts {
+                    lines.push(Vec::new());
+                    if !part.is_empty() {
+                        lines
+                            .last_mut()
+                            .unwrap()
+                            .push(InlineSeg::Text(part.to_string()));
+                    }
+                }
+            }
+            other => lines.last_mut().unwrap().push(other.clone()),
+        }
+    }
+    if lines.len() == 1 && lines[0].is_empty() {
+        lines.clear();
+    }
+    lines
 }
 
 /// Collapse OCR newlines and split `$...$` into text + math for table cells
@@ -316,8 +369,17 @@ fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
     }
 
     let content_h = |text: &str, w: f32| {
+        let display = table::cell_display_text(text);
+        if table::looks_like_list(&display) {
+            let n = display
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count()
+                .max(1);
+            return (n as f32) * LINE + PAD_Y;
+        }
         let inner = (w - PAD_X).max(24.0);
-        let lines = ((estimate_text_width(text) / inner).ceil() as usize).max(1);
+        let lines = ((estimate_text_width(&display) / inner).ceil() as usize).max(1);
         (lines as f32) * LINE + PAD_Y
     };
 
@@ -411,7 +473,7 @@ fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
                         y: ys[r],
                         w,
                         h,
-                        segs: segs_from_text(text, MathStyle::Text, dpr),
+                        segs: segs_from_cell(text, dpr),
                         header: r < header_rows,
                         numeric: looks_numeric(text),
                         colspan: cs,
@@ -431,17 +493,21 @@ fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
 }
 
 fn estimate_text_width(s: &str) -> f32 {
-    s.chars()
-        .map(|ch| {
-            if ch == '$' {
-                5.0
-            } else if ch.is_ascii() {
-                7.2
-            } else {
-                12.0
-            }
+    s.lines()
+        .map(|line| {
+            line.chars()
+                .map(|ch| {
+                    if ch == '$' {
+                        5.0
+                    } else if ch.is_ascii() {
+                        7.2
+                    } else {
+                        12.0
+                    }
+                })
+                .sum::<f32>()
         })
-        .sum()
+        .fold(0.0_f32, f32::max)
 }
 
 fn looks_numeric(s: &str) -> bool {
@@ -534,6 +600,26 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                 if table::looks_like_html_table(&block.text) {
                     flush_para(&mut para, &mut out);
                     push_table_block(&block.text, &mut out, dpr);
+                    continue;
+                }
+                if block.role.interrupts_prose() {
+                    flush_para(&mut para, &mut out);
+                    let segs = segs_from_text(&block.text, MathStyle::Text, dpr);
+                    if segs.iter().any(|s| match s {
+                        InlineSeg::Text(t) => !t.trim().is_empty(),
+                        InlineSeg::Math { .. } => true,
+                    }) {
+                        match block.role {
+                            BlockRole::DocTitle | BlockRole::SectionTitle => {
+                                out.push(PreviewBlock::Heading {
+                                    role: block.role,
+                                    segs,
+                                })
+                            }
+                            BlockRole::Caption => out.push(PreviewBlock::Caption(segs)),
+                            BlockRole::Body => {}
+                        }
+                    }
                     continue;
                 }
                 for run in split_math(&block.text) {
@@ -633,6 +719,35 @@ mod tests {
     }
 
     #[test]
+    fn title_and_body_are_separate_preview_blocks() {
+        let r = crate::doc::Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let blocks = vec![
+            Block::new(BlockKind::Text, r, "Introduction")
+                .with_role(crate::doc::BlockRole::DocTitle),
+            Block::new(BlockKind::Text, r, "The method works."),
+        ];
+        let preview = document_preview(&blocks);
+        assert!(
+            matches!(
+                preview.as_slice(),
+                [
+                    PreviewBlock::Heading {
+                        role: crate::doc::BlockRole::DocTitle,
+                        ..
+                    },
+                    PreviewBlock::Paragraph(_)
+                ]
+            ),
+            "title must not weld to body, got {preview:?}"
+        );
+    }
+
+    #[test]
     fn short_formula_block_stays_inline_with_neighbors() {
         let r = crate::doc::Rect {
             x: 0,
@@ -672,10 +787,48 @@ mod tests {
         assert!(
             segs.iter().any(|s| match s {
                 InlineSeg::Text(t) => t.contains("SARCLIP"),
-                InlineSeg::Math { .. } => false,
+                _ => false,
             }),
-            "expected surrounding text, got {segs:?}"
+            "expected SARCLIP text, got {segs:?}"
         );
+    }
+
+    #[test]
+    fn section_title_is_heading_not_paragraph() {
+        let r = crate::doc::Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let blocks = vec![
+            Block::new(BlockKind::Text, r, "Method").with_role(crate::doc::BlockRole::SectionTitle),
+            Block::new(BlockKind::Text, r, "Details."),
+        ];
+        let preview = document_preview(&blocks);
+        assert!(
+            matches!(
+                preview.as_slice(),
+                [
+                    PreviewBlock::Heading {
+                        role: crate::doc::BlockRole::SectionTitle,
+                        ..
+                    },
+                    PreviewBlock::Paragraph(_)
+                ]
+            ),
+            "section title must not weld to body, got {preview:?}"
+        );
+    }
+
+    #[test]
+    fn table_list_cell_keeps_item_breaks() {
+        let html = "<table><tr><td>- one\n- two</td></tr></table>";
+        let table = table::parse_html(html).unwrap();
+        let layout = table_preview_layout(&table, raster_dpr(1.0));
+        assert_eq!(layout.cells.len(), 1);
+        let lines = segs_lines(&layout.cells[0].segs);
+        assert_eq!(lines.len(), 2, "got {lines:?}");
     }
 
     #[test]
@@ -777,6 +930,7 @@ mod tests {
                 bbox: r,
                 text: "E=mc^2".into(),
                 display: true,
+                role: crate::doc::BlockRole::Body,
             },
             Block::new(BlockKind::Text, r, "as usual."),
         ];

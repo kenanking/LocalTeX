@@ -14,7 +14,7 @@ use super::widgets::{
     btn, copy_row, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
 };
 use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta};
-use crate::preview::{Eqno, InlineSeg, PreviewBlock, PreviewLayout, SvgMath};
+use crate::preview::{segs_lines, Eqno, InlineSeg, PreviewBlock, PreviewLayout, SvgMath};
 use crate::state::AppState;
 
 impl MainWindow {
@@ -423,7 +423,9 @@ impl MainWindow {
             .iter()
             .enumerate()
             .filter_map(|(i, block)| match block {
-                PreviewBlock::Paragraph(segs) => {
+                PreviewBlock::Paragraph(segs)
+                | PreviewBlock::Heading { segs, .. }
+                | PreviewBlock::Caption(segs) => {
                     Some((format!("p-{i}"), concat_inline_segs(segs).0.into()))
                 }
                 PreviewBlock::Fallback(text) => Some((format!("f-{i}"), text.clone().into())),
@@ -461,6 +463,38 @@ impl MainWindow {
                     .child(self.render_segs(format!("p-{i}"), segs, true, cx))
                     .into_any()
             }
+            PreviewBlock::Heading { role, segs } => {
+                let doc_title = *role == crate::doc::BlockRole::DocTitle;
+                div()
+                    .id(SharedString::from(format!("p-{i}")))
+                    .w_full()
+                    .min_w_0()
+                    .text_color(rgb(theme::TEXT))
+                    .when(doc_title, |d| {
+                        d.pt(px(2.))
+                            .pb(px(6.))
+                            .text_xl()
+                            .line_height(px(28.))
+                            .font_weight(gpui::FontWeight::BOLD)
+                    })
+                    .when(!doc_title, |d| {
+                        d.pt(px(12.))
+                            .pb(px(4.))
+                            .text_lg()
+                            .line_height(px(24.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                    })
+                    .child(self.render_segs(format!("p-{i}"), segs, false, cx))
+                    .into_any()
+            }
+            PreviewBlock::Caption(segs) => div()
+                .id(SharedString::from(format!("p-{i}")))
+                .w_full()
+                .min_w_0()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(self.render_segs(format!("p-{i}"), segs, false, cx))
+                .into_any(),
             PreviewBlock::Display { math, eqno } => {
                 self.render_display_math(i, math, eqno.as_ref(), view, cx)
             }
@@ -505,10 +539,13 @@ impl MainWindow {
         cx: &mut App,
     ) -> AnyElement {
         let handle = self.preview.hscroll_handle(&format!("d-{i}"));
-        let view_w: f32 = handle.bounds().size.width.into();
-        let pane_measured = view_w > 1.0;
+        let measured: f32 = handle.bounds().size.width.into();
+        if measured > 1.0 {
+            self.preview.pane_w = measured;
+        }
+        let view_w = self.preview.pane_w;
         let tag_w = eqno.map(Eqno::width).unwrap_or(0.0);
-        let trailing = eqno.is_some() && pane_measured && math.width + tag_w + EQNO_GAP > view_w;
+        let trailing = eqno.is_some() && eqno_should_trail(math.width, tag_w, view_w);
 
         if trailing {
             let eqno = eqno.expect("trailing requires eqno");
@@ -603,13 +640,28 @@ impl MainWindow {
             .overflow_hidden();
         for cell in &layout.cells {
             let header = cell.header;
-            let center = cell.numeric || cell.colspan > 1;
+            let lines = segs_lines(&cell.segs);
+            let stacked = lines.len() > 1;
+            let center = !stacked && (cell.numeric || cell.colspan > 1);
+            let cell_id = format!("c-{i}-{}-{}", cell.row, cell.col);
+            let body = if stacked {
+                let mut col = div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap_0();
+                for (k, line) in lines.iter().enumerate() {
+                    col = col.child(self.render_segs(format!("{cell_id}-{k}"), line, false, cx));
+                }
+                col.into_any()
+            } else {
+                self.render_segs(cell_id.clone(), &cell.segs, false, cx)
+            };
             wrap = wrap.child(
                 div()
-                    .id(SharedString::from(format!(
-                        "c-{i}-{}-{}",
-                        cell.row, cell.col
-                    )))
+                    .id(SharedString::from(cell_id))
                     .absolute()
                     .left(px(cell.x))
                     .top(px(cell.y))
@@ -618,7 +670,8 @@ impl MainWindow {
                     .px_2()
                     .overflow_hidden()
                     .flex()
-                    .items_center()
+                    .when(stacked, |d| d.flex_col().items_start().py_1())
+                    .when(!stacked, |d| d.items_center())
                     .when(center, |d| d.justify_center())
                     .border_b_1()
                     .border_r_1()
@@ -629,12 +682,7 @@ impl MainWindow {
                     })
                     .text_xs()
                     .text_color(rgb(theme::TEXT))
-                    .child(self.render_segs(
-                        format!("c-{i}-{}-{}", cell.row, cell.col),
-                        &cell.segs,
-                        false,
-                        cx,
-                    )),
+                    .child(body),
             );
         }
         wrap
@@ -753,6 +801,10 @@ struct DetailSnap {
 }
 
 const EQNO_GAP: f32 = 12.0;
+
+fn eqno_should_trail(math_w: f32, tag_w: f32, pane_w: f32) -> bool {
+    pane_w > 1.0 && math_w + tag_w + EQNO_GAP > pane_w
+}
 
 fn concat_inline_segs(segs: &[InlineSeg]) -> (String, Vec<std::ops::Range<usize>>) {
     let mut text = String::new();
@@ -904,5 +956,12 @@ mod tests {
     fn wrap_units_keeps_latin_word() {
         let parts = wrap_units("E=mc^2");
         assert_eq!(parts, vec![(0, "E=mc^2".into())]);
+    }
+
+    #[test]
+    fn eqno_mode_ignores_unmeasured_pane() {
+        assert!(!super::eqno_should_trail(200.0, 24.0, 0.0));
+        assert!(!super::eqno_should_trail(200.0, 24.0, 400.0));
+        assert!(super::eqno_should_trail(200.0, 24.0, 220.0));
     }
 }

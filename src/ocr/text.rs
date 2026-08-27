@@ -118,6 +118,44 @@ pub(super) fn handle_text(text: &str) -> String {
         );
         text = sub(r"\n\s*\n+", "\n", &text);
     }
+    normalize_text(&text)
+}
+
+/// Ligatures, NBSP, full-width ASCII alphanumerics, collapsed blank lines.
+/// Do not Markdown-escape here: `Block.text` is shared with preview and LaTeX.
+pub(super) fn normalize_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\u{FB00}' => out.push_str("ff"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{FB03}' => out.push_str("ffi"),
+            '\u{FB04}' => out.push_str("ffl"),
+            '\u{FB05}' | '\u{FB06}' => out.push_str("st"),
+            '\u{00A0}' | '\u{3000}' => out.push(' '),
+            '\u{FF10}'..='\u{FF19}' | '\u{FF21}'..='\u{FF3A}' | '\u{FF41}'..='\u{FF5A}' => {
+                out.push(char::from_u32(ch as u32 - 0xFEE0).unwrap())
+            }
+            _ => out.push(ch),
+        }
+    }
+    sub(r"\n{3,}", "\n\n", &out)
+}
+
+/// When the text still carries \(\)/\[\] pairs, strip $ and rewrite them as $/$$.
+pub(super) fn normalize_math_delimiters(text: &str) -> String {
+    let has_paren = text.contains("\\(") && text.contains("\\)");
+    let has_bracket = text.contains("\\[") && text.contains("\\]");
+    if !has_paren && !has_bracket {
+        return text.to_string();
+    }
+    let mut text = text.replace('$', "");
+    text = text
+        .replace("\\(", " $ ")
+        .replace("\\)", " $ ")
+        .replace("\\[", " $$ ")
+        .replace("\\]", " $$ ");
     text
 }
 

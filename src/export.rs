@@ -1,7 +1,8 @@
 //! Copy / document export. New formats implement [`Exporter`].
 
 use crate::doc::{
-    unwrap_formula, Block, BlockKind, CopyKind, CopyRow, ExportFmt, MathRun, Rect, SnipKind,
+    unwrap_formula, Block, BlockKind, BlockRole, CopyKind, CopyRow, ExportFmt, MathRun, Rect,
+    SnipKind,
 };
 use crate::math;
 use crate::prefs::Prefs;
@@ -113,7 +114,7 @@ impl Exporter for LatexTable {
         CopyKind::LatexTable
     }
     fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        table_exports(blocks).map(|e| e.tex).unwrap_or_default()
+        render_latex_table_snip(blocks)
     }
 }
 
@@ -130,8 +131,8 @@ impl Exporter for MdTable {
     fn copy_kind(&self) -> CopyKind {
         CopyKind::MdTable
     }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        table_exports(blocks).map(|e| e.md).unwrap_or_default()
+    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String {
+        export_blocks(blocks, ExportFmt::Markdown, prefs)
     }
 }
 
@@ -149,7 +150,7 @@ impl Exporter for TsvTable {
         CopyKind::Tsv
     }
     fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        table_exports(blocks).map(|e| e.tsv).unwrap_or_default()
+        table_tsv(blocks).unwrap_or_default()
     }
 }
 
@@ -205,34 +206,27 @@ pub fn exporters() -> &'static [&'static dyn Exporter] {
     &EXPORTERS
 }
 
-struct TableOut {
-    md: String,
-    tex: String,
-    tsv: String,
-}
-
-fn table_exports(blocks: &[Block]) -> Option<TableOut> {
+fn table_tsv(blocks: &[Block]) -> Option<String> {
     let html = table_html(blocks)?;
-    let parsed = table::parse_html(&html);
-    let md = parsed
-        .as_ref()
-        .map(|t| t.to_markdown())
-        .unwrap_or_else(|| table::html_to_markdown(&html));
-    let tex = parsed
-        .as_ref()
-        .map(|t| t.to_latex())
-        .unwrap_or_else(|| table::html_to_latex(&html));
-    let tsv = parsed.as_ref().map(|t| t.to_tsv()).unwrap_or_default();
-    Some(TableOut { md, tex, tsv })
+    Some(
+        table::parse_html(&html)
+            .map(|t| t.to_tsv())
+            .unwrap_or_default(),
+    )
 }
 
 pub fn export_blocks(blocks: &[Block], fmt: ExportFmt, prefs: &Prefs) -> String {
+    let grouped = group_rows(blocks);
     let mut out = String::new();
-    for (row_i, row) in group_rows(blocks).into_iter().enumerate() {
+    for (row_i, row) in grouped.iter().enumerate() {
         if row_i > 0 {
-            out.push('\n');
+            if row_is_spaced(&grouped[row_i - 1]) || row_is_spaced(row) {
+                out.push_str("\n\n");
+            } else {
+                out.push('\n');
+            }
         }
-        for (i, block) in row.into_iter().enumerate() {
+        for (i, block) in row.iter().enumerate() {
             if i > 0 {
                 out.push(' ');
             }
@@ -240,6 +234,13 @@ pub fn export_blocks(blocks: &[Block], fmt: ExportFmt, prefs: &Prefs) -> String 
         }
     }
     out
+}
+
+fn row_is_spaced(row: &[&Block]) -> bool {
+    row.iter().any(|b| {
+        matches!(effective_kind(b), BlockKind::Table)
+            || (b.kind == BlockKind::Text && b.role.interrupts_prose())
+    })
 }
 
 fn export_block(block: &Block, fmt: ExportFmt, prefs: &Prefs) -> String {
@@ -254,12 +255,25 @@ fn export_block(block: &Block, fmt: ExportFmt, prefs: &Prefs) -> String {
             }
         }
         (ExportFmt::Markdown, BlockKind::Table) => table::html_to_markdown(&block.text),
-        (ExportFmt::Markdown, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
+        (ExportFmt::Markdown, BlockKind::Text) => match block.role {
+            BlockRole::DocTitle => format!("# {}", emit_text_block(&block.text, fmt, prefs)),
+            BlockRole::SectionTitle => format!("## {}", emit_text_block(&block.text, fmt, prefs)),
+            _ => escape_md_leading_hashes(&emit_text_block(&block.text, fmt, prefs)),
+        },
         (ExportFmt::Latex, BlockKind::Formula) => {
             prefs.wrap_block(unwrap_formula(&block.text).0.trim())
         }
         (ExportFmt::Latex, BlockKind::Table) => table::html_to_latex(&block.text),
-        (ExportFmt::Latex, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
+        (ExportFmt::Latex, BlockKind::Text) => match block.role {
+            BlockRole::DocTitle => {
+                format!("\\section*{{{}}}", emit_text_block(&block.text, fmt, prefs))
+            }
+            BlockRole::SectionTitle => format!(
+                "\\subsection*{{{}}}",
+                emit_text_block(&block.text, fmt, prefs)
+            ),
+            _ => emit_text_block(&block.text, fmt, prefs),
+        },
     }
 }
 
@@ -364,6 +378,10 @@ fn emit_text_block(text: &str, fmt: ExportFmt, prefs: &Prefs) -> String {
 fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
     let mut rows: Vec<Vec<&Block>> = Vec::new();
     for block in blocks {
+        if block.kind == BlockKind::Text && block.role.interrupts_prose() {
+            rows.push(vec![block]);
+            continue;
+        }
         if matches!(effective_kind(block), BlockKind::Table | BlockKind::Formula)
             && (block.kind == BlockKind::Table
                 || table::looks_like_html_table(&block.text)
@@ -388,6 +406,55 @@ fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
 
 fn vertically_overlap(a: Rect, b: Rect) -> bool {
     a.y < b.bottom() && b.y < a.bottom()
+}
+
+fn render_latex_table_snip(blocks: &[Block]) -> String {
+    let mut caps_before = Vec::new();
+    let mut caps_after = Vec::new();
+    let mut seen_table = false;
+    let mut bodies = Vec::new();
+    for b in blocks {
+        if b.kind == BlockKind::Text && b.role == BlockRole::Caption {
+            let cap = escape_latex(b.text.trim());
+            if seen_table {
+                caps_after.push(cap);
+            } else {
+                caps_before.push(cap);
+            }
+        } else if effective_kind(b) == BlockKind::Table {
+            seen_table = true;
+            bodies.push(table::html_to_latex(&b.text));
+        }
+    }
+    let body = bodies.join("\n");
+    if caps_before.is_empty() && caps_after.is_empty() {
+        return body;
+    }
+    let mut s = String::from("\\begin{table}[htbp]\n\\centering\n");
+    for c in &caps_before {
+        s.push_str(&format!("\\caption{{{c}}}\n"));
+    }
+    s.push_str(&body);
+    for c in &caps_after {
+        s.push_str(&format!("\n\\caption{{{c}}}"));
+    }
+    s.push_str("\n\\end{table}");
+    s
+}
+
+/// Body/caption lines that start with `#` must not become Markdown headings.
+/// Layout titles already use `BlockRole`; this is only the GFM export view.
+fn escape_md_leading_hashes(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            if line.trim_start().starts_with('#') {
+                line.replacen('#', "\\#", 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn escape_latex(text: &str) -> String {
@@ -421,5 +488,35 @@ mod tests {
             assert!(ids.insert(exp.id()), "duplicate {}", exp.id());
             assert!(!exp.label().is_empty());
         }
+    }
+
+    #[test]
+    fn markdown_body_escapes_leading_hash() {
+        let prefs = crate::prefs::Prefs::default();
+        let blocks = vec![Block::new(
+            BlockKind::Text,
+            crate::doc::Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            "# not a heading",
+        )];
+        let md = export_blocks(&blocks, ExportFmt::Markdown, &prefs);
+        assert_eq!(md, "\\# not a heading");
+        let titled = vec![Block::new(
+            BlockKind::Text,
+            crate::doc::Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            "Intro",
+        )
+        .with_role(BlockRole::DocTitle)];
+        let md = export_blocks(&titled, ExportFmt::Markdown, &prefs);
+        assert_eq!(md, "# Intro");
     }
 }

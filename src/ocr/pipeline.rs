@@ -15,7 +15,7 @@ use super::imgops::{self, RgbImg};
 use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
 use super::unirec::{Tokenizer, UniRec};
-use crate::doc::{Block, BlockKind, OcrMeta, Rect};
+use crate::doc::{Block, BlockKind, BlockRole, OcrMeta, Rect};
 use crate::identity::APP_SLUG;
 
 pub const LAYOUT_ONNX: &str = "layout.onnx";
@@ -114,10 +114,10 @@ impl Pipeline {
                 pending.push(None);
                 continue;
             };
+
             if is_formula(base) {
                 crop = imgops::crop_margin(&crop);
             }
-
             let out = self.unirec.recognize(&crop)?;
             encode_s += out.encode_s;
             decode_s += out.decode_s;
@@ -197,18 +197,9 @@ fn postprocess(base: &str, mut text: String) -> String {
         text::handle_text(&text)
     };
     text = text::truncate_repetitive_content(&text);
-    let has_paren = text.contains("\\(") && text.contains("\\)");
-    let has_bracket = text.contains("\\[") && text.contains("\\]");
-    if has_paren || has_bracket {
+    text = text::normalize_math_delimiters(&text);
+    if base == "formula_number" && (text.contains('$')) {
         text = text.replace('$', "");
-        text = text
-            .replace("\\(", " $ ")
-            .replace("\\)", " $ ")
-            .replace("\\[", " $$ ")
-            .replace("\\]", " $$ ");
-        if base == "formula_number" {
-            text = text.replace('$', "");
-        }
     }
     if base.contains("table") {
         let html = text::convert_otsl_to_html(&text);
@@ -223,6 +214,15 @@ pub(super) fn is_formula(base: &str) -> bool {
     base.contains("formula") && base != "formula_number"
 }
 
+fn role_for(base: &str) -> BlockRole {
+    match base {
+        "doc_title" => BlockRole::DocTitle,
+        "paragraph_title" => BlockRole::SectionTitle,
+        "figure_title" => BlockRole::Caption,
+        _ => BlockRole::Body,
+    }
+}
+
 pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Block> {
     let text = text.trim();
     if text.is_empty() {
@@ -235,7 +235,7 @@ pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Bl
     } else {
         BlockKind::Text
     };
-    let mut block = Block::new(kind, bbox_to_rect(coord), text);
+    let mut block = Block::new(kind, bbox_to_rect(coord), text).with_role(role_for(base));
     if kind == BlockKind::Formula {
         let (body, from_dollars) = crate::math::unwrap_formula(&block.text);
         if body.is_empty() {

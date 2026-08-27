@@ -40,6 +40,9 @@ pub(crate) struct PreviewPane {
     pub(crate) thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
     pub(crate) hover: bool,
     pub(crate) hscroll_hover: Rc<RefCell<HashSet<String>>>,
+    /// Last measured preview-column width. Hover notify must not treat
+    /// a 0-width first layout as a different eqno mode.
+    pub(crate) pane_w: f32,
     doc: Option<Uuid>,
     pub(crate) bar_pending: bool,
 }
@@ -53,6 +56,7 @@ impl PreviewPane {
             thumb: Rc::new(RefCell::new(None)),
             hover: false,
             hscroll_hover: Rc::new(RefCell::new(HashSet::new())),
+            pane_w: 0.0,
             doc: None,
             bar_pending: false,
         }
@@ -67,6 +71,7 @@ impl PreviewPane {
         self.thumb.borrow_mut().take();
         self.hover = false;
         self.hscroll_hover.borrow_mut().clear();
+        self.pane_w = 0.0;
         self.doc = Some(doc_id);
         self.bar_pending = true;
         self.sel.borrow_mut().clear();

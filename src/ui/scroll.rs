@@ -235,7 +235,7 @@ pub fn overlay_scrollbar(
     };
 
     if !show {
-        return div().into_any();
+        return div().absolute().w(px(0.)).h(px(0.)).into_any();
     }
     let handle = handle.clone();
     let drag = drag.clone();
@@ -310,21 +310,12 @@ pub fn h_scroll_pane(
     let thumb_id = SharedString::from(format!("{id}-thumb"));
     let content_w = content_w.max(1.0);
     let content_h = content_h.max(1.0);
-    let view_w: f32 = handle.bounds().size.width.into();
-    let inner_w = if center && view_w > content_w {
-        view_w
-    } else {
-        content_w
-    };
 
     let inner = div()
         .id(inner_id)
-        .w(px(inner_w))
+        .w(px(content_w))
         .h(px(content_h))
         .flex_none()
-        .when(center && inner_w > content_w + 0.5, |d| {
-            d.flex().justify_center()
-        })
         .child(
             div()
                 .w(px(content_w))
@@ -339,6 +330,7 @@ pub fn h_scroll_pane(
         .min_w_0()
         .overflow_x_hidden()
         .track_scroll(handle)
+        .when(center, |d| d.flex().justify_center())
         .on_scroll_wheel({
             let handle = handle.clone();
             move |event, window, cx| {

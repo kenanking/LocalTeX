@@ -131,7 +131,7 @@ fn rgba_to_rgb(image: &RgbaImage) -> Result<RgbImg> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doc::BlockKind;
+    use crate::doc::{BlockKind, BlockRole};
     use crate::math::unwrap_formula;
     use pipeline::{is_formula, to_doc_block};
 
@@ -163,7 +163,15 @@ mod tests {
         assert!(!inline.display);
         let text = to_doc_block("text", [0.0, 0.0, 10.0, 10.0], "hello").expect("text");
         assert_eq!(text.kind, BlockKind::Text);
+        assert_eq!(text.role, BlockRole::Body);
         assert_eq!(text.text, "hello");
+        let title = to_doc_block("doc_title", [0.0, 0.0, 10.0, 10.0], "Intro").expect("title");
+        assert_eq!(title.role, BlockRole::DocTitle);
+        let section =
+            to_doc_block("paragraph_title", [0.0, 0.0, 10.0, 10.0], "Method").expect("section");
+        assert_eq!(section.role, BlockRole::SectionTitle);
+        let cap = to_doc_block("figure_title", [0.0, 0.0, 10.0, 10.0], "Table 1").expect("cap");
+        assert_eq!(cap.role, BlockRole::Caption);
         let table = to_doc_block(
             "table",
             [0.0, 0.0, 10.0, 10.0],
@@ -211,6 +219,17 @@ mod tests {
         ));
         let img = RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
         assert!(engine.recognize(&img).is_err());
+    }
+
+    #[test]
+    fn normalize_text_ligature_fullwidth() {
+        assert_eq!(text::normalize_text("ﬁ"), "fi");
+        assert_eq!(text::normalize_text("Ａ"), "A");
+        assert_eq!(
+            text::normalize_text("# heading"),
+            "# heading",
+            "leading # stays in Block.text; Markdown export escapes it"
+        );
     }
 
     #[test]

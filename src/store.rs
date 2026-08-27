@@ -7,7 +7,7 @@ use chrono::{Datelike, Duration as ChronoDuration, Local, NaiveDate, TimeZone};
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::doc::{Block, Document, OcrMeta};
+use crate::doc::{decode_blocks_json, encode_blocks_json, Block, Document, OcrMeta};
 use crate::identity::APP_SLUG;
 use crate::imgutil;
 
@@ -160,7 +160,7 @@ impl Store {
             params![id.to_string()],
             |row| row.get(0),
         )?;
-        serde_json::from_str(&json).context("blocks_json")
+        decode_blocks_json(&json).context("blocks_json")
     }
 
     pub fn load_png(&self, id: Uuid) -> Result<image::RgbaImage> {
@@ -192,7 +192,7 @@ impl Store {
         std::fs::write(&tmp, &png).with_context(|| "write png tmp")?;
         std::fs::rename(&tmp, &dest).with_context(|| "rename png")?;
 
-        let blocks_json = serde_json::to_string(&doc.blocks)?;
+        let blocks_json = encode_blocks_json(&doc.blocks)?;
         let search_text = Document::search_text_for_blocks(&doc.blocks);
         let first_line = doc.first_line();
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
@@ -219,7 +219,7 @@ impl Store {
     }
 
     pub fn update_ocr(&self, doc: &Document) -> Result<()> {
-        let blocks_json = serde_json::to_string(&doc.blocks)?;
+        let blocks_json = encode_blocks_json(&doc.blocks)?;
         let search_text = Document::search_text_for_blocks(&doc.blocks);
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         conn.execute(

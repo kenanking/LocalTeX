@@ -62,6 +62,26 @@ impl Rect {
     }
 }
 
+/// Layout role. Orthogonal to [`BlockKind`]: kind is payload grammar,
+/// role is structural weight. Serde default keeps old library rows as Body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockRole {
+    #[default]
+    Body,
+    DocTitle,
+    SectionTitle,
+    Caption,
+}
+
+impl BlockRole {
+    /// Titles and captions are not body prose: they flush paragraphs,
+    /// sit on their own export row, and do not count as snip-kind text.
+    pub fn interrupts_prose(self) -> bool {
+        !matches!(self, Self::Body)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Block {
     pub kind: BlockKind,
@@ -70,6 +90,8 @@ pub struct Block {
     /// Layout `display_formula`, or OCR wrapped the body in `$$`.
     #[serde(default)]
     pub display: bool,
+    #[serde(default)]
+    pub role: BlockRole,
 }
 
 impl Block {
@@ -79,8 +101,29 @@ impl Block {
             bbox,
             text: text.into(),
             display: false,
+            role: BlockRole::Body,
         }
     }
+
+    pub fn with_role(mut self, role: BlockRole) -> Self {
+        self.role = role;
+        self
+    }
+}
+
+pub fn decode_blocks_json(json: &str) -> Result<Vec<Block>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(json)?;
+    if value.is_array() {
+        serde_json::from_value(value)
+    } else if let Some(blocks) = value.get("blocks") {
+        serde_json::from_value(blocks.clone())
+    } else {
+        serde_json::from_value(value)
+    }
+}
+
+pub fn encode_blocks_json(blocks: &[Block]) -> Result<String, serde_json::Error> {
+    serde_json::to_string(blocks)
 }
 
 #[derive(Debug, Clone)]
@@ -317,7 +360,7 @@ pub fn snip_kind(blocks: &[Block]) -> SnipKind {
             BlockKind::Text => {
                 if table::looks_like_html_table(&b.text) {
                     n_table += 1;
-                } else {
+                } else if !b.role.interrupts_prose() {
                     n_text += 1;
                 }
             }
@@ -498,5 +541,74 @@ mod tests {
                 .any(|r| r.kind == CopyKind::LatexDoc),
             "LaTeX stays visible when it differs from Markdown"
         );
+    }
+
+    #[test]
+    fn old_blocks_json_array_is_layout_body() {
+        let json = r#"[{"kind":"Text","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"Hello"}]"#;
+        let blocks = decode_blocks_json(json).expect("array");
+        assert_eq!(blocks[0].role, BlockRole::Body);
+        assert_eq!(blocks[0].text, "Hello");
+    }
+
+    #[test]
+    fn legacy_formula_envelope_still_loads_blocks() {
+        let json = r#"{"rec":"formula","blocks":[{"kind":"Formula","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"x^2"}]}"#;
+        let blocks = decode_blocks_json(json).expect("envelope");
+        assert_eq!(blocks[0].text, "x^2");
+        let encoded = encode_blocks_json(&blocks).expect("enc");
+        assert!(encoded.starts_with('['), "{encoded}");
+    }
+
+    #[test]
+    fn table_plus_caption_is_table_snip() {
+        let html = "<table><tr><td>a</td></tr></table>";
+        let blocks = vec![
+            Block::new(BlockKind::Text, rect(0), "Table 1: Scores").with_role(BlockRole::Caption),
+            Block::new(BlockKind::Table, rect(20), html),
+        ];
+        assert_eq!(snip_kind(&blocks), SnipKind::Table);
+        let rows = copy_rows(&blocks, &crate::prefs::Prefs::default());
+        assert!(
+            rows.iter().any(|r| r.kind == CopyKind::MdTable),
+            "caption must not hide table copy rows"
+        );
+    }
+
+    #[test]
+    fn title_plus_body_is_mixed() {
+        let blocks = vec![
+            Block::new(BlockKind::Text, rect(0), "Intro").with_role(BlockRole::SectionTitle),
+            Block::new(BlockKind::Text, rect(20), "Body paragraph."),
+        ];
+        assert_eq!(snip_kind(&blocks), SnipKind::Mixed);
+    }
+
+    #[test]
+    fn markdown_emits_heading_and_caption_blank_line() {
+        let html = "<table><tr><th>A</th></tr><tr><td>1</td></tr></table>";
+        let prefs = crate::prefs::Prefs::default();
+        let titled = vec![
+            Block::new(BlockKind::Text, rect(0), "Intro").with_role(BlockRole::DocTitle),
+            Block::new(BlockKind::Text, rect(20), "Body."),
+        ];
+        let md = export_blocks(&titled, ExportFmt::Markdown, &prefs);
+        assert!(md.starts_with("# Intro"), "{md}");
+        assert!(md.contains("\n\nBody."), "{md}");
+
+        let table = vec![
+            Block::new(BlockKind::Text, rect(0), "Table 1: Scores").with_role(BlockRole::Caption),
+            Block::new(BlockKind::Table, rect(40), html),
+        ];
+        let md = export_blocks(&table, ExportFmt::Markdown, &prefs);
+        assert!(md.contains("Table 1: Scores\n\n"), "{md}");
+        assert!(md.contains("| A |"), "{md}");
+        let tex = copy_rows(&table, &prefs)
+            .into_iter()
+            .find(|r| r.kind == CopyKind::LatexTable)
+            .expect("latex table row")
+            .text;
+        assert!(tex.contains("\\begin{table}"), "{tex}");
+        assert!(tex.contains("\\caption{Table 1: Scores}"), "{tex}");
     }
 }

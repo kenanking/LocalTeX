@@ -203,7 +203,17 @@ impl Table {
 }
 
 fn md_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ").trim().to_string()
+    let s = s.replace('|', "\\|");
+    if looks_like_list(&s) {
+        // GFM pipe tables cannot host block lists; <br> is the portable break.
+        s.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("<br>")
+    } else {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
 }
 
 fn latex_cell(s: &str) -> String {
@@ -211,7 +221,21 @@ fn latex_cell(s: &str) -> String {
     if s.is_empty() {
         return String::new();
     }
-    // Keep $...$ math; escape the rest of a cell that is mostly prose.
+    if looks_like_list(s) {
+        let lines: Vec<String> = s
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                if l.contains('$') {
+                    l.replace('|', "")
+                } else {
+                    escape_latex_cell(l)
+                }
+            })
+            .collect();
+        return format!("\\shortstack[l]{{{}}}", lines.join(" \\\\ "));
+    }
     if s.contains('$') {
         return s.replace('\n', " ");
     }
@@ -280,7 +304,7 @@ pub fn parse_html(html: &str) -> Option<Table> {
                 }
             }
             row.push(Cell {
-                text: decode_html(&strip_tags(raw)),
+                text: cell_text_from_html(raw),
                 rowspan,
                 colspan,
             });
@@ -312,6 +336,103 @@ fn strip_tags(s: &str) -> String {
     static TAG: OnceLock<Regex> = OnceLock::new();
     let re = TAG.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("tag re"));
     re.replace_all(s, "").into_owned()
+}
+
+/// UniRec cells are usually plain text. Richer HTML (`<br>`, `<ul>`, `<ol>`)
+/// is folded into Markdown-like list lines so preview and copy keep structure.
+fn cell_text_from_html(raw: &str) -> String {
+    decode_html(&strip_tags(&rewrite_cell_markup(raw)))
+}
+
+fn rewrite_cell_markup(html: &str) -> String {
+    static UL: OnceLock<Regex> = OnceLock::new();
+    static OL: OnceLock<Regex> = OnceLock::new();
+    static LI: OnceLock<Regex> = OnceLock::new();
+    static BR: OnceLock<Regex> = OnceLock::new();
+    static BLOCK: OnceLock<Regex> = OnceLock::new();
+    let ul_re = UL.get_or_init(|| Regex::new(r"(?is)<ul\b[^>]*>(.*?)</ul>").expect("ul re"));
+    let ol_re = OL.get_or_init(|| Regex::new(r"(?is)<ol\b[^>]*>(.*?)</ol>").expect("ol re"));
+    let li_re = LI.get_or_init(|| Regex::new(r"(?is)<li\b[^>]*>(.*?)</li>").expect("li re"));
+    let mut s = html.to_string();
+    fn replace_lists(src: &str, re: &Regex, li_re: &Regex, ordered: bool) -> String {
+        let mut s = src.to_string();
+        while let Some(cap) = re.captures(&s) {
+            let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let mut block = String::new();
+            for (i, li) in li_re.captures_iter(inner).enumerate() {
+                let item = strip_tags(li.get(1).map(|m| m.as_str()).unwrap_or(""));
+                let item = item.trim();
+                if item.is_empty() {
+                    continue;
+                }
+                if !block.is_empty() {
+                    block.push('\n');
+                }
+                if ordered {
+                    block.push_str(&format!("{}. {item}", i + 1));
+                } else {
+                    block.push_str(&format!("- {item}"));
+                }
+            }
+            let range = cap.get(0).expect("list match").range();
+            s.replace_range(range, &block);
+        }
+        s
+    }
+    s = replace_lists(&s, ul_re, li_re, false);
+    s = replace_lists(&s, ol_re, li_re, true);
+    let br = BR.get_or_init(|| Regex::new(r"(?i)<br\s*/?>").expect("br re"));
+    s = br.replace_all(&s, "\n").into_owned();
+    let leftover_li = li_re;
+    s = leftover_li
+        .replace_all(&s, |cap: &regex::Captures| {
+            let item = strip_tags(cap.get(1).map(|m| m.as_str()).unwrap_or(""));
+            let item = item.trim();
+            if item.is_empty() {
+                String::new()
+            } else {
+                format!("- {item}\n")
+            }
+        })
+        .into_owned();
+    let block = BLOCK.get_or_init(|| Regex::new(r"(?i)</(?:p|div|h[1-6])>").expect("block re"));
+    block.replace_all(&s, "\n").into_owned()
+}
+
+/// Lines that are ordered (`1.`) or unordered (`-` / `*` / `+`) list items.
+pub fn looks_like_list(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    !lines.is_empty() && lines.iter().all(|l| list_marker(l))
+}
+
+fn list_marker(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ") {
+        return true;
+    }
+    let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return false;
+    }
+    let rest = &t[digits..];
+    rest.starts_with(". ") || rest.starts_with(") ")
+}
+
+/// Collapse OCR wrap, but keep list item line breaks for preview/export.
+pub fn cell_display_text(text: &str) -> String {
+    if looks_like_list(text) {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
 }
 
 fn decode_html(s: &str) -> String {
@@ -388,5 +509,27 @@ mod tests {
             md.contains("| A | BC |  |"),
             "markdown stays a flattened pipe table: {md}"
         );
+    }
+
+    #[test]
+    fn html_lists_in_cells_become_markdown_list_lines() {
+        let html = r#"<table><tr><th>Steps</th></tr><tr><td><ul><li>one</li><li>two</li></ul></td></tr></table>"#;
+        let t = parse_html(html).unwrap();
+        assert_eq!(t.rows[1][0].text, "- one\n- two");
+        let md = html_to_markdown(html);
+        assert!(md.contains("- one<br>- two"), "{md}");
+        let tex = html_to_latex(html);
+        assert!(tex.contains("\\shortstack[l]"), "{tex}");
+        assert!(tex.contains("one"), "{tex}");
+
+        let ordered = r#"<table><tr><td><ol><li>first</li><li>second</li></ol></td></tr></table>"#;
+        let t = parse_html(ordered).unwrap();
+        assert_eq!(t.rows[0][0].text, "1. first\n2. second");
+        let md = html_to_markdown(ordered);
+        assert!(md.contains("1. first<br>2. second"), "{md}");
+
+        let brs = r#"<table><tr><td>- a<br>- b</td></tr></table>"#;
+        let t = parse_html(brs).unwrap();
+        assert_eq!(t.rows[0][0].text, "- a\n- b");
     }
 }
