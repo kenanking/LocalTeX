@@ -299,8 +299,6 @@ pub fn h_scroll_pane(
     let content_w = content_w.max(1.0);
     let content_h = content_h.max(1.0);
     let view_w: f32 = handle.bounds().size.width.into();
-    let max_x: f32 = handle.max_offset().width.into();
-    let overflowing = max_x > 1.0 && view_w > 1.0;
     let inner_w = if center && view_w > content_w {
         view_w
     } else {
@@ -360,7 +358,7 @@ pub fn h_scroll_pane(
         .relative()
         .w_full()
         .min_w_0()
-        .when(overflowing, |d| d.pb(px(10.)))
+        .pb(px(10.))
         .child(scroller)
         .child(overlay_scrollbar(
             thumb_id,

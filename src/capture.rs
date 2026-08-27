@@ -17,6 +17,8 @@ pub struct DesktopShot {
     pub origin_y: i32,
     /// Physical rects of the grabs that built this canvas: `(x, y, w, h)`.
     /// Overlay placement must use these, not a second `Monitor::all()`.
+    /// Linux snip uses the stitched canvas; Windows reads this for per-monitor HWNDs.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub monitors: Vec<(i32, i32, i32, i32)>,
 }
 

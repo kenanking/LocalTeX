@@ -6,7 +6,7 @@ use gpui::{
 use super::main_window::{MainWindow, View};
 use super::theme;
 use super::widgets::{btn, ghost_btn, section_label};
-use crate::imgutil;
+use crate::ingest::IngestSource;
 
 pub(crate) struct DrawBoard {
     pub(crate) lines: Vec<Vec<Point<Pixels>>>,
@@ -82,10 +82,10 @@ impl MainWindow {
                                             .collect()
                                     })
                                     .collect();
-                                if let Some(img) = imgutil::rasterize_strokes(&pts, 3) {
-                                    this.view = View::Library;
-                                    this.state.update(cx, |s, cx| s.ingest_image(img, cx));
-                                }
+                                this.view = View::Library;
+                                this.state.update(cx, |s, cx| {
+                                    s.ingest(IngestSource::Strokes(pts), cx);
+                                });
                                 cx.notify();
                             });
                         }

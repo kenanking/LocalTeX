@@ -5,16 +5,20 @@ use ratex_parser::parser::parse;
 use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
 use ratex_types::math_style::MathStyle;
 
-use crate::doc::{snip_kind, split_math, Block, BlockKind, MathRun, SnipKind};
+use crate::doc::{snip_kind, split_math, Block, BlockKind, CopyRow, MathRun, SnipKind};
+use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::table::{self, Slot, Table};
+use uuid::Uuid;
 
 /// Inline math em size. Display blocks use `FONT_SIZE_DISPLAY`.
 const FONT_SIZE: f64 = 16.0;
 const FONT_SIZE_DISPLAY: f64 = 18.0;
 const FONT_PAD: f64 = 3.0;
-/// Extra device pixels in the SVG file. GPUI rasters SVG at 2× the file's
-/// width/height, then we display at FONT_SIZE — same trick as toolbar icons.
-const RASTER_DPR: f64 = 3.0;
+/// Extra device pixels in the SVG file. GPUI then rasters SVG at
+/// `SMOOTH_SVG_SCALE_FACTOR` (2×). Keep this modest so we don't stack to ~6×.
+pub fn raster_dpr(scale: f32) -> f64 {
+    (f64::from(scale) * 1.5).clamp(1.0, 2.0)
+}
 
 #[derive(Clone, Debug)]
 pub struct SvgMath {
@@ -26,13 +30,38 @@ pub struct SvgMath {
 #[derive(Clone, Debug)]
 pub enum InlineSeg {
     Text(String),
-    Math(SvgMath),
+    Math { svg: SvgMath, tex: String },
+}
+
+#[derive(Clone, Debug)]
+pub struct Eqno {
+    /// `\tag` payload, e.g. `1`.
+    pub raw: String,
+    /// Typeset `(n)`. None → GPUI paints `format_eqno(raw)` as text.
+    pub math: Option<SvgMath>,
+}
+
+impl Eqno {
+    fn new(raw: String, dpr: f64) -> Self {
+        let math = try_math(&crate::math::format_eqno(&raw), MathStyle::Display, dpr);
+        Self { raw, math }
+    }
+
+    pub fn width(&self) -> f32 {
+        self.math.as_ref().map(|m| m.width).unwrap_or_else(|| {
+            crate::math::format_eqno(&self.raw).chars().count() as f32 * 10.0 + 4.0
+        })
+    }
+
+    pub fn height(&self) -> f32 {
+        self.math.as_ref().map(|m| m.height).unwrap_or(18.0)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub enum PreviewBlock {
     Paragraph(Vec<InlineSeg>),
-    Display(SvgMath),
+    Display { math: SvgMath, eqno: Option<Eqno> },
     Table(PreviewLayout),
     Fallback(String),
 }
@@ -58,20 +87,46 @@ pub struct PlacedCell {
     pub colspan: usize,
 }
 
+/// Preview + copy rows for one selected document (built off the UI thread).
+pub struct DocDerived {
+    pub id: Uuid,
+    pub revision: u64,
+    pub dpr: f64,
+    pub inline_delim: InlineDelim,
+    pub block_delim: BlockDelim,
+    pub preview: Vec<PreviewBlock>,
+    pub copy_rows: Vec<CopyRow>,
+}
+
+impl DocDerived {
+    pub fn matches(&self, id: Uuid, revision: u64, dpr: f64, prefs: &Prefs) -> bool {
+        self.id == id
+            && self.revision == revision
+            && (self.dpr - dpr).abs() < 1e-6
+            && self.inline_delim == prefs.inline_delim
+            && self.block_delim == prefs.block_delim
+    }
+}
+
 /// Render a LaTeX snippet to SVG via RaTeX (parser → layout → SVG).
 ///
 /// GPUI's usvg backend does not paint `rgba(...)` fills, so we emit `rgb(...)`.
+#[cfg(test)]
 pub fn latex_to_math(latex: &str, style: MathStyle) -> Result<SvgMath> {
+    latex_to_math_with_dpr(latex, style, raster_dpr(1.0))
+}
+
+pub fn latex_to_math_with_dpr(latex: &str, style: MathStyle, dpr: f64) -> Result<SvgMath> {
     let source = compact_tex(latex.trim());
     if source.is_empty() {
         return Err(anyhow!("empty latex"));
     }
     let display = matches!(style, MathStyle::Display);
-    let svg = match render_math(&source, style) {
+    let svg = match render_math(&source, style, dpr) {
         Ok(svg) => svg,
         Err(err) => {
             if let Some(inner) = strip_env(&source, "aligned") {
-                render_math(&inner, style)?
+                render_math(&inner, style, dpr)?
             } else {
                 return Err(err);
             }
@@ -82,18 +137,16 @@ pub fn latex_to_math(latex: &str, style: MathStyle) -> Result<SvgMath> {
     } else {
         FONT_SIZE
     };
-    let (width, height) = svg_pt_size(&svg).unwrap_or((
-        font as f32 * 2.0 * RASTER_DPR as f32,
-        font as f32 * RASTER_DPR as f32,
-    ));
+    let (width, height) =
+        svg_pt_size(&svg).unwrap_or((font as f32 * 2.0 * dpr as f32, font as f32 * dpr as f32));
     Ok(SvgMath {
         svg,
-        width: (width / RASTER_DPR as f32).max(1.0),
-        height: (height / RASTER_DPR as f32).max(1.0),
+        width: (width / dpr as f32).max(1.0),
+        height: (height / dpr as f32).max(1.0),
     })
 }
 
-fn render_math(source: &str, style: MathStyle) -> Result<String> {
+fn render_math(source: &str, style: MathStyle, dpr: f64) -> Result<String> {
     let ast = parse(source).map_err(|e| anyhow!("ratex parse: {e}"))?;
     let display = matches!(style, MathStyle::Display);
     let opts = LayoutOptions {
@@ -102,7 +155,6 @@ fn render_math(source: &str, style: MathStyle) -> Result<String> {
     };
     let tree = layout(&ast, &opts);
     let list = to_display_list(&tree);
-    let dpr = RASTER_DPR;
     let font = if display {
         FONT_SIZE_DISPLAY
     } else {
@@ -174,18 +226,21 @@ fn strip_env(s: &str, name: &str) -> Option<String> {
     }
 }
 
-fn try_math(latex: &str, style: MathStyle) -> Option<SvgMath> {
-    latex_to_math(latex, style).ok()
+fn try_math(latex: &str, style: MathStyle, dpr: f64) -> Option<SvgMath> {
+    latex_to_math_with_dpr(latex, style, dpr).ok()
 }
 
-fn math_seg(tex: &str, style: MathStyle) -> InlineSeg {
-    match try_math(tex, style) {
-        Some(math) => InlineSeg::Math(math),
+fn math_seg(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
+    match try_math(tex, style, dpr) {
+        Some(svg) => InlineSeg::Math {
+            svg,
+            tex: tex.to_string(),
+        },
         None => InlineSeg::Text(format!("${tex}$")),
     }
 }
 
-fn segs_from_text(text: &str, math: MathStyle) -> Vec<InlineSeg> {
+fn segs_from_text(text: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return Vec::new();
@@ -194,7 +249,7 @@ fn segs_from_text(text: &str, math: MathStyle) -> Vec<InlineSeg> {
     for run in split_math(&normalized) {
         match run {
             MathRun::Text(t) if !t.is_empty() => segs.push(InlineSeg::Text(t)),
-            MathRun::Inline(tex) | MathRun::Display(tex) => segs.push(math_seg(&tex, math)),
+            MathRun::Inline(tex) | MathRun::Display(tex) => segs.push(math_seg(&tex, math, dpr)),
             MathRun::Text(_) => {}
         }
     }
@@ -203,13 +258,14 @@ fn segs_from_text(text: &str, math: MathStyle) -> Vec<InlineSeg> {
 
 /// Collapse OCR newlines and split `$...$` into text + math for table cells
 /// and other mixed strings that are not already `BlockKind::Formula`.
+#[cfg(test)]
 pub fn inline_preview(text: &str) -> Vec<InlineSeg> {
-    segs_from_text(text, MathStyle::Text)
+    segs_from_text(text, MathStyle::Text, raster_dpr(1.0))
 }
 
 /// Pixel geometry for the preview pane: origin cells only, spans occupy
 /// one rectangle so headers like "Image to Text" line up with R@1/R@5/R@10.
-fn table_preview_layout(table: &Table) -> PreviewLayout {
+fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
     const PAD_X: f32 = 16.0;
     const PAD_Y: f32 = 8.0;
     const MIN_COL: f32 = 56.0;
@@ -355,7 +411,7 @@ fn table_preview_layout(table: &Table) -> PreviewLayout {
                         y: ys[r],
                         w,
                         h,
-                        segs: inline_preview(text),
+                        segs: segs_from_text(text, MathStyle::Text, dpr),
                         header: r < header_rows,
                         numeric: looks_numeric(text),
                         colspan: cs,
@@ -404,23 +460,51 @@ fn looks_numeric(s: &str) -> bool {
     digit
 }
 
-fn push_table_block(html: &str, out: &mut Vec<PreviewBlock>) {
+fn push_table_block(html: &str, out: &mut Vec<PreviewBlock>, dpr: f64) {
     if let Some(table) = table::parse_html(html) {
-        out.push(PreviewBlock::Table(table_preview_layout(&table)));
+        out.push(PreviewBlock::Table(table_preview_layout(&table, dpr)));
     } else {
         out.push(PreviewBlock::Fallback(html.to_string()));
     }
 }
 
+/// Typeset display math with `\tag` stripped. The number is a GPUI sidecar;
+/// RaTeX only sees the body. Fallback keeps the original tagged source.
+fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>) {
+    let canon = crate::math::canonicalize_tex(tex);
+    let (body, tags) = crate::math::split_display_tag(&canon);
+    let typeset = if body.is_empty() {
+        canon.as_str()
+    } else {
+        body.as_str()
+    };
+    match try_math(typeset, MathStyle::Display, dpr) {
+        Some(math) => {
+            let eqno = tags
+                .last()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .map(|raw| Eqno::new(raw, dpr));
+            out.push(PreviewBlock::Display { math, eqno });
+        }
+        None => out.push(PreviewBlock::Fallback(fallback.to_string())),
+    }
+}
+
 /// Build a document-style preview: prose, inline/display math, tables.
+#[cfg(test)]
 pub fn document_preview(blocks: &[Block]) -> Vec<PreviewBlock> {
+    document_preview_with_dpr(blocks, raster_dpr(1.0))
+}
+
+pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock> {
     let formula_only = matches!(snip_kind(blocks), SnipKind::Formula);
     let mut out = Vec::new();
     let mut para: Vec<InlineSeg> = Vec::new();
     let flush_para = |para: &mut Vec<InlineSeg>, blocks: &mut Vec<PreviewBlock>| {
         if para.iter().any(|s| match s {
             InlineSeg::Text(t) => !t.trim().is_empty(),
-            InlineSeg::Math(_) => true,
+            InlineSeg::Math { .. } => true,
         }) {
             blocks.push(PreviewBlock::Paragraph(std::mem::take(para)));
         } else {
@@ -435,25 +519,21 @@ pub fn document_preview(blocks: &[Block]) -> Vec<PreviewBlock> {
         match block.kind {
             BlockKind::Table => {
                 flush_para(&mut para, &mut out);
-                push_table_block(&block.text, &mut out);
+                push_table_block(&block.text, &mut out, dpr);
             }
             BlockKind::Formula => {
                 let (body, unwrapped_display) = crate::math::unwrap_formula(&block.text);
                 if formula_only || block.display || unwrapped_display {
                     flush_para(&mut para, &mut out);
-                    if let Some(math) = try_math(&body, MathStyle::Display) {
-                        out.push(PreviewBlock::Display(math));
-                    } else {
-                        out.push(PreviewBlock::Fallback(body));
-                    }
+                    push_display(&body, &body, dpr, &mut out);
                 } else {
-                    para.push(math_seg(&body, MathStyle::Text));
+                    para.push(math_seg(&body, MathStyle::Text, dpr));
                 }
             }
             BlockKind::Text => {
                 if table::looks_like_html_table(&block.text) {
                     flush_para(&mut para, &mut out);
-                    push_table_block(&block.text, &mut out);
+                    push_table_block(&block.text, &mut out, dpr);
                     continue;
                 }
                 for run in split_math(&block.text) {
@@ -473,14 +553,10 @@ pub fn document_preview(blocks: &[Block]) -> Vec<PreviewBlock> {
                                 para.push(InlineSeg::Text(t));
                             }
                         }
-                        MathRun::Inline(tex) => para.push(math_seg(&tex, MathStyle::Text)),
+                        MathRun::Inline(tex) => para.push(math_seg(&tex, MathStyle::Text, dpr)),
                         MathRun::Display(tex) => {
                             flush_para(&mut para, &mut out);
-                            if let Some(math) = try_math(&tex, MathStyle::Display) {
-                                out.push(PreviewBlock::Display(math));
-                            } else {
-                                out.push(PreviewBlock::Fallback(format!("$${tex}$$")));
-                            }
+                            push_display(&tex, &format!("$${tex}$$"), dpr, &mut out);
                         }
                     }
                 }
@@ -578,7 +654,7 @@ mod tests {
         match &preview[0] {
             PreviewBlock::Paragraph(segs) => {
                 assert!(
-                    segs.iter().any(|s| matches!(s, InlineSeg::Math(_))),
+                    segs.iter().any(|s| matches!(s, InlineSeg::Math { .. })),
                     "expected inline math"
                 );
             }
@@ -590,13 +666,13 @@ mod tests {
     fn table_cell_newlines_still_render_inline_math() {
         let segs = inline_preview("SARCLIP\n$\n\\dagger\n$");
         assert!(
-            segs.iter().any(|s| matches!(s, InlineSeg::Math(_))),
+            segs.iter().any(|s| matches!(s, InlineSeg::Math { .. })),
             "expected $\\dagger$ to become math, got {segs:?}"
         );
         assert!(
             segs.iter().any(|s| match s {
                 InlineSeg::Text(t) => t.contains("SARCLIP"),
-                InlineSeg::Math(_) => false,
+                InlineSeg::Math { .. } => false,
             }),
             "expected surrounding text, got {segs:?}"
         );
@@ -607,7 +683,7 @@ mod tests {
         let math = latex_to_math("E=mc^2", MathStyle::Display).expect("ratex");
         let file_w = super::attr_pt(&math.svg, "width").expect("svg width");
         assert!(
-            file_w > math.width * 2.0,
+            file_w > math.width * raster_dpr(1.0) as f32 * 0.9,
             "SVG file should be DPR-scaled, file={file_w} display={}",
             math.width
         );
@@ -623,7 +699,7 @@ mod tests {
         };
         let preview = document_preview(&[Block::new(BlockKind::Formula, r, "E=mc^2")]);
         assert!(
-            matches!(preview.as_slice(), [PreviewBlock::Display(_)]),
+            matches!(preview.as_slice(), [PreviewBlock::Display { .. }]),
             "lone formula snip should be a centered display block, got {preview:?}"
         );
     }
@@ -639,33 +715,51 @@ mod tests {
         let preview = document_preview(&[Block::new(
             BlockKind::Text,
             r,
-            r"Hence $$E=mc^2$$ (1) holds.",
+            r"Hence $$E=mc^2 \tag{1}$$ holds.",
         )]);
-        assert!(
-            preview.iter().any(|b| matches!(b, PreviewBlock::Display(_))),
-            "numbered display math should not collapse to inline, got {preview:?}"
-        );
-        assert!(
-            !preview.iter().any(|b| match b {
-                PreviewBlock::Paragraph(segs) => segs.iter().any(|s| match s {
-                    InlineSeg::Text(t) => t.contains("(1)"),
-                    InlineSeg::Math(_) => false,
-                }),
-                _ => false,
-            }),
-            "equation number after $$ should be folded into the math, got {preview:?}"
+        let tagged = preview.iter().find_map(|b| match b {
+            PreviewBlock::Display { eqno, .. } => eqno.as_ref().map(|e| e.raw.as_str()),
+            _ => None,
+        });
+        assert_eq!(
+            tagged,
+            Some("1"),
+            "tagged display math should not collapse to inline, got {preview:?}"
         );
     }
 
     #[test]
-    fn display_tag_renders() {
-        let math = latex_to_math(r"E=mc^2 \tag{11}", MathStyle::Display).expect("tag");
-        assert!(math.width > 0.0 && math.height > 0.0);
+    fn display_tag_is_sidecar_not_typeset() {
+        let r = crate::doc::Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 16,
+        };
+        let preview =
+            document_preview(&[Block::new(BlockKind::Formula, r, r"$$E=mc^2 \tag{11}$$")]);
+        match preview.as_slice() {
+            [PreviewBlock::Display {
+                eqno: Some(eqno), ..
+            }] => {
+                assert_eq!(eqno.raw, "11");
+                assert!(
+                    eqno.math.is_some(),
+                    "eqno should typeset as display math, not a muted UI label"
+                );
+            }
+            other => panic!("expected tagged display, got {other:?}"),
+        }
+        let (body, tags) = crate::math::split_display_tag(r"E=mc^2 \tag{11}");
+        assert_eq!(tags, vec!["11".to_string()]);
+        latex_to_math(&body, MathStyle::Display).expect("body without tag");
         let (body, _) = crate::math::unwrap_formula(
             r"{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right],\\tag{1}\\
 \\",
         );
-        latex_to_math(&body, MathStyle::Display).expect("repaired tag");
+        let (body, tags) = crate::math::split_display_tag(&body);
+        assert_eq!(tags, vec!["1".to_string()]);
+        latex_to_math(&body, MathStyle::Display).expect("repaired tag body");
     }
 
     #[test]
@@ -688,7 +782,9 @@ mod tests {
         ];
         let preview = document_preview(&blocks);
         assert!(
-            preview.iter().any(|b| matches!(b, PreviewBlock::Display(_))),
+            preview
+                .iter()
+                .any(|b| matches!(b, PreviewBlock::Display { .. })),
             "layout display_formula should stay display even when short, got {preview:?}"
         );
     }
@@ -718,7 +814,7 @@ mod tests {
 <tr><td>OpenCLIP</td><td>ViT-B/32</td><td>11.1</td><td>22.2</td><td>33.3</td></tr>
 </table>"#;
         let t = table::parse_html(html).unwrap();
-        let lay = table_preview_layout(&t);
+        let lay = table_preview_layout(&t, raster_dpr(1.0));
         let method = lay
             .cells
             .iter()
@@ -796,7 +892,7 @@ mod tests {
             .iter()
             .map(|s| match s {
                 InlineSeg::Text(t) => t.as_str(),
-                InlineSeg::Math(_) => "",
+                InlineSeg::Math { .. } => "",
             })
             .collect()
     }

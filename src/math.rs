@@ -1,5 +1,7 @@
-//! Mixed `$` / `$$` splitting and display-math canonicalize (`\tag`).
+//! Mixed `$` / `$$` splitting and TeX canonicalize (`\tag` repair).
 //! One owner: OCR, preview, and export all call these functions.
+//! Equation numbers are folded in the OCR pipeline (`formula_number` → `\tag`),
+//! not guessed from trailing `(n)` in the text.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathRun {
@@ -27,17 +29,12 @@ pub fn split_math(input: &str) -> Vec<MathRun> {
                 push_text(&mut buf, &mut runs);
                 let body: String = chars[i + delim_len..end].iter().collect();
                 if display {
-                    let mut body = canonicalize_tex(body.trim());
-                    i = end + delim_len;
-                    if let Some((next, tag)) = take_eq_number(&chars, i) {
-                        fold_eq_tag(&mut body, &tag);
-                        i = next;
-                    }
+                    let body = canonicalize_tex(body.trim());
                     runs.push(MathRun::Display(body));
                 } else {
                     runs.push(MathRun::Inline(body.trim().to_string()));
-                    i = end + delim_len;
                 }
+                i = end + delim_len;
                 continue;
             }
         }
@@ -48,7 +45,7 @@ pub fn split_math(input: &str) -> Vec<MathRun> {
     runs
 }
 
-/// Reconstruct mixed text after folding `$$…$$ (n)` into `\tag`.
+/// Reconstruct mixed text after splitting `$` / `$$` runs.
 pub fn canonicalize_mixed_text(input: &str) -> String {
     let mut out = String::new();
     for run in split_math(input) {
@@ -69,28 +66,21 @@ pub fn canonicalize_mixed_text(input: &str) -> String {
     out
 }
 
-/// Strip `$` / `$$` wrappers and fold a trailing paper number into `\tag`.
-/// The bool is true for display dollars, `\tag`, or a multi-line body.
+/// Strip `$` / `$$` wrappers. The bool is true for display dollars, `\tag`,
+/// or a multi-line body.
 pub fn unwrap_formula(text: &str) -> (String, bool) {
     let t = text.trim();
     let chars: Vec<char> = t.chars().collect();
     if chars.len() >= 2 && chars[0] == '$' && chars[1] == '$' {
         if let Some(end) = find_closer(&chars, 2, true) {
-            if let Some((after, tag)) = take_eq_number(&chars, end + 2) {
-                if after == chars.len() {
-                    let body: String = chars[2..end].iter().collect();
-                    let mut body = body.trim().to_string();
-                    fold_eq_tag(&mut body, &tag);
-                    return finish_formula(body, true);
-                }
-            } else if end + 2 == chars.len() {
+            if chars[end + 2..].iter().all(|c| c.is_whitespace()) {
                 let body: String = chars[2..end].iter().collect();
                 return finish_formula(body.trim().to_string(), true);
             }
         }
     } else if chars.first() == Some(&'$') {
         if let Some(end) = find_closer(&chars, 1, false) {
-            if end + 1 == chars.len() {
+            if chars[end + 1..].iter().all(|c| c.is_whitespace()) {
                 return finish_formula(
                     chars[1..end].iter().collect::<String>().trim().to_string(),
                     false,
@@ -98,12 +88,7 @@ pub fn unwrap_formula(text: &str) -> (String, bool) {
             }
         }
     }
-    if let Some(body) = strip_dangling_display_closer(t) {
-        return finish_formula(body, true);
-    }
-    let mut body = t.to_string();
-    fold_trailing_eq_number(&mut body);
-    finish_formula(body, false)
+    finish_formula(t.to_string(), false)
 }
 
 fn finish_formula(body: String, display: bool) -> (String, bool) {
@@ -117,133 +102,7 @@ pub fn is_display_body(tex: &str) -> bool {
     t.contains('\n') || t.contains(r"\begin{") || t.contains(r"\tag{")
 }
 
-fn strip_dangling_display_closer(t: &str) -> Option<String> {
-    let chars: Vec<char> = t.chars().collect();
-    let mut i = chars.len();
-    while i >= 2 {
-        i -= 1;
-        if chars[i] == '$' && chars[i - 1] == '$' {
-            if let Some((after, tag)) = take_eq_number(&chars, i + 1) {
-                if after == chars.len() {
-                    let body: String = chars[..i - 1].iter().collect();
-                    let body = body.trim();
-                    if !body.is_empty() {
-                        let mut body = body.to_string();
-                        fold_eq_tag(&mut body, &tag);
-                        return Some(body);
-                    }
-                }
-            }
-            break;
-        }
-    }
-    None
-}
-
-/// Fold `formula (1)` after `\[…\]` is stripped. Do not treat `f(1)` as a tag.
-fn fold_trailing_eq_number(body: &mut String) {
-    let chars: Vec<char> = body.chars().collect();
-    for start in 0..chars.len() {
-        if !matches!(chars[start], ' ' | '\t' | '\n' | '\r' | '\\') {
-            continue;
-        }
-        if let Some((after, tag)) = take_eq_number(&chars, start) {
-            if after == chars.len() {
-                let prefix: String = chars[..start].iter().collect();
-                let mut prefix = prefix.trim_end().to_string();
-                if prefix.is_empty() {
-                    return;
-                }
-                fold_eq_tag(&mut prefix, &tag);
-                *body = prefix;
-                return;
-            }
-        }
-    }
-}
-
-/// `(1)`, `(2.1)`, `(A1)`, `(1a)` after a display closer, including one newline.
-fn take_eq_number(chars: &[char], start: usize) -> Option<(usize, String)> {
-    let mut i = start;
-    let mut saw_nl = false;
-    while i < chars.len() {
-        match chars[i] {
-            ' ' | '\t' => i += 1,
-            '\n' if !saw_nl => {
-                saw_nl = true;
-                i += 1;
-            }
-            '\r' => i += 1,
-            _ => break,
-        }
-    }
-    if i < chars.len() && chars[i] == '\\' {
-        let rest: String = chars[i..].iter().collect();
-        if let Some(n) = rest
-            .strip_prefix("\\qquad")
-            .map(|_| 6)
-            .or_else(|| rest.strip_prefix("\\quad").map(|_| 5))
-        {
-            i += n;
-            while i < chars.len() && matches!(chars[i], ' ' | '\t') {
-                i += 1;
-            }
-        }
-    }
-    if chars.get(i) != Some(&'(') {
-        return None;
-    }
-    let open = i;
-    let mut j = i + 1;
-    if j < chars.len() && chars[j].is_ascii_alphabetic() {
-        j += 1;
-    }
-    if j >= chars.len() || !chars[j].is_ascii_digit() {
-        return None;
-    }
-    while j < chars.len() && chars[j].is_ascii_digit() {
-        j += 1;
-    }
-    while j + 1 < chars.len() && chars[j] == '.' && chars[j + 1].is_ascii_digit() {
-        j += 1;
-        while j < chars.len() && chars[j].is_ascii_digit() {
-            j += 1;
-        }
-    }
-    if j < chars.len() && (chars[j].is_ascii_alphabetic() || chars[j] == '\'') {
-        j += 1;
-    }
-    if chars.get(j) != Some(&')') {
-        return None;
-    }
-    let tag: String = chars[open..=j].iter().collect();
-    j += 1;
-    if chars.get(j) == Some(&'\r') {
-        j += 1;
-    }
-    if chars.get(j) == Some(&'\n') {
-        j += 1;
-    }
-    Some((j, tag))
-}
-
-fn fold_eq_tag(body: &mut String, tag: &str) {
-    *body = canonicalize_tex(body);
-    let inner = tag
-        .strip_prefix('(')
-        .and_then(|s| s.strip_suffix(')'))
-        .unwrap_or(tag);
-    let cmd = format!("\\tag{{{inner}}}");
-    if body.contains(&cmd) {
-        return;
-    }
-    if !body.is_empty() && !body.ends_with([' ', '\n']) {
-        body.push(' ');
-    }
-    body.push_str(&cmd);
-}
-
-/// OCR often emits a paper number as `\] (1)` or a trailing `\\`. A Rust raw
+/// OCR often emits a paper number as a trailing `\\`. A Rust raw
 /// string `r"\\tag"` is two backslashes, so a Python port can produce `\\tag{1}`
 /// which KaTeX parses as a line-break plus the letters "tag", not `\tag`.
 pub fn canonicalize_tex(s: &str) -> String {
@@ -263,6 +122,56 @@ pub fn canonicalize_tex(s: &str) -> String {
         }
     }
     t
+}
+
+/// Strip every `\tag{...}` from display TeX. Unbalanced braces: leave `tex`
+/// unchanged and return no tags (RaTeX can still fail-soft).
+pub fn split_display_tag(tex: &str) -> (String, Vec<String>) {
+    let needle = r"\tag{";
+    let mut tags = Vec::new();
+    let mut out = String::with_capacity(tex.len());
+    let mut rest = tex;
+    loop {
+        let Some(at) = rest.find(needle) else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..at]);
+        let inner_start = at + needle.len();
+        let Some((inner, after)) = split_braced(&rest[inner_start..]) else {
+            return (tex.to_string(), Vec::new());
+        };
+        tags.push(inner.trim().to_string());
+        rest = after;
+    }
+    (out.trim().to_string(), tags)
+}
+
+/// UI / typeset form of a `\tag` payload (`1` → `(1)`).
+pub fn format_eqno(tag: &str) -> String {
+    let t = tag.trim();
+    if t.starts_with('(') && t.ends_with(')') && t.len() >= 2 {
+        t.to_string()
+    } else {
+        format!("({t})")
+    }
+}
+
+fn split_braced(s: &str) -> Option<(String, &str)> {
+    let mut depth = 1i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((s[..i].to_string(), &s[i + c.len_utf8()..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn find_closer(chars: &[char], start: usize, display: bool) -> Option<usize> {
@@ -302,30 +211,22 @@ mod tests {
     }
 
     #[test]
-    fn split_math_folds_eq_number_into_display() {
+    fn split_math_leaves_trailing_eq_number_in_prose() {
         let runs = split_math(r"Hence $$E=mc^2$$ (1) holds.");
         assert_eq!(
             runs,
             vec![
                 MathRun::Text("Hence ".into()),
-                MathRun::Display(r"E=mc^2 \tag{1}".into()),
-                MathRun::Text(" holds.".into()),
-            ]
-        );
-        let runs = split_math("$$\\sum_i x_i$$\n(2.1)\nNext.");
-        assert_eq!(
-            runs,
-            vec![
-                MathRun::Display(r"\sum_i x_i \tag{2.1}".into()),
-                MathRun::Text("Next.".into()),
+                MathRun::Display(r"E=mc^2".into()),
+                MathRun::Text(" (1) holds.".into()),
             ]
         );
     }
 
     #[test]
-    fn unwrap_formula_strips_dollars_and_folds_eq_number() {
-        let (body, display) = unwrap_formula("$$ E=mc^2 $$ (1)");
-        assert_eq!(body, r"E=mc^2 \tag{1}");
+    fn unwrap_formula_strips_dollars_and_repairs_tag() {
+        let (body, display) = unwrap_formula("$$ E=mc^2 $$");
+        assert_eq!(body, "E=mc^2");
         assert!(display);
         let (body, display) = unwrap_formula("$x$");
         assert_eq!(body, "x");
@@ -339,12 +240,59 @@ mod tests {
             r"{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right], \tag{1}"
         );
         assert!(display, "\\tag implies display math");
-        let (body, _) = unwrap_formula(r"{\rm ACC}=1 (1)");
-        assert!(
-            body.contains(r"\tag{1}"),
-            "number after a separator should fold, got {body:?}"
-        );
+        let (body, display) = unwrap_formula(r"$$a+b \tag{1}$$");
+        assert_eq!(body, r"a+b \tag{1}");
+        assert!(display);
         let (body, _) = unwrap_formula("f(1)");
         assert_eq!(body, "f(1)", "do not treat f(1) as an equation number");
+        let (body, _) = unwrap_formula(r"{\rm ACC}=1 (1)");
+        assert_eq!(
+            body, r"{\rm ACC}=1 (1)",
+            "trailing (n) is not folded here; layout pairing owns tags"
+        );
+    }
+
+    #[test]
+    fn split_display_tag_strips_all_tags() {
+        let (body, tags) = split_display_tag(r"E=mc^2 \tag{1}");
+        assert_eq!(body, "E=mc^2");
+        assert_eq!(tags, vec!["1".to_string()]);
+    }
+
+    #[test]
+    fn split_display_tag_none() {
+        let (body, tags) = split_display_tag("a+b");
+        assert_eq!(body, "a+b");
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn split_display_tag_two_tags() {
+        let (body, tags) = split_display_tag(r"a+b \tag{1} \tag{2}");
+        assert!(!body.contains(r"\tag"));
+        assert_eq!(tags, vec!["1".to_string(), "2".to_string()]);
+    }
+
+    #[test]
+    fn split_display_tag_after_canonicalize() {
+        let t = canonicalize_tex(r"x\\tag{3}\\");
+        let (body, tags) = split_display_tag(&t);
+        assert_eq!(tags, vec!["3".to_string()]);
+        assert!(!body.contains(r"\tag"));
+    }
+
+    #[test]
+    fn split_display_tag_unbalanced_leaves_source() {
+        let src = r"E=mc^2 \tag{1";
+        let (body, tags) = split_display_tag(src);
+        assert_eq!(body, src);
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn format_eqno_parenthesizes() {
+        assert_eq!(format_eqno("1"), "(1)");
+        assert_eq!(format_eqno("(11)"), "(11)");
+        assert_eq!(format_eqno(" 2 "), "(2)");
     }
 }

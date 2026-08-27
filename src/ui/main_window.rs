@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -20,10 +20,10 @@ use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, QuitApp, RetryOcr, SelectNext,
     SelectPrev, StartDraw, ToggleFormat, UploadImage,
 };
+use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
-use crate::imgutil;
 use crate::ocr::EngineStatus;
-use crate::preview::PreviewBlock;
+use crate::preview::{document_preview_with_dpr, raster_dpr, DocDerived};
 use crate::state::AppState;
 
 #[derive(Clone)]
@@ -72,6 +72,15 @@ impl PreviewPane {
             .or_insert_with(ScrollHandle::new)
             .clone()
     }
+
+    pub(crate) fn hscroll_bounds_ready(&self) -> bool {
+        if self.hscrolls.is_empty() {
+            return true;
+        }
+        self.hscrolls
+            .values()
+            .any(|h| f32::from(h.bounds().size.width) > 1.0)
+    }
 }
 
 pub struct MainWindow {
@@ -79,10 +88,12 @@ pub struct MainWindow {
     focus: FocusHandle,
     pub(crate) snip_list_focus: FocusHandle,
     pub(crate) search: Entity<SearchField>,
-    pub(crate) thumbs: HashMap<Uuid, Arc<RenderImage>>,
-    pub(crate) fulls: HashMap<Uuid, Arc<RenderImage>>,
-    pub(crate) previews: HashMap<Uuid, (String, Vec<PreviewBlock>)>,
-    pub(crate) math_imgs: HashMap<String, Arc<Image>>,
+    pub(crate) media: Rc<RefCell<MediaCache>>,
+    pub(crate) derived: Option<DocDerived>,
+    derived_busy: bool,
+    gc_scheduled: bool,
+    pub(crate) thumb_keep: Rc<RefCell<Vec<Uuid>>>,
+    pub(crate) thumb_need: Rc<RefCell<Vec<Uuid>>>,
     pub(crate) view: View,
     pub(crate) board: DrawBoard,
     settings_tab: SettingsTab,
@@ -117,10 +128,12 @@ impl MainWindow {
             focus,
             snip_list_focus,
             search,
-            thumbs: HashMap::new(),
-            fulls: HashMap::new(),
-            previews: HashMap::new(),
-            math_imgs: HashMap::new(),
+            media: Rc::new(RefCell::new(MediaCache::new())),
+            derived: None,
+            derived_busy: false,
+            gc_scheduled: false,
+            thumb_keep: Rc::new(RefCell::new(Vec::new())),
+            thumb_need: Rc::new(RefCell::new(Vec::new())),
             view: View::Library,
             board: DrawBoard::new(),
             settings_tab: SettingsTab::General,
@@ -225,37 +238,128 @@ impl MainWindow {
         cx.quit();
     }
 
-    fn ensure_images(&mut self, state: &AppState) {
-        let live: HashSet<Uuid> = state.documents.iter().map(|d| d.id).collect();
-        self.thumbs.retain(|id, _| live.contains(id));
-        self.previews.retain(|id, _| live.contains(id));
-        let keep_full: HashSet<Uuid> = state.gpu_full_ids().into_iter().collect();
-        self.fulls
-            .retain(|id, _| live.contains(id) && keep_full.contains(id));
+    pub(crate) fn full(&self, id: Uuid) -> Option<Arc<RenderImage>> {
+        self.media.borrow().full(id)
+    }
 
-        for doc in state.visible_docs() {
-            if self.thumbs.contains_key(&doc.id) {
-                continue;
-            }
-            if let Some(render) = imgutil::jpeg_to_render(&doc.thumb_jpeg) {
-                self.thumbs.insert(doc.id, render);
-            } else if let Some(pixels) = doc.image.pixels() {
-                let thumb = imgutil::thumbnail(pixels, 56, 40);
-                self.thumbs.insert(doc.id, imgutil::rgba_to_render(&thumb));
-            }
+    pub(crate) fn math_image(&self, svg: &str, cx: &mut App) -> Arc<Image> {
+        self.media.borrow_mut().math_image(svg, cx)
+    }
+
+    fn schedule_media_gc(&mut self, cx: &mut Context<Self>) {
+        if self.gc_scheduled {
+            return;
         }
+        self.gc_scheduled = true;
+        let entity = cx.entity();
+        cx.defer(move |cx| {
+            entity.update(cx, |this, cx| {
+                this.gc_scheduled = false;
+                let (keep_thumbs, keep_fulls, pin) = {
+                    let state = this.state.read(cx);
+                    let keep_fulls = state.gpu_full_ids();
+                    let pin = state.selected();
+                    let kept = this.thumb_keep.borrow().clone();
+                    let keep_thumbs = if kept.is_empty() {
+                        state.visible_ids().to_vec()
+                    } else {
+                        kept
+                    };
+                    (keep_thumbs, keep_fulls, pin)
+                };
+                let mut media = this.media.borrow_mut();
+                media.retain_thumbs(keep_thumbs.into_iter(), cx);
+                media.retain_fulls(keep_fulls.into_iter(), pin, cx);
+                media.trim_math(cx);
+            });
+        });
+    }
 
-        let Some(sel) = state.selected else {
+    fn ensure_selected_full(&self, cx: &App) {
+        let state = self.state.read(cx);
+        let Some(doc) = state.selected_doc() else {
             return;
         };
-        if self.fulls.contains_key(&sel) {
+        let Some(pixels) = doc.image.pixels() else {
+            return;
+        };
+        self.media.borrow_mut().ensure_full(doc.id, pixels);
+    }
+
+    fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let dpr = raster_dpr(window.scale_factor());
+        let selected = {
+            let state = self.state.read(cx);
+            state.selected_doc().map(|doc| {
+                (
+                    doc.id,
+                    doc.revision,
+                    matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded,
+                    state.prefs.clone(),
+                )
+            })
+        };
+        let Some((id, revision, ready, prefs)) = selected else {
+            self.derived = None;
+            return;
+        };
+        if self
+            .derived
+            .as_ref()
+            .is_some_and(|d| d.id != id || d.revision != revision)
+        {
+            self.derived = None;
+        }
+        if !ready {
             return;
         }
-        if let Some(doc) = state.selected_doc() {
-            if let Some(pixels) = doc.image.pixels() {
-                self.fulls.insert(sel, imgutil::gpu_display_image(pixels));
-            }
+        if self
+            .derived
+            .as_ref()
+            .is_some_and(|d| d.matches(id, revision, dpr, &prefs))
+        {
+            return;
         }
+        if self.derived_busy {
+            return;
+        }
+        let Some(blocks) = self
+            .state
+            .read(cx)
+            .library
+            .get(id)
+            .map(|d| d.blocks.clone())
+        else {
+            return;
+        };
+        self.derived_busy = true;
+        cx.spawn(async move |this, cx| {
+            let built = cx
+                .background_spawn(async move {
+                    let preview = document_preview_with_dpr(&blocks, dpr);
+                    let rows = crate::export::visible_copy_rows(&crate::export::copy_rows(
+                        &blocks, &prefs,
+                    ));
+                    DocDerived {
+                        id,
+                        revision,
+                        dpr,
+                        inline_delim: prefs.inline_delim,
+                        block_delim: prefs.block_delim,
+                        preview,
+                        copy_rows: rows,
+                    }
+                })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.derived_busy = false;
+                this.derived = Some(built);
+                cx.notify();
+            }) {
+                eprintln!("{}: derived preview: {err}", crate::identity::APP_SLUG);
+            }
+        })
+        .detach();
     }
 }
 
@@ -266,11 +370,17 @@ impl Focusable for MainWindow {
 }
 
 impl gpui::Render for MainWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let need = std::mem::take(&mut *self.thumb_need.borrow_mut());
+        for id in need {
+            self.state.update(cx, |s, cx| s.request_thumb(id, cx));
+        }
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
+            self.ensure_selected_full(cx);
+            self.schedule_derived(window, cx);
+            self.schedule_media_gc(cx);
             let state = self.state.read(cx);
-            self.ensure_images(state);
-            if self.orig_zoomed && self.zoom_doc != state.selected {
+            if self.orig_zoomed && self.zoom_doc != state.selected() {
                 self.orig_zoomed = false;
                 self.orig_hover = false;
                 self.zoom_doc = None;
@@ -280,8 +390,8 @@ impl gpui::Render for MainWindow {
                 status_kind,
                 status_label,
                 state.is_capturing(),
-                !state.documents.is_empty(),
-                state.visible_ids.len(),
+                !state.is_empty(),
+                state.library.visible_docs().count(),
             )
         };
         let history = self.render_history(n_docs, cx);
@@ -291,7 +401,7 @@ impl gpui::Render for MainWindow {
         let orig_zoomed = self.orig_zoomed;
         let has_selected = {
             let state = self.state.read(cx);
-            state.selected.is_some()
+            state.selected().is_some()
         };
 
         div()

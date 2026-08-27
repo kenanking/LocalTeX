@@ -4,14 +4,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod cache;
 mod capture;
 mod desktop;
 mod doc;
+mod export;
 mod icon;
 mod identity;
 mod imgutil;
+mod ingest;
+mod library;
 mod math;
 mod ocr;
+mod ocr_queue;
 mod prefs;
 mod preview;
 mod state;

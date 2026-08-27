@@ -24,14 +24,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, ReleaseCapture, SetCapture, VK_ESCAPE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetCursorPos, GetWindowLongPtrW, LoadCursorW, PeekMessageW,
-    RegisterClassW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA,
-    HWND_TOPMOST, IDC_ARROW,
-    MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP,
-    WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
+    GetWindowLongPtrW, LoadCursorW, PeekMessageW, RegisterClassW, SetCursor, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA, HWND_TOPMOST,
+    IDC_ARROW, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::capture::{self, DesktopShot};
@@ -727,10 +725,7 @@ mod tests {
         let secondary = canvas_slice(&shot.image, 0, 0, 2, 10, 10, 8).unwrap();
         assert_eq!(primary.get_pixel(0, 0).0, [10, 0, 0, 255]);
         assert_eq!(secondary.get_pixel(0, 0).0, [20, 0, 0, 255]);
-        assert_eq!(
-            overlay_rects(&shot),
-            vec![(0, 0, 20, 10), (2, 10, 10, 8)]
-        );
+        assert_eq!(overlay_rects(&shot), vec![(0, 0, 20, 10), (2, 10, 10, 8)]);
     }
 
     #[test]

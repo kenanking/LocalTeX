@@ -38,12 +38,14 @@ impl EngineStatus {
 pub struct Engine {
     dir: PathBuf,
     inner: Mutex<Option<Pipeline>>,
+    ship_ok: bool,
 }
 
 impl Engine {
     pub fn load() -> Arc<Self> {
         let dir = models_dir();
-        if ship_present(&dir) {
+        let present = ship_present(&dir);
+        if present {
             eprintln!(
                 "{APP_SLUG}: OpenDoc weights deferred until first snip ({})",
                 dir.display()
@@ -57,11 +59,12 @@ impl Engine {
         Arc::new(Self {
             dir,
             inner: Mutex::new(None),
+            ship_ok: present,
         })
     }
 
     pub fn status(&self) -> EngineStatus {
-        if ship_present(&self.dir) {
+        if self.ship_ok {
             EngineStatus::Ready
         } else {
             EngineStatus::MissingModels {
@@ -71,7 +74,7 @@ impl Engine {
     }
 
     pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
-        if !ship_present(&self.dir) {
+        if !self.ship_ok {
             bail!("OpenDoc ship models missing in {}", self.dir.display());
         }
         let mut guard = self.inner.lock().expect("ocr mutex");
@@ -150,7 +153,7 @@ mod tests {
         let numbered = to_doc_block(
             "display_formula",
             [0.0, 0.0, 10.0, 10.0],
-            "$$a+b$$ (1)",
+            "$$a+b \\tag{1}$$\n\n",
         )
         .expect("numbered");
         assert_eq!(numbered.text, r"a+b \tag{1}");
@@ -175,28 +178,23 @@ mod tests {
     fn strip_display_wrappers() {
         assert_eq!(unwrap_formula("$$a+b$$\n\n").0, "a+b");
         assert_eq!(unwrap_formula("$x$").0, "x");
-        assert_eq!(unwrap_formula("$$a+b$$ (1)").0, r"a+b \tag{1}");
-        assert_eq!(unwrap_formula("$$a+b$$\n(2.1)").0, r"a+b \tag{2.1}");
+        assert_eq!(unwrap_formula(r"$$a+b \tag{1}$$").0, r"a+b \tag{1}");
     }
 
     #[test]
-    fn handle_formula_folds_bracket_eqno_as_tag_not_linebreak() {
+    fn handle_formula_strips_bracket_eqno_like_opendoc() {
         let out = text::handle_formula(
             r"\[{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right]\] (1)
 
 ",
         );
         assert!(
-            out.contains(r"\tag{1}"),
-            "expected \\tag command, got {out:?}"
+            out.starts_with("$$") && out.contains("ACC"),
+            "expected $$ wrap, got {out:?}"
         );
         assert!(
-            !out.contains(r"\\tag{"),
-            "\\tag is a line-break plus 'tag', got {out:?}"
-        );
-        assert!(
-            !out.ends_with('\\'),
-            "trailing \\\\ after \\tag breaks display math, got {out:?}"
+            !out.contains("(1)"),
+            "OpenDoc strips \\] (n)\\n\\n before wrap; tags come from layout pairing, got {out:?}"
         );
     }
 
@@ -205,6 +203,7 @@ mod tests {
         let engine = Engine {
             dir: PathBuf::from("/no/such/localtex-models"),
             inner: Mutex::new(None),
+            ship_ok: false,
         };
         assert!(matches!(
             engine.status(),

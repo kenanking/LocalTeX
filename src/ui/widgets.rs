@@ -1,5 +1,6 @@
 use gpui::{
-    div, img, prelude::*, px, relative, rgb, AnyElement, AnyView, App, Pixels, SharedString, Window,
+    div, img, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString,
+    Window,
 };
 
 use super::theme;
@@ -112,14 +113,13 @@ pub fn icon_btn(
         })
         .tooltip(Tooltip::text(hint))
         .child(
-            // `img()` + AssetSource. GPUI rasters SVG at 2× the file's
-            // width/height; the 96px sources stay sharp when downscaled
-            // into this 18px slot. Do not switch to `svg().path` on this
-            // NVIDIA/Vulkan host until a filled rect actually paints.
-            img(kind.asset_path())
+            // Alpha mask at device DPI, tinted with text_color. Omitting
+            // text_color skips paint entirely (gpui 0.2 `svg` element).
+            svg()
+                .path(kind.asset_path())
                 .size(px(18.))
                 .flex_shrink_0()
-                .object_fit(gpui::ObjectFit::Contain),
+                .text_color(rgb(theme::TEXT)),
         )
 }
 

@@ -5,7 +5,6 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::math;
 use crate::table;
 
 pub use crate::math::{split_math, unwrap_formula, MathRun};
@@ -131,6 +130,8 @@ impl CopyKind {
 pub struct CopyRow {
     pub kind: CopyKind,
     pub text: String,
+    pub exporter_id: &'static str,
+    pub label: &'static str,
 }
 
 #[derive(Clone)]
@@ -173,6 +174,8 @@ pub struct Document {
     pub persisted: bool,
     pub blocks_loaded: bool,
     pub ocr: Option<OcrMeta>,
+    /// Bumped when OCR, retry, or loaded blocks change. Preview cache key.
+    pub revision: u64,
 }
 
 impl Document {
@@ -188,6 +191,7 @@ impl Document {
             persisted: false,
             blocks_loaded: true,
             ocr: None,
+            revision: 0,
         }
     }
 
@@ -207,7 +211,12 @@ impl Document {
             persisted: true,
             blocks_loaded: false,
             ocr: item.ocr,
+            revision: 0,
         }
+    }
+
+    pub fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn first_line(&self) -> String {
@@ -261,7 +270,7 @@ impl Document {
             out.push_str(&b.text);
             out.push('\n');
         }
-        out.push_str(&export_blocks(
+        out.push_str(&crate::export::export_blocks(
             blocks,
             ExportFmt::Markdown,
             &crate::prefs::Prefs::default(),
@@ -273,10 +282,7 @@ impl Document {
         if !matches!(self.status, DocStatus::Ready) {
             return Vec::new();
         }
-        match snip_kind(&self.blocks) {
-            SnipKind::Mixed => mixed_copy_rows(&self.blocks, prefs),
-            _ => copy_rows(&self.blocks, prefs),
-        }
+        crate::export::copy_rows(&self.blocks, prefs)
     }
 
     pub fn primary_copy(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
@@ -326,170 +332,8 @@ pub fn snip_kind(blocks: &[Block]) -> SnipKind {
     }
 }
 
-pub fn export_blocks(blocks: &[Block], fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
-    let mut out = String::new();
-    for (row_i, row) in group_rows(blocks).into_iter().enumerate() {
-        if row_i > 0 {
-            out.push('\n');
-        }
-        for (i, block) in row.into_iter().enumerate() {
-            if i > 0 {
-                out.push(' ');
-            }
-            out.push_str(&export_block(block, fmt, prefs));
-        }
-    }
-    out
-}
-
-fn export_block(block: &Block, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
-    let kind = effective_kind(block);
-    match (fmt, kind) {
-        (ExportFmt::Markdown, BlockKind::Formula) => {
-            let body = unwrap_formula(&block.text).0;
-            if block.display || math::is_display_body(&body) {
-                prefs.wrap_block(&body)
-            } else {
-                prefs.wrap_inline(&body)
-            }
-        }
-        (ExportFmt::Markdown, BlockKind::Table) => table::html_to_markdown(&block.text),
-        (ExportFmt::Markdown, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
-        (ExportFmt::Latex, BlockKind::Formula) => {
-            prefs.wrap_block(unwrap_formula(&block.text).0.trim())
-        }
-        (ExportFmt::Latex, BlockKind::Table) => table::html_to_latex(&block.text),
-        (ExportFmt::Latex, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
-    }
-}
-
-fn effective_kind(block: &Block) -> BlockKind {
-    if block.kind == BlockKind::Table || table::looks_like_html_table(&block.text) {
-        BlockKind::Table
-    } else {
-        block.kind
-    }
-}
-
-fn formula_body(blocks: &[Block]) -> String {
-    blocks
-        .iter()
-        .filter(|b| b.kind == BlockKind::Formula && !b.text.trim().is_empty())
-        .map(|b| unwrap_formula(&b.text).0)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join(" \\\\ ")
-}
-
-fn table_html(blocks: &[Block]) -> Option<String> {
-    let mut parts = Vec::new();
-    for b in blocks {
-        if b.kind == BlockKind::Table || table::looks_like_html_table(&b.text) {
-            parts.push(b.text.as_str());
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n"))
-    }
-}
-
-pub fn copy_rows(blocks: &[Block], prefs: &crate::prefs::Prefs) -> Vec<CopyRow> {
-    match snip_kind(blocks) {
-        SnipKind::Formula => {
-            let body = formula_body(blocks);
-            if body.is_empty() {
-                return Vec::new();
-            }
-            vec![
-                CopyRow {
-                    kind: CopyKind::Latex,
-                    text: body.clone(),
-                },
-                CopyRow {
-                    kind: CopyKind::MdInline,
-                    text: prefs.wrap_inline(&body),
-                },
-                CopyRow {
-                    kind: CopyKind::MdDisplay,
-                    text: format!("$$ {body} $$"),
-                },
-                CopyRow {
-                    kind: CopyKind::Equation,
-                    text: format!("\\begin{{equation}}\n{body}\n\\end{{equation}}"),
-                },
-            ]
-        }
-        SnipKind::Table => {
-            let Some(html) = table_html(blocks) else {
-                return Vec::new();
-            };
-            let parsed = table::parse_html(&html);
-            let md = parsed
-                .as_ref()
-                .map(|t| t.to_markdown())
-                .unwrap_or_else(|| table::html_to_markdown(&html));
-            let tex = parsed
-                .as_ref()
-                .map(|t| t.to_latex())
-                .unwrap_or_else(|| table::html_to_latex(&html));
-            let tsv = parsed.as_ref().map(|t| t.to_tsv()).unwrap_or_default();
-            let mut rows = vec![
-                CopyRow {
-                    kind: CopyKind::LatexTable,
-                    text: tex,
-                },
-                CopyRow {
-                    kind: CopyKind::MdTable,
-                    text: md,
-                },
-            ];
-            if !tsv.is_empty() {
-                rows.push(CopyRow {
-                    kind: CopyKind::Tsv,
-                    text: tsv,
-                });
-            }
-            rows
-        }
-        SnipKind::Mixed => mixed_copy_rows(blocks, prefs),
-    }
-}
-
-fn mixed_copy_rows(blocks: &[Block], prefs: &crate::prefs::Prefs) -> Vec<CopyRow> {
-    let md = export_blocks(blocks, ExportFmt::Markdown, prefs);
-    let tex = export_blocks(blocks, ExportFmt::Latex, prefs);
-    vec![
-        CopyRow {
-            kind: CopyKind::Markdown,
-            text: md,
-        },
-        CopyRow {
-            kind: CopyKind::LatexDoc,
-            text: tex,
-        },
-    ]
-}
-
-/// Whitespace-collapsed equality matches the copy-row preview string.
-pub fn copy_payload_eq(a: &str, b: &str) -> bool {
-    a.split_whitespace().eq(b.split_whitespace())
-}
-
-pub fn visible_copy_rows(rows: &[CopyRow]) -> Vec<CopyRow> {
-    let md = rows.iter().find(|r| r.kind == CopyKind::Markdown);
-    rows.iter()
-        .filter(|r| {
-            if r.kind == CopyKind::LatexDoc {
-                !md.is_some_and(|m| copy_payload_eq(&m.text, &r.text))
-            } else {
-                true
-            }
-        })
-        .cloned()
-        .collect()
-}
+#[cfg(test)]
+pub use crate::export::{copy_rows, export_blocks, visible_copy_rows};
 
 fn ready_first_line(blocks: &[Block]) -> String {
     blocks
@@ -520,76 +364,6 @@ fn table_preview_line(html: &str) -> String {
         }
     }
     "Table".into()
-}
-
-fn emit_text_block(text: &str, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
-    if table::looks_like_html_table(text) {
-        return match fmt {
-            ExportFmt::Latex => table::html_to_latex(text),
-            ExportFmt::Markdown => table::html_to_markdown(text),
-        };
-    }
-    let mut out = String::new();
-    for run in split_math(text) {
-        match run {
-            MathRun::Text(s) => match fmt {
-                ExportFmt::Latex => out.push_str(&escape_latex(&s)),
-                ExportFmt::Markdown => out.push_str(&s),
-            },
-            MathRun::Inline(s) => out.push_str(&prefs.wrap_inline(&s)),
-            MathRun::Display(s) => out.push_str(&prefs.wrap_block(&s)),
-        }
-    }
-    out
-}
-
-fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
-    let mut rows: Vec<Vec<&Block>> = Vec::new();
-    for block in blocks {
-        if matches!(effective_kind(block), BlockKind::Table | BlockKind::Formula)
-            && (block.kind == BlockKind::Table
-                || table::looks_like_html_table(&block.text)
-                || block.text.contains('\n')
-                || block.text.len() > 48)
-        {
-            rows.push(vec![block]);
-            continue;
-        }
-        if let Some(row) = rows.last_mut() {
-            if let Some(prev) = row.last() {
-                if vertically_overlap(prev.bbox, block.bbox) {
-                    row.push(block);
-                    continue;
-                }
-            }
-        }
-        rows.push(vec![block]);
-    }
-    rows
-}
-
-fn vertically_overlap(a: Rect, b: Rect) -> bool {
-    a.y < b.bottom() && b.y < a.bottom()
-}
-
-pub fn escape_latex(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\textbackslash{}"),
-            '{' => out.push_str("\\{"),
-            '}' => out.push_str("\\}"),
-            '%' => out.push_str("\\%"),
-            '&' => out.push_str("\\&"),
-            '$' => out.push_str("\\$"),
-            '#' => out.push_str("\\#"),
-            '_' => out.push_str("\\_"),
-            '~' => out.push_str("\\textasciitilde{}"),
-            '^' => out.push_str("\\textasciicircum{}"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

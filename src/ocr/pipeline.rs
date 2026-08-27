@@ -1,7 +1,10 @@
 //! Layout → per-region UniRec → LocalTeX `doc::Block`s.
 //! Recognition and label postprocess follow OpenDocONNX.__call__; markdown
 //! file assembly and figure-token painting are out of scope for this app.
+//! `formula_number` regions are paired with `display_formula` and folded
+//! into `\tag{N}` (ocr-pipeline assembly), not guessed from trailing `(n)`.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
@@ -9,7 +12,7 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 
 use super::imgops::{self, RgbImg};
-use super::layout::{self, IMAGE_LABELS};
+use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
 use super::unirec::{Tokenizer, UniRec};
 use crate::doc::{Block, BlockKind, OcrMeta, Rect};
@@ -90,19 +93,25 @@ impl Pipeline {
         imgops::invert_if_dark(image);
 
         let layout_out = layout::detect(&mut self.layout, image, 0.5)?;
-        let n_layout = layout_out.regions.len();
+        let regions = layout_out.regions;
+        let n_layout = regions.len();
+        // Pair before the move: number-block index → display_formula index.
+        let tag_pairs = pair_formula_numbers(&regions);
+
         let mut encode_s = 0.0f64;
         let mut decode_s = 0.0f64;
         let mut decode_steps = 0usize;
-        let mut blocks = Vec::new();
         let mut conf = ConfAcc::default();
+        let mut pending: Vec<Option<PendingRec>> = Vec::with_capacity(regions.len());
 
-        for region in layout_out.regions {
+        for region in regions {
             let base = text::base_label(&region.label);
             if IMAGE_LABELS.contains(&base) || IGNORE_LABELS.contains(&base) {
+                pending.push(None);
                 continue;
             }
             let Some(mut crop) = region.img else {
+                pending.push(None);
                 continue;
             };
             if is_formula(base) {
@@ -114,8 +123,45 @@ impl Pipeline {
             decode_s += out.decode_s;
             decode_steps += out.decode_steps;
             conf.add(out.p_sum, out.p_n, region.score, region.coord);
-            let text = postprocess(base, out.text);
-            if let Some(block) = to_doc_block(base, region.coord, &text) {
+            pending.push(Some(PendingRec {
+                base: base.to_string(),
+                coord: region.coord,
+                text: postprocess(base, out.text),
+            }));
+        }
+
+        let mut tags_for: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut consumed = vec![false; pending.len()];
+        for (bi, rec) in pending.iter().enumerate() {
+            let Some(rec) = rec else {
+                continue;
+            };
+            if let Some(&fj) = tag_pairs.get(&bi) {
+                if let Some(tag) = clean_tag(&rec.text) {
+                    tags_for.entry(fj).or_default().push(tag);
+                    consumed[bi] = true;
+                }
+            }
+        }
+        for (fj, tags) in &tags_for {
+            if let Some(Some(rec)) = pending.get_mut(*fj) {
+                rec.text = inject_tags(&rec.text, tags);
+            }
+        }
+
+        let mut blocks = Vec::new();
+        for (i, rec) in pending.into_iter().enumerate() {
+            if consumed[i] {
+                continue;
+            }
+            let Some(rec) = rec else {
+                continue;
+            };
+            // Unpaired numbers stay page-chrome (not a Text block).
+            if rec.base == "formula_number" {
+                continue;
+            }
+            if let Some(block) = to_doc_block(&rec.base, rec.coord, &rec.text) {
                 blocks.push(block);
             }
         }
@@ -247,6 +293,84 @@ pub(super) fn mix_confidence(token: Option<f32>, layout: Option<f32>) -> Option<
     }
 }
 
+struct PendingRec {
+    base: String,
+    coord: [f32; 4],
+    text: String,
+}
+
+/// Pair each formula_number with the nearest display_formula on the same
+/// line: number y-centre inside the formula y-band (±25%) and strictly
+/// left or right of the body. Returns number-block index → formula index.
+fn pair_formula_numbers(regions: &[Region]) -> HashMap<usize, usize> {
+    let formulas: Vec<usize> = regions
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| text::base_label(&r.label) == "display_formula")
+        .map(|(i, _)| i)
+        .collect();
+    let mut pairs = HashMap::new();
+    for (i, r) in regions.iter().enumerate() {
+        if text::base_label(&r.label) != "formula_number" {
+            continue;
+        }
+        let yc = (r.coord[1] + r.coord[3]) * 0.5;
+        let mut best: Option<(usize, f32)> = None;
+        for &j in &formulas {
+            let f = &regions[j].coord;
+            let band = (f[3] - f[1]) * 0.25;
+            if yc < f[1] - band || yc > f[3] + band {
+                continue;
+            }
+            let gap = if r.coord[0] >= f[2] - 10.0 {
+                (r.coord[0] - f[2]).max(0.0)
+            } else if r.coord[2] <= f[0] + 10.0 {
+                (f[0] - r.coord[2]).max(0.0)
+            } else {
+                continue;
+            };
+            if best.is_none_or(|(_, g)| gap < g) {
+                best = Some((j, gap));
+            }
+        }
+        if let Some((j, _)) = best {
+            pairs.insert(i, j);
+        }
+    }
+    pairs
+}
+
+/// `(11)` / `$$(11)$$` → `11`. None if the crop is not a tag.
+fn clean_tag(text: &str) -> Option<String> {
+    let mut t = text.trim().to_string();
+    for pat in ["$$", "\\(", "\\)", "\\[", "\\]", "\\\\", "$"] {
+        t = t.replace(pat, "");
+    }
+    let t = t
+        .trim()
+        .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']')
+        .trim()
+        .to_string();
+    if !t.is_empty() && t.len() <= 12 && t.chars().any(|c| c.is_ascii_digit()) {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+/// Fold tags into a handle_formula result: `$$...$$\n\n` → `$$... \tag{N}$$\n\n`.
+fn inject_tags(text: &str, tags: &[String]) -> String {
+    let core = text.trim_end();
+    let trailing = &text[core.len()..];
+    match core.strip_suffix("$$") {
+        Some(body) => {
+            let ins: String = tags.iter().map(|t| format!(" \\tag{{{t}}}")).collect();
+            format!("{body}{ins}$${trailing}")
+        }
+        None => text.to_string(),
+    }
+}
+
 fn bbox_to_rect(coord: [f32; 4]) -> Rect {
     let x0 = coord[0].max(0.0).round() as u32;
     let y0 = coord[1].max(0.0).round() as u32;
@@ -257,7 +381,16 @@ fn bbox_to_rect(coord: [f32; 4]) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::mix_confidence;
+    use super::*;
+
+    fn region(label: &str, coord: [f32; 4]) -> Region {
+        Region {
+            label: label.into(),
+            coord,
+            img: None,
+            score: 1.0,
+        }
+    }
 
     #[test]
     fn mix_confidence_weights() {
@@ -266,5 +399,37 @@ mod tests {
         assert!((mix_confidence(Some(1.0), Some(0.0)).unwrap() - 0.8).abs() < 1e-6);
         assert_eq!(mix_confidence(Some(0.5), Some(0.5)), Some(0.5));
         assert_eq!(mix_confidence(None, None), None);
+    }
+
+    #[test]
+    fn pair_formula_numbers_same_line() {
+        let regions = vec![
+            region("display_formula_01", [10.0, 10.0, 100.0, 40.0]),
+            region("formula_number_02", [110.0, 14.0, 130.0, 36.0]),
+            region("formula_number_03", [110.0, 80.0, 130.0, 100.0]),
+        ];
+        let pairs = pair_formula_numbers(&regions);
+        assert_eq!(pairs.get(&1), Some(&0));
+        assert!(
+            !pairs.contains_key(&2),
+            "below-band number must stay unpaired"
+        );
+    }
+
+    #[test]
+    fn clean_tag_accepts_parenthesized_digits() {
+        assert_eq!(clean_tag("$$(11)$$").as_deref(), Some("11"));
+        assert_eq!(clean_tag("(2.1)").as_deref(), Some("2.1"));
+        assert_eq!(clean_tag("hello"), None);
+    }
+
+    #[test]
+    fn inject_tags_then_unwrap_yields_tag() {
+        let wrapped = text::handle_formula("a+b");
+        let tagged = inject_tags(&wrapped, &["1".into()]);
+        let block =
+            to_doc_block("display_formula", [0.0, 0.0, 10.0, 10.0], &tagged).expect("formula");
+        assert_eq!(block.text, r"a+b \tag{1}");
+        assert!(block.display);
     }
 }

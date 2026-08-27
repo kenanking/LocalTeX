@@ -1,3 +1,5 @@
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,10 +12,15 @@ use crate::capture;
 use crate::desktop::DesktopCmd;
 use crate::doc::{DocStatus, Document, ExportFmt, ImageSlot};
 use crate::identity::APP_SLUG;
+use crate::ingest::IngestSource;
+use crate::library::Library;
 use crate::ocr::Engine;
+use crate::ocr_queue::OcrQueue;
 use crate::prefs::{Prefs, WindowCloseAction};
-use crate::store::{self, CivilDate, DateRange, Store};
+use crate::store::{self, CivilDate, Store};
 use crate::ui::MainWindow;
+
+pub use crate::library::DatePreset;
 
 enum Capture {
     Idle,
@@ -21,39 +28,18 @@ enum Capture {
     Failed(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DatePreset {
-    All,
-    Today,
-    Last7Days,
-    Last30Days,
-}
-
-impl DatePreset {
-    pub fn to_range(self, today: CivilDate) -> DateRange {
-        match self {
-            Self::All => DateRange::default(),
-            Self::Today => DateRange::last_n_days(today, 1),
-            Self::Last7Days => DateRange::last_n_days(today, 7),
-            Self::Last30Days => DateRange::last_n_days(today, 30),
-        }
-    }
-}
-
 pub struct AppState {
-    pub documents: Vec<Document>,
-    pub selected: Option<Uuid>,
-    /// Sidebar order after search + date filter (in-flight snips first).
-    pub visible_ids: Vec<Uuid>,
-    pub date_preset: DatePreset,
+    pub library: Library,
     export_fmt: ExportFmt,
     pub prefs: Prefs,
     engine: Arc<Engine>,
     store: Option<Arc<Store>>,
     search_query: String,
     search_gen: u64,
-    /// Most-recent-last ids with `ImageSlot::Loaded` (max 3, including selected).
-    loaded_lru: Vec<Uuid>,
+    ocr_queue: OcrQueue,
+    file_queue: VecDeque<PathBuf>,
+    file_loading: bool,
+    thumb_inflight: HashSet<Uuid>,
     capture: Capture,
     pub main_window: Option<WindowHandle<MainWindow>>,
     /// Nested hide count: one increment per capture request, one decrement
@@ -73,30 +59,28 @@ impl AppState {
                 None
             }
         };
-        let documents = match store.as_ref() {
+        let library = match store.as_ref() {
             Some(store) => match store.list() {
-                Ok(items) => items.into_iter().map(Document::from_list_item).collect(),
+                Ok(items) => Library::from_list(items),
                 Err(err) => {
                     eprintln!("{APP_SLUG}: list snips: {err}");
-                    Vec::new()
+                    Library::new()
                 }
             },
-            None => Vec::new(),
+            None => Library::new(),
         };
-        let selected = documents.first().map(|d| d.id);
-        let visible_ids: Vec<Uuid> = documents.iter().map(|d| d.id).collect();
         Self {
-            documents,
-            selected,
-            visible_ids,
-            date_preset: DatePreset::All,
+            library,
             export_fmt: prefs.default_fmt,
             prefs,
             engine: Engine::load(),
             store,
             search_query: String::new(),
             search_gen: 0,
-            loaded_lru: Vec::new(),
+            ocr_queue: OcrQueue::new(),
+            file_queue: VecDeque::new(),
+            file_loading: false,
+            thumb_inflight: HashSet::new(),
             capture: Capture::Idle,
             main_window: None,
             hide_depth: 0,
@@ -148,9 +132,28 @@ impl AppState {
         self.engine.status()
     }
 
+    pub fn selected(&self) -> Option<Uuid> {
+        self.library.selected
+    }
+
     pub fn selected_doc(&self) -> Option<&Document> {
-        let id = self.selected?;
-        self.documents.iter().find(|d| d.id == id)
+        self.library.selected_doc()
+    }
+
+    pub fn visible_ids(&self) -> &[Uuid] {
+        &self.library.visible_ids
+    }
+
+    pub fn date_preset(&self) -> DatePreset {
+        self.library.date_preset
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.library.is_empty()
+    }
+
+    pub fn gpu_full_ids(&self) -> Vec<Uuid> {
+        self.library.gpu_full_ids()
     }
 
     pub fn request_capture(&mut self, cx: &mut Context<Self>) {
@@ -206,10 +209,42 @@ impl AppState {
     pub fn finish_capture(&mut self, crop: RgbaImage, cx: &mut Context<Self>) {
         self.reveal_on_main = true;
         self.capture = Capture::Idle;
-        self.ingest_image(crop, cx);
+        self.ingest(IngestSource::Screen(crop), cx);
     }
 
-    pub fn ingest_image(&mut self, image: RgbaImage, cx: &mut Context<Self>) {
+    pub fn ingest(&mut self, source: IngestSource, cx: &mut Context<Self>) {
+        match source {
+            IngestSource::Screen(image) => self.ingest_pixels(image, cx),
+            IngestSource::Files(paths) => {
+                self.file_queue.extend(paths);
+                self.pump_file_ingest(cx);
+            }
+            IngestSource::Strokes(pts) => {
+                cx.spawn(async move |this, cx| {
+                    let img = cx
+                        .background_spawn(async move { crate::imgutil::rasterize_strokes(&pts, 3) })
+                        .await;
+                    if let Err(err) = this.update(cx, |this, cx| {
+                        if let Some(img) = img {
+                            this.ingest_pixels(img, cx);
+                        } else {
+                            this.capture = Capture::Failed("empty drawing".into());
+                            cx.notify();
+                        }
+                    }) {
+                        eprintln!("{APP_SLUG}: stroke ingest: {err}");
+                    }
+                })
+                .detach();
+            }
+            IngestSource::PdfPages { .. } => {
+                self.capture = Capture::Failed("PDF ingest is not implemented yet".into());
+                cx.notify();
+            }
+        }
+    }
+
+    fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) {
         let (w0, h0) = image.dimensions();
         let image = crate::imgutil::cap_megapixels(image);
         if image.dimensions() != (w0, h0) {
@@ -221,13 +256,8 @@ impl AppState {
         }
         let doc = Document::pending(Arc::new(image));
         let id = doc.id;
-        self.documents.insert(0, doc);
-        self.selected = Some(id);
-        if !self.visible_ids.contains(&id) {
-            self.visible_ids.insert(0, id);
-        }
-        self.touch_lru(id);
-        self.start_ocr(id, cx);
+        self.library.insert_newest(doc);
+        self.enqueue_ocr(id, cx);
         cx.notify();
     }
 
@@ -235,19 +265,51 @@ impl AppState {
         if self.is_capturing() {
             return;
         }
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-            .pick_file()
-        else {
+        cx.spawn(async move |this, cx| {
+            let picked = rfd::AsyncFileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                .pick_files()
+                .await;
+            let Some(handles) = picked else {
+                return;
+            };
+            let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.ingest(IngestSource::Files(paths), cx);
+            }) {
+                eprintln!("{APP_SLUG}: upload task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
+        if self.file_loading || !self.ocr_queue.is_idle() {
+            return;
+        }
+        let Some(path) = self.file_queue.pop_front() else {
             return;
         };
-        match image::open(&path) {
-            Ok(dynimg) => self.ingest_image(dynimg.to_rgba8(), cx),
-            Err(err) => {
-                self.capture = Capture::Failed(format!("open image: {err}"));
-                cx.notify();
+        self.file_loading = true;
+        cx.spawn(async move |this, cx| {
+            let decoded = cx
+                .background_spawn(async move { image::open(&path).map(|d| d.to_rgba8()) })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.file_loading = false;
+                match decoded {
+                    Ok(img) => this.ingest_pixels(img, cx),
+                    Err(err) => {
+                        this.capture = Capture::Failed(format!("open image: {err}"));
+                        cx.notify();
+                    }
+                }
+                this.pump_file_ingest(cx);
+            }) {
+                eprintln!("{APP_SLUG}: file decode: {err}");
             }
-        }
+        })
+        .detach();
     }
 
     fn hide_main(&mut self, cx: &mut Context<Self>) {
@@ -301,11 +363,23 @@ impl AppState {
         });
     }
 
-    pub fn start_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(doc) = self.documents.iter().find(|d| d.id == id) else {
+    fn enqueue_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        self.ocr_queue.enqueue(id);
+        self.pump_ocr(cx);
+    }
+
+    fn pump_ocr(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.ocr_queue.take_next() else {
+            self.pump_file_ingest(cx);
             return;
         };
-        let Some(image) = doc.image.pixels().cloned() else {
+        self.start_ocr(id, cx);
+    }
+
+    pub fn start_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(image) = self.library.pixels(id) else {
+            self.ocr_queue.finish(id);
+            self.pump_ocr(cx);
             return;
         };
         let engine = self.engine.clone();
@@ -314,7 +388,7 @@ impl AppState {
                 .background_spawn(async move { engine.recognize(image.as_ref()) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                if let Some(doc) = this.library.get_mut(id) {
                     match result {
                         Ok(out) => {
                             doc.blocks = out.blocks;
@@ -322,19 +396,22 @@ impl AppState {
                             doc.ocr = out.meta;
                             doc.status = DocStatus::Ready;
                             doc.refresh_first_line();
+                            doc.bump_revision();
                         }
                         Err(err) => {
                             doc.status = DocStatus::Failed(err.to_string());
+                            doc.bump_revision();
                         }
                     }
                 }
+                this.ocr_queue.finish(id);
                 let ready = this
-                    .documents
-                    .iter()
-                    .any(|d| d.id == id && matches!(d.status, DocStatus::Ready));
+                    .library
+                    .get(id)
+                    .is_some_and(|d| matches!(d.status, DocStatus::Ready));
                 if ready {
                     this.persist_ready(id, cx);
-                    if this.prefs.autocopy && this.selected == Some(id) {
+                    if this.prefs.autocopy && this.library.selected == Some(id) {
                         this.copy_selected(cx);
                     }
                 }
@@ -343,6 +420,7 @@ impl AppState {
                     this.reveal_on_main = false;
                     this.dismiss_main_sheet(cx);
                 }
+                this.pump_ocr(cx);
                 cx.notify();
             }) {
                 eprintln!("{APP_SLUG}: ocr task: {err}");
@@ -352,22 +430,19 @@ impl AppState {
     }
 
     pub fn retry_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
+        let Some(id) = self.library.selected else {
             return;
         };
-        let slot = self
-            .documents
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.image.clone());
+        let slot = self.library.get(id).map(|d| d.image.clone());
         match slot {
             None | Some(ImageSlot::Missing) => (),
             Some(ImageSlot::Loaded(_)) => {
-                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
+                if let Some(doc) = self.library.get_mut(id) {
                     doc.status = DocStatus::Recognizing;
                     doc.blocks.clear();
+                    doc.bump_revision();
                 }
-                self.start_ocr(id, cx);
+                self.enqueue_ocr(id, cx);
                 cx.notify();
             }
             Some(ImageSlot::OnDisk) => self.load_png_then_retry(id, cx),
@@ -393,29 +468,28 @@ impl AppState {
     }
 
     pub fn select_delta(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.visible_ids.is_empty() {
+        if self.library.visible_ids.is_empty() {
             return;
         }
         let idx = self
+            .library
             .selected
-            .and_then(|id| self.visible_ids.iter().position(|x| *x == id))
+            .and_then(|id| self.library.visible_ids.iter().position(|x| *x == id))
             .unwrap_or(0) as isize;
-        let next = (idx + delta).clamp(0, self.visible_ids.len() as isize - 1) as usize;
-        self.select(self.visible_ids[next], cx);
+        let next = (idx + delta).clamp(0, self.library.visible_ids.len() as isize - 1) as usize;
+        self.select(self.library.visible_ids[next], cx);
     }
 
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
+        let Some(id) = self.library.selected else {
             return;
         };
-        self.documents.retain(|d| d.id != id);
-        self.visible_ids.retain(|x| *x != id);
-        self.loaded_lru.retain(|x| *x != id);
-        self.selected = self
-            .visible_ids
-            .first()
-            .copied()
-            .or_else(|| self.documents.first().map(|d| d.id));
+        self.ocr_queue.remove(id);
+        self.library.remove(id);
+        self.thumb_inflight.remove(&id);
+        if self.library.is_empty() {
+            self.ocr_queue.cancel_remaining();
+        }
         if let Some(store) = self.store.clone() {
             cx.background_spawn(async move {
                 if let Err(err) = store.delete(id) {
@@ -424,9 +498,10 @@ impl AppState {
             })
             .detach();
         }
-        if let Some(id) = self.selected {
+        if let Some(id) = self.library.selected {
             self.ensure_detail(id, cx);
         }
+        self.pump_ocr(cx);
         cx.notify();
     }
 
@@ -436,8 +511,8 @@ impl AppState {
     }
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.selected = Some(id);
-        self.touch_lru(id);
+        self.library.selected = Some(id);
+        self.library.touch_lru(id);
         self.ensure_detail(id, cx);
         cx.notify();
     }
@@ -451,41 +526,60 @@ impl AppState {
     }
 
     pub fn set_date_preset(&mut self, preset: DatePreset, cx: &mut Context<Self>) {
-        if self.date_preset == preset {
+        if self.library.date_preset == preset {
             return;
         }
-        self.date_preset = preset;
+        self.library.date_preset = preset;
         self.schedule_filter(cx);
     }
 
-    pub fn gpu_full_ids(&self) -> Vec<Uuid> {
-        let mut ids = self.loaded_lru.clone();
-        if let Some(sel) = self.selected {
-            if !ids.contains(&sel) {
-                ids.push(sel);
-            }
-        }
-        ids
-    }
-
     pub fn boot_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected {
+        if let Some(id) = self.library.selected {
             self.ensure_detail(id, cx);
         }
     }
 
-    pub fn visible_docs(&self) -> Vec<&Document> {
-        self.visible_ids
-            .iter()
-            .filter_map(|id| self.documents.iter().find(|d| d.id == *id))
-            .collect()
+    pub fn request_thumb(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.thumb_inflight.contains(&id) {
+            return;
+        }
+        let Some(doc) = self.library.get(id) else {
+            return;
+        };
+        if !doc.thumb_jpeg.is_empty() || !doc.persisted {
+            return;
+        }
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        self.thumb_inflight.insert(id);
+        cx.spawn(async move |this, cx| {
+            let jpeg = cx
+                .background_spawn(async move { store.load_thumb(id) })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.thumb_inflight.remove(&id);
+                match jpeg {
+                    Ok(bytes) => {
+                        if let Some(doc) = this.library.get_mut(id) {
+                            doc.thumb_jpeg = bytes;
+                        }
+                    }
+                    Err(err) => eprintln!("{APP_SLUG}: load thumb: {err}"),
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: thumb task: {err}");
+            }
+        })
+        .detach();
     }
 
     fn persist_ready(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(store) = self.store.clone() else {
             return;
         };
-        let Some(doc) = self.documents.iter().find(|d| d.id == id).cloned() else {
+        let Some(doc) = self.library.get(id).cloned() else {
             return;
         };
         if !matches!(doc.status, DocStatus::Ready) || doc.image.pixels().is_none() {
@@ -506,7 +600,7 @@ impl AppState {
             if let Err(err) = this.update(cx, |this, cx| {
                 match result {
                     Ok(Some(thumb)) => {
-                        if let Some(d) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(d) = this.library.get_mut(id) {
                             d.persisted = true;
                             d.thumb_jpeg = thumb;
                         }
@@ -527,11 +621,11 @@ impl AppState {
         self.search_gen = self.search_gen.wrapping_add(1);
         let gen = self.search_gen;
         let query = self.search_query.clone();
-        let range = self.date_preset.to_range(CivilDate::today_local());
+        let range = self.library.date_preset.to_range(CivilDate::today_local());
         let store = self.store.clone();
         let inflight: Vec<(Uuid, std::time::SystemTime, String)> = self
-            .documents
-            .iter()
+            .library
+            .iter_all()
             .filter(|d| !d.persisted)
             .map(|d| {
                 let blob = if matches!(d.status, DocStatus::Ready) {
@@ -544,8 +638,8 @@ impl AppState {
             .collect();
         let ram_only: Option<Vec<(Uuid, std::time::SystemTime, String)>> = if store.is_none() {
             Some(
-                self.documents
-                    .iter()
+                self.library
+                    .iter_all()
                     .filter(|d| d.persisted)
                     .map(|d| {
                         (
@@ -594,7 +688,7 @@ impl AppState {
                 if this.search_gen != gen {
                     return;
                 }
-                this.visible_ids = ids;
+                this.library.visible_ids = ids;
                 cx.notify();
             }) {
                 eprintln!("{APP_SLUG}: filter task: {err}");
@@ -607,8 +701,9 @@ impl AppState {
         let Some(store) = self.store.clone() else {
             return;
         };
-        if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
+        if let Some(doc) = self.library.get_mut(id) {
             doc.status = DocStatus::Recognizing;
+            doc.bump_revision();
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -616,16 +711,16 @@ impl AppState {
             if let Err(err) = this.update(cx, |this, cx| {
                 match loaded {
                     Ok(img) => {
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.image = ImageSlot::Loaded(Arc::new(img));
                             doc.blocks.clear();
                         }
-                        this.touch_lru(id);
-                        this.start_ocr(id, cx);
+                        this.library.touch_lru(id);
+                        this.enqueue_ocr(id, cx);
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: load png: {err}");
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.image = ImageSlot::Missing;
                             doc.status = DocStatus::Ready;
                         }
@@ -640,7 +735,7 @@ impl AppState {
     }
 
     pub fn ensure_detail(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(doc) = self.documents.iter().find(|d| d.id == id) else {
+        let Some(doc) = self.library.get(id) else {
             return;
         };
         let need_blocks = doc.persisted && !doc.blocks_loaded;
@@ -664,15 +759,16 @@ impl AppState {
             if let Err(err) = this.update(cx, |this, cx| {
                 match result {
                     Ok(blocks) => {
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.blocks = blocks;
                             doc.blocks_loaded = true;
                             doc.refresh_first_line();
+                            doc.bump_revision();
                         }
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: load blocks: {err}");
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.blocks_loaded = true;
                         }
                     }
@@ -692,19 +788,19 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { store.load_png(id) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
-                if this.selected != Some(id) {
+                if this.library.selected != Some(id) {
                     return;
                 }
                 match result {
                     Ok(img) => {
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.image = ImageSlot::Loaded(Arc::new(img));
                         }
-                        this.touch_lru(id);
+                        this.library.touch_lru(id);
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: load png: {err}");
-                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                        if let Some(doc) = this.library.get_mut(id) {
                             doc.image = ImageSlot::Missing;
                         }
                     }
@@ -715,26 +811,6 @@ impl AppState {
             }
         })
         .detach();
-    }
-
-    fn touch_lru(&mut self, id: Uuid) {
-        self.loaded_lru.retain(|x| *x != id);
-        self.loaded_lru.push(id);
-        while self.loaded_lru.len() > 3 {
-            let Some(pos) = self
-                .loaded_lru
-                .iter()
-                .position(|x| Some(*x) != self.selected)
-            else {
-                break;
-            };
-            let evict = self.loaded_lru.remove(pos);
-            if let Some(doc) = self.documents.iter_mut().find(|d| d.id == evict) {
-                if doc.persisted && matches!(doc.image, ImageSlot::Loaded(_)) {
-                    doc.image = ImageSlot::OnDisk;
-                }
-            }
-        }
     }
 
     fn handle_desktop(&mut self, cmd: DesktopCmd, cx: &mut Context<Self>) {

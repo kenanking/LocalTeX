@@ -96,7 +96,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<SnipListItem>> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, first_line, thumb_jpeg, image_relpath, ocr_s, confidence
+            "SELECT id, created_at, first_line, ocr_s, confidence
              FROM snips ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -104,17 +104,14 @@ impl Store {
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, Vec<u8>>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<f64>>(5)?,
-                row.get::<_, Option<f64>>(6)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<f64>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id_s, ms, first_line, thumb_jpeg, rel, ocr_s, confidence) = row?;
+            let (id_s, ms, first_line, ocr_s, confidence) = row?;
             let id = Uuid::parse_str(&id_s).map_err(|e| anyhow!("uuid: {e}"))?;
-            let png_missing = !self.root.join(&rel).is_file();
             let ocr = match (ocr_s, confidence) {
                 (Some(elapsed_s), Some(confidence)) => Some(OcrMeta {
                     elapsed_s: elapsed_s as f32,
@@ -126,12 +123,34 @@ impl Store {
                 id,
                 created_at: system_time_from_ms(ms),
                 first_line,
-                thumb_jpeg,
-                png_missing,
+                thumb_jpeg: Vec::new(),
+                png_missing: false,
                 ocr,
             });
         }
         Ok(out)
+    }
+
+    pub fn load_thumb(&self, id: Uuid) -> Result<Vec<u8>> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
+        conn.query_row(
+            "SELECT thumb_jpeg FROM snips WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|e| anyhow!("load thumb: {e}"))
+    }
+
+    pub fn png_missing(&self, id: Uuid) -> Result<bool> {
+        let rel = {
+            let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
+            conn.query_row(
+                "SELECT image_relpath FROM snips WHERE id = ?1",
+                params![id.to_string()],
+                |row| row.get::<_, String>(0),
+            )?
+        };
+        Ok(!self.root.join(rel).is_file())
     }
 
     pub fn load_blocks(&self, id: Uuid) -> Result<Vec<Block>> {
@@ -145,6 +164,9 @@ impl Store {
     }
 
     pub fn load_png(&self, id: Uuid) -> Result<image::RgbaImage> {
+        if self.png_missing(id)? {
+            return Err(anyhow!("png missing"));
+        }
         let rel = {
             let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
             conn.query_row(
@@ -465,6 +487,7 @@ mod tests {
             persisted: false,
             blocks_loaded: true,
             ocr: None,
+            revision: 0,
         }
     }
 
@@ -484,8 +507,9 @@ mod tests {
         let store = Store::open(_root.clone()).unwrap();
         let list = store.list().unwrap();
         assert_eq!(list.len(), 1);
-        assert!(!list[0].thumb_jpeg.is_empty());
-        assert!(!list[0].png_missing);
+        assert!(list[0].thumb_jpeg.is_empty());
+        assert!(!store.load_thumb(id).unwrap().is_empty());
+        assert!(!store.png_missing(id).unwrap());
         let blocks = store.load_blocks(id).unwrap();
         assert_eq!(blocks[0].text, r"\frac{1}{2}");
         let png = store.load_png(id).unwrap();
@@ -500,7 +524,8 @@ mod tests {
         store.insert_ready(&doc).unwrap();
         std::fs::remove_file(root.join(format!("snips/{id}.png"))).unwrap();
         let list = store.list().unwrap();
-        assert!(list[0].png_missing);
+        assert!(store.png_missing(id).unwrap());
+        assert!(!list[0].png_missing);
         assert_eq!(store.load_blocks(id).unwrap()[0].text, "hello");
     }
 

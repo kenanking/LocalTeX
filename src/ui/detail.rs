@@ -1,20 +1,20 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, AnyElement, Context, Entity, EntityId, Image, ImageFormat,
+    div, img, prelude::*, px, rgb, AnyElement, App, Context, Entity, EntityId, MouseButton,
     RenderImage, SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::scroll::{h_scroll_pane, overlay_scrollbar, ScrollAxis};
-use super::selectable::selectable_text;
+use super::selectable::{selectable_run, selectable_text};
 use super::theme;
 use super::widgets::{
     btn, copy_row, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
 };
 use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta};
-use crate::preview::{self, InlineSeg, PreviewBlock, PreviewLayout, SvgMath};
+use crate::preview::{Eqno, InlineSeg, PreviewBlock, PreviewLayout, SvgMath};
 use crate::state::AppState;
 
 impl MainWindow {
@@ -23,39 +23,53 @@ impl MainWindow {
         capturing: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let (doc, prefs) = {
+        let snap = {
             let state = self.state.read(cx);
             let Some(doc) = state.selected_doc() else {
                 return empty_state(self.state.clone(), capturing);
             };
-            (doc.clone(), state.prefs.clone())
+            DetailSnap {
+                id: doc.id,
+                status: doc.status.clone(),
+                first_line: doc.first_line(),
+                can_retry: doc.can_retry(),
+                ocr: doc.ocr,
+                image_missing: matches!(doc.image, ImageSlot::Missing),
+                show_original: state.prefs.show_original,
+                revision: doc.revision,
+                ready: matches!(doc.status, DocStatus::Ready),
+            }
         };
 
-        let failed = matches!(doc.status, DocStatus::Failed(_));
-        let ready = matches!(doc.status, DocStatus::Ready);
-        let copy_rows = if ready {
-            crate::doc::visible_copy_rows(&doc.copy_rows(&prefs))
-        } else {
-            Vec::new()
-        };
+        let failed = matches!(snap.status, DocStatus::Failed(_));
+        let ready = snap.ready;
+        let copy_rows = self
+            .derived
+            .as_ref()
+            .filter(|d| d.id == snap.id && d.revision == snap.revision)
+            .map(|d| d.copy_rows.clone())
+            .unwrap_or_default();
         let retry_state = self.state.clone();
-        let full = self.fulls.get(&doc.id).cloned();
-        let preview = self.preview_element(&doc, cx.entity_id());
-        let doc_id = doc.id;
+        let full = self.full(snap.id);
+        let doc_id = snap.id;
+        self.preview.reset_for(doc_id);
+        let preview = self.preview_element(doc_id, &snap.status, cx);
         let copied = self.copied.filter(|(id, _)| *id == doc_id);
         let orig_hover = self.orig_hover;
-        let image_missing = matches!(doc.image, ImageSlot::Missing);
-        let can_retry = doc.can_retry();
-        let ocr = doc.ocr;
+        let image_missing = snap.image_missing;
+        let can_retry = snap.can_retry;
+        let ocr = snap.ocr;
         let orig = self.render_orig_strip(doc_id, full, orig_hover, image_missing, cx);
 
-        self.preview.reset_for(doc_id);
         if ready && self.preview.bar_pending {
-            self.preview.bar_pending = false;
-            let entity = cx.entity();
-            cx.defer(move |cx| {
-                entity.update(cx, |_, cx| cx.notify());
-            });
+            if self.preview.hscroll_bounds_ready() {
+                self.preview.bar_pending = false;
+            } else {
+                let entity = cx.entity();
+                cx.defer(move |cx| {
+                    entity.update(cx, |_, cx| cx.notify());
+                });
+            }
         }
 
         div()
@@ -78,13 +92,19 @@ impl MainWindow {
                         .rounded_md()
                         .bg(theme::danger_soft())
                         .text_color(rgb(theme::DANGER))
-                        .child(div().flex_1().min_w_0().text_xs().child(doc.first_line()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_xs()
+                                .child(snap.first_line.clone()),
+                        )
                         .child(btn("retry", "Retry", true, can_retry, move |_, cx| {
                             retry_state.update(cx, |s, cx| s.retry_selected(cx));
                         })),
                 )
             })
-            .when(prefs.show_original, |d| d.child(orig))
+            .when(snap.show_original, |d| d.child(orig))
             .child(
                 div()
                     .id("preview")
@@ -108,6 +128,21 @@ impl MainWindow {
                             .py_3()
                             .overflow_y_scroll()
                             .track_scroll(&self.preview.vscroll)
+                            .capture_any_mouse_down({
+                                let sel = self.preview.sel.clone();
+                                let view = cx.entity_id();
+                                move |event, _, cx| {
+                                    if event.button != MouseButton::Left {
+                                        return;
+                                    }
+                                    let mut state = sel.borrow_mut();
+                                    if state.anchor.key.is_empty() {
+                                        return;
+                                    }
+                                    state.clear();
+                                    cx.notify(view);
+                                }
+                            })
                             .on_scroll_wheel({
                                 let view = cx.entity_id();
                                 move |_, _, cx| {
@@ -224,7 +259,7 @@ impl MainWindow {
     pub(crate) fn render_orig_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let full = {
             let state = self.state.read(cx);
-            state.selected.and_then(|id| self.fulls.get(&id).cloned())
+            state.selected().and_then(|id| self.full(id))
         };
         div()
             .id("orig-zoom")
@@ -284,15 +319,15 @@ impl MainWindow {
             .gap_1()
             .child(section_label("Copy"));
 
-        for (i, row) in rows.iter().enumerate() {
+        for row in rows.iter() {
             let kind = row.kind;
             let text = row.text.clone();
             let preview = row.text.split_whitespace().collect::<Vec<_>>().join(" ");
             let is_copied = copied.is_some_and(|(_, k)| k == kind);
             let entity = cx.entity();
             col = col.child(copy_row(
-                SharedString::from(format!("copy-{i}")),
-                kind.label(),
+                SharedString::from(format!("copy-{}", row.exporter_id)),
+                row.label,
                 SharedString::from(preview),
                 is_copied,
                 !text.is_empty(),
@@ -311,26 +346,26 @@ impl MainWindow {
         col
     }
 
-    fn preview_element(&mut self, doc: &crate::doc::Document, view: EntityId) -> impl IntoElement {
-        let key = preview_key(doc);
-        let blocks = if let Some((k, blocks)) = self.previews.get(&doc.id) {
-            if k == &key {
-                blocks.clone()
-            } else {
-                let blocks = preview::document_preview(&doc.blocks);
-                self.previews.insert(doc.id, (key, blocks.clone()));
-                blocks
-            }
-        } else {
-            let blocks = preview::document_preview(&doc.blocks);
-            self.previews.insert(doc.id, (key, blocks.clone()));
-            blocks
-        };
+    fn preview_element(
+        &mut self,
+        doc_id: Uuid,
+        status: &DocStatus,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let view = cx.entity_id();
+        let has_derived = self.derived.as_ref().is_some_and(|d| d.id == doc_id);
+        let blocks: Vec<PreviewBlock> = self
+            .derived
+            .as_ref()
+            .filter(|d| d.id == doc_id)
+            .map(|d| d.preview.clone())
+            .unwrap_or_default();
 
         if blocks.is_empty() {
-            let msg = match doc.status {
+            let msg = match status {
                 DocStatus::Recognizing => "Recognizing…",
-                DocStatus::Ready => "No preview yet.",
+                DocStatus::Ready if has_derived => "No preview yet.",
+                DocStatus::Ready => "Loading…",
                 DocStatus::Failed(_) => "",
             };
             return div()
@@ -338,7 +373,8 @@ impl MainWindow {
                 .w_full()
                 .text_sm()
                 .text_color(rgb(theme::MUTED))
-                .child(SharedString::from(msg));
+                .child(SharedString::from(msg))
+                .into_any_element();
         }
 
         // Pane-width column: paragraphs wrap here. Wide tables / display
@@ -352,12 +388,40 @@ impl MainWindow {
             .flex()
             .flex_col()
             .gap_3()
-            .flex_none();
+            .flex_none()
+            .capture_any_mouse_down({
+                let sel = self.preview.sel.clone();
+                let view = cx.entity_id();
+                move |event, _, cx| {
+                    if event.button != MouseButton::Left {
+                        return;
+                    }
+                    let mut state = sel.borrow_mut();
+                    if state.anchor.key.is_empty() {
+                        return;
+                    }
+                    state.clear();
+                    cx.notify(view);
+                }
+            });
+
+        let flow: Vec<(String, SharedString)> = blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, block)| match block {
+                PreviewBlock::Paragraph(segs) => {
+                    Some((format!("p-{i}"), concat_inline_segs(segs).0.into()))
+                }
+                PreviewBlock::Fallback(text) => Some((format!("f-{i}"), text.clone().into())),
+                PreviewBlock::Display { .. } | PreviewBlock::Table(_) => None,
+            })
+            .collect();
+        self.preview.sel.borrow_mut().set_flow(flow);
 
         for (i, block) in blocks.iter().enumerate() {
-            col = col.child(self.render_preview_block(i, block, view));
+            col = col.child(self.render_preview_block(i, block, view, cx));
         }
-        col
+        col.into_any_element()
     }
 
     fn render_preview_block(
@@ -365,46 +429,30 @@ impl MainWindow {
         i: usize,
         block: &PreviewBlock,
         view: EntityId,
+        cx: &mut App,
     ) -> impl IntoElement {
         match block {
             PreviewBlock::Paragraph(segs) => {
-                let has_math = segs.iter().any(|s| matches!(s, InlineSeg::Math(_)));
-                if !has_math {
-                    div()
-                        .id(SharedString::from(format!("p-{i}")))
-                        .w_full()
-                        .text_sm()
-                        .line_height(px(22.))
-                        .text_color(rgb(theme::TEXT))
-                        .whitespace_normal()
-                        .child(self.render_segs(format!("p-{i}"), segs, true))
-                        .into_any()
-                } else {
-                    self.render_segs(format!("p-{i}"), segs, true)
-                }
-            }
-            PreviewBlock::Display(math) => {
-                let handle = self.preview.hscroll_handle(&format!("d-{i}"));
-                let img = self.math_img(math);
+                let has_math = segs.iter().any(|s| matches!(s, InlineSeg::Math { .. }));
                 div()
+                    .id(SharedString::from(format!("p-{i}")))
                     .w_full()
                     .min_w_0()
-                    .py_3()
-                    .child(h_scroll_pane(
-                        format!("d-{i}"),
-                        &handle,
-                        math.width,
-                        math.height,
-                        true,
-                        &self.preview.thumb,
-                        view,
-                        img,
-                    ))
+                    .when(!has_math, |d| {
+                        d.text_sm()
+                            .line_height(px(22.))
+                            .text_color(rgb(theme::TEXT))
+                            .whitespace_normal()
+                    })
+                    .child(self.render_segs(format!("p-{i}"), segs, true, cx))
                     .into_any()
+            }
+            PreviewBlock::Display { math, eqno } => {
+                self.render_display_math(i, math, eqno.as_ref(), view, cx)
             }
             PreviewBlock::Table(layout) => {
                 let handle = self.preview.hscroll_handle(&format!("tbl-{i}"));
-                let table_el = self.render_table_preview(i, layout);
+                let table_el = self.render_table_preview(i, layout, cx);
                 h_scroll_pane(
                     format!("tbl-{i}"),
                     &handle,
@@ -433,7 +481,99 @@ impl MainWindow {
         }
     }
 
-    fn render_table_preview(&mut self, i: usize, layout: &PreviewLayout) -> impl IntoElement {
+    fn render_display_math(
+        &mut self,
+        i: usize,
+        math: &SvgMath,
+        eqno: Option<&Eqno>,
+        view: EntityId,
+        cx: &mut App,
+    ) -> AnyElement {
+        let handle = self.preview.hscroll_handle(&format!("d-{i}"));
+        let view_w: f32 = handle.bounds().size.width.into();
+        let pane_measured = view_w > 1.0;
+        let tag_w = eqno.map(Eqno::width).unwrap_or(0.0);
+        let trailing = eqno.is_some() && pane_measured && math.width + tag_w + EQNO_GAP > view_w;
+
+        if trailing {
+            let eqno = eqno.expect("trailing requires eqno");
+            let content_w = math.width + EQNO_GAP + tag_w.max(1.0);
+            let content_h = math.height.max(eqno.height());
+            let img = self.math_img(math, cx);
+            let number = self.eqno_el(eqno, cx);
+            let row = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .h(px(content_h))
+                .child(img)
+                .child(div().w(px(EQNO_GAP)).h(px(1.)))
+                .child(number);
+            return div()
+                .w_full()
+                .min_w_0()
+                .py_3()
+                .child(h_scroll_pane(
+                    format!("d-{i}"),
+                    &handle,
+                    content_w,
+                    content_h,
+                    false,
+                    &self.preview.thumb,
+                    view,
+                    row,
+                ))
+                .into_any();
+        }
+
+        let pane = {
+            let img = self.math_img(math, cx);
+            h_scroll_pane(
+                format!("d-{i}"),
+                &handle,
+                math.width,
+                math.height,
+                true,
+                &self.preview.thumb,
+                view,
+                img,
+            )
+        };
+        let mut inner = div().relative().w_full().min_w_0().child(pane);
+        if let Some(eqno) = eqno {
+            inner = inner.child(
+                div()
+                    .absolute()
+                    .right(px(0.))
+                    .top(px(0.))
+                    .h(px(math.height.max(1.0)))
+                    .flex()
+                    .items_center()
+                    .child(self.eqno_el(eqno, cx)),
+            );
+        }
+        div().w_full().min_w_0().py_3().child(inner).into_any()
+    }
+
+    fn eqno_el(&mut self, eqno: &Eqno, cx: &mut App) -> AnyElement {
+        if let Some(math) = &eqno.math {
+            self.math_img(math, cx).into_any_element()
+        } else {
+            div()
+                .text_size(px(18.))
+                .line_height(px(22.))
+                .text_color(rgb(theme::TEXT))
+                .child(SharedString::from(crate::math::format_eqno(&eqno.raw)))
+                .into_any()
+        }
+    }
+
+    fn render_table_preview(
+        &mut self,
+        i: usize,
+        layout: &PreviewLayout,
+        cx: &mut App,
+    ) -> impl IntoElement {
         let mut wrap = div()
             .id(SharedString::from(format!("tbl-{i}")))
             .relative()
@@ -476,78 +616,96 @@ impl MainWindow {
                         format!("c-{i}-{}-{}", cell.row, cell.col),
                         &cell.segs,
                         false,
+                        cx,
                     )),
             );
         }
         wrap
     }
 
-    fn render_segs(&mut self, id: String, segs: &[InlineSeg], wrap_tokens: bool) -> AnyElement {
-        let has_math = segs.iter().any(|s| matches!(s, InlineSeg::Math(_)));
+    fn render_segs(
+        &mut self,
+        id: String,
+        segs: &[InlineSeg],
+        paragraph: bool,
+        cx: &mut App,
+    ) -> AnyElement {
+        let has_math = segs.iter().any(|s| matches!(s, InlineSeg::Math { .. }));
         if !has_math {
             let text = segs
                 .iter()
                 .map(|s| match s {
                     InlineSeg::Text(t) => t.as_str(),
-                    InlineSeg::Math(_) => "",
+                    InlineSeg::Math { .. } => "",
                 })
                 .collect::<Vec<_>>()
                 .join("");
-            return selectable_text(id, text, self.preview.sel.clone()).into_any();
+            return div()
+                .w_full()
+                .min_w_0()
+                .whitespace_normal()
+                .child(selectable_text(id, text, self.preview.sel.clone()))
+                .into_any();
         }
+        let (para_text, ranges) = concat_inline_segs(segs);
         let mut row = div()
-            .id(SharedString::from(id.clone()))
+            .id(SharedString::from(format!("{id}-row")))
+            .w_full()
             .min_w_0()
             .flex()
+            .flex_row()
             .flex_wrap()
             .items_center()
-            .gap(px(if wrap_tokens { 4. } else { 2. }))
-            .when(wrap_tokens, |d| {
-                d.w_full()
-                    .text_sm()
+            .when(paragraph, |d| {
+                d.text_sm()
                     .line_height(px(22.))
                     .text_color(rgb(theme::TEXT))
             });
+        let sel = self.preview.sel.clone();
         for (j, seg) in segs.iter().enumerate() {
             match seg {
                 InlineSeg::Text(t) => {
-                    if wrap_tokens {
-                        for (k, tok) in wrap_text_tokens(t).into_iter().enumerate() {
-                            row = row.child(
-                                div()
-                                    .id(SharedString::from(format!("{id}-{j}-{k}")))
-                                    .text_sm()
-                                    .line_height(px(22.))
-                                    .text_color(rgb(theme::TEXT))
-                                    .child(selectable_text(
-                                        format!("{id}-{j}-{k}"),
-                                        tok,
-                                        self.preview.sel.clone(),
-                                    )),
-                            );
+                    for (k, (off, tok)) in wrap_units(t).into_iter().enumerate() {
+                        if tok.is_empty() {
+                            continue;
                         }
-                    } else {
+                        let run_id = format!("{id}-t-{j}-{k}");
                         row = row.child(
                             div()
-                                .id(SharedString::from(format!("{id}-{j}")))
-                                .text_xs()
-                                .text_color(rgb(theme::TEXT))
-                                .child(selectable_text(
-                                    format!("{id}-{j}"),
-                                    t.clone(),
-                                    self.preview.sel.clone(),
+                                .id(SharedString::from(run_id.clone()))
+                                .flex_shrink_0()
+                                .when(paragraph, |d| {
+                                    d.text_sm()
+                                        .line_height(px(22.))
+                                        .text_color(rgb(theme::TEXT))
+                                })
+                                .when(!paragraph, |d| d.text_xs().text_color(rgb(theme::TEXT)))
+                                .child(selectable_run(
+                                    run_id,
+                                    id.clone(),
+                                    tok,
+                                    para_text.clone(),
+                                    ranges[j].start + off,
+                                    sel.clone(),
                                 )),
                         );
                     }
                 }
-                InlineSeg::Math(math) => {
+                InlineSeg::Math { svg, .. } => {
+                    let math_on = {
+                        let state = sel.borrow();
+                        state
+                            .span_in(&id, para_text.len())
+                            .is_some_and(|r| ranges_overlap(&r, &ranges[j]))
+                    };
                     row = row.child(
                         div()
-                            .id(SharedString::from(format!("{id}-m-{j}")))
                             .flex()
                             .items_center()
                             .flex_shrink_0()
-                            .child(self.math_img(math)),
+                            .px(px(1.))
+                            .when(math_on, |d| d.bg(theme::accent_soft()))
+                            .child(self.math_img(svg, cx)),
                     );
                 }
             }
@@ -555,17 +713,8 @@ impl MainWindow {
         row.into_any()
     }
 
-    fn math_img(&mut self, math: &SvgMath) -> impl IntoElement {
-        let image = self
-            .math_imgs
-            .entry(math.svg.clone())
-            .or_insert_with(|| {
-                Arc::new(Image::from_bytes(
-                    ImageFormat::Svg,
-                    math.svg.clone().into_bytes(),
-                ))
-            })
-            .clone();
+    fn math_img(&mut self, math: &SvgMath, cx: &mut App) -> impl IntoElement {
+        let image = self.math_image(&math.svg, cx);
         img(image)
             .w(px(math.width))
             .h(px(math.height))
@@ -574,44 +723,81 @@ impl MainWindow {
     }
 }
 
-fn preview_key(doc: &crate::doc::Document) -> String {
-    doc.blocks
-        .iter()
-        .map(|b| format!("{:?}:{}", b.kind, b.text))
-        .collect::<Vec<_>>()
-        .join("\n")
+struct DetailSnap {
+    id: Uuid,
+    status: DocStatus,
+    first_line: String,
+    can_retry: bool,
+    ocr: Option<OcrMeta>,
+    image_missing: bool,
+    show_original: bool,
+    revision: u64,
+    ready: bool,
 }
 
-fn wrap_text_tokens(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for piece in text.split_whitespace() {
-        if piece.is_empty() {
-            continue;
-        }
-        let mut buf = String::new();
-        for ch in piece.chars() {
-            let cjk = is_cjk(ch);
-            if cjk {
-                if !buf.is_empty() && !buf.chars().any(is_cjk) {
-                    out.push(std::mem::take(&mut buf));
-                }
-                buf.push(ch);
-                if buf.chars().count() >= 8 {
-                    out.push(std::mem::take(&mut buf));
-                }
-            } else {
-                if buf.chars().any(is_cjk) {
-                    out.push(std::mem::take(&mut buf));
-                }
-                buf.push(ch);
+const EQNO_GAP: f32 = 12.0;
+
+fn concat_inline_segs(segs: &[InlineSeg]) -> (String, Vec<std::ops::Range<usize>>) {
+    let mut text = String::new();
+    let mut ranges = Vec::with_capacity(segs.len());
+    for seg in segs {
+        let start = text.len();
+        match seg {
+            InlineSeg::Text(t) => text.push_str(t),
+            InlineSeg::Math { tex, .. } => {
+                text.push('$');
+                text.push_str(tex);
+                text.push('$');
             }
         }
-        if !buf.is_empty() {
-            out.push(buf);
-        }
+        ranges.push(start..text.len());
     }
-    if out.is_empty() && !text.trim().is_empty() {
-        out.push(text.to_string());
+    (text, ranges)
+}
+
+fn ranges_overlap(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
+}
+
+/// Break a text run at wrap opportunities: Latin words and CJK characters.
+///
+/// Whitespace is glue, not a box. CSS `white-space: normal` discards
+/// collapsible spaces at the start of a line; a space that is its own flex
+/// item would wrap onto the next row and indent it. Trailing glue stays on
+/// the previous word so the gap sits at the end of the line, never the start.
+fn wrap_units(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("byte index at char boundary");
+        if ch.is_whitespace() {
+            i += ch.len_utf8();
+            continue;
+        }
+        let start = i;
+        if is_cjk(ch) {
+            i += ch.len_utf8();
+        } else {
+            i += ch.len_utf8();
+            while i < text.len() {
+                let c = text[i..].chars().next().expect("char");
+                if c.is_whitespace() || is_cjk(c) {
+                    break;
+                }
+                i += c.len_utf8();
+            }
+        }
+        while i < text.len() {
+            let c = text[i..].chars().next().expect("char");
+            if !c.is_whitespace() {
+                break;
+            }
+            i += c.len_utf8();
+        }
+        out.push((start, text[start..i].to_string()));
     }
     out
 }
@@ -667,4 +853,39 @@ fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
                 }))
                 .child(kbd_chip("Ctrl+Shift+S")),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_units;
+
+    #[test]
+    fn wrap_units_breaks_on_spaces() {
+        let parts = wrap_units("hello world");
+        assert_eq!(parts, vec![(0, "hello ".into()), (6, "world".into())]);
+    }
+
+    #[test]
+    fn wrap_units_does_not_emit_leading_space() {
+        let parts = wrap_units(" world");
+        assert_eq!(parts, vec![(1, "world".into())]);
+    }
+
+    #[test]
+    fn wrap_units_attaches_double_space_to_previous_word() {
+        let parts = wrap_units("hello  world");
+        assert_eq!(parts, vec![(0, "hello  ".into()), (7, "world".into())]);
+    }
+
+    #[test]
+    fn wrap_units_breaks_cjk_per_char() {
+        let parts = wrap_units("你好");
+        assert_eq!(parts, vec![(0, "你".into()), ("你".len(), "好".into())]);
+    }
+
+    #[test]
+    fn wrap_units_keeps_latin_word() {
+        let parts = wrap_units("E=mc^2");
+        assert_eq!(parts, vec![(0, "E=mc^2".into())]);
+    }
 }

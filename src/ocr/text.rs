@@ -123,7 +123,8 @@ pub(super) fn handle_text(text: &str) -> String {
 
 /// MarkdownConverter._handle_formula.
 pub(super) fn handle_formula(text: &str) -> String {
-    let mut result = text.replace("\\upmu", "\\mu");
+    let text = text.replace("\\upmu", "\\mu");
+    let mut result = sub(r"\\] \(\d+\)\n\n", "\\]", &text);
     result = result.replace("<|sn|>", "");
     result = result.replace("<|unk|>", "");
     result = result.replace('\u{ffff}', "");
@@ -140,17 +141,17 @@ pub(super) fn handle_formula(text: &str) -> String {
     result = result.replace(" \\)", "");
     result = result.replace("\\(", "");
     result = result.replace("\\)", "");
-    let mut text = result;
+    // strip('$') then rstrip('\\ '), then \upmu -> \mu
+    let mut text = result.trim_matches('$').to_string();
     while text.ends_with('\\') || text.ends_with(' ') {
         text.pop();
     }
     let mut text = text.replace("\\upmu", "\\mu");
     text = apply_replace_dict(text);
-    // Trailing newlines must not become a final `\\` after `\tag`.
-    let text = text.trim_end();
-    let mut processed = text.replace('\n', "\\\\\n");
+    let mut processed = format!("$${}$$", text);
+    processed = processed.replace('\n', "\\\\\n");
     processed = fix_latex_brackets(&processed);
-    crate::math::unwrap_formula(&processed).0
+    format!("{}\n\n", processed)
 }
 
 /// to_markdown.py extract_table_from_html.
@@ -658,9 +659,8 @@ pub(super) fn convert_otsl_to_html(otsl_content: &str) -> String {
     export_to_html(&cells, num_rows, num_cols)
 }
 
-pub(super) const IGNORE_LABELS: [&str; 9] = [
+pub(super) const IGNORE_LABELS: [&str; 8] = [
     "number",
-    "formula_number",
     "footnote",
     "header",
     "footer",

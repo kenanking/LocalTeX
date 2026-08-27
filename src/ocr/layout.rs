@@ -396,8 +396,7 @@ fn merge_blocks(blocks: Vec<Region>, non_merge_labels: &[&str]) -> Vec<Region> {
                     }
                 } else {
                     let merged_img = imgops::merge_images(&imgs, aligns);
-                    let members: Vec<&Region> =
-                        group_indices.iter().map(|&i| &blocks[i]).collect();
+                    let members: Vec<&Region> = group_indices.iter().map(|&i| &blocks[i]).collect();
                     let (coord, score) = union_coord_and_weighted_score(&members);
                     for (j, &bi) in group_indices.iter().enumerate() {
                         let mut b = blocks[bi].clone();
