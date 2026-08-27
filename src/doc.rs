@@ -145,6 +145,14 @@ impl ImageSlot {
     }
 }
 
+/// Wall time and hybrid confidence from one finished recognize. Absent
+/// when OCR produced no token/layout evidence (or the row predates this).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OcrMeta {
+    pub elapsed_s: f32,
+    pub confidence: f32,
+}
+
 #[derive(Clone)]
 pub struct Document {
     pub id: Uuid,
@@ -157,6 +165,7 @@ pub struct Document {
     pub thumb_jpeg: Vec<u8>,
     pub persisted: bool,
     pub blocks_loaded: bool,
+    pub ocr: Option<OcrMeta>,
 }
 
 impl Document {
@@ -171,6 +180,7 @@ impl Document {
             thumb_jpeg: Vec::new(),
             persisted: false,
             blocks_loaded: true,
+            ocr: None,
         }
     }
 
@@ -189,6 +199,7 @@ impl Document {
             thumb_jpeg: item.thumb_jpeg,
             persisted: true,
             blocks_loaded: false,
+            ocr: item.ocr,
         }
     }
 
@@ -726,6 +737,7 @@ mod tests {
             thumb_jpeg: Vec::new(),
             persisted: false,
             blocks_loaded: true,
+            ocr: None,
         };
         let md = doc.export(ExportFmt::Markdown, &prefs);
         assert!(md.contains("| A | B |"), "{md}");

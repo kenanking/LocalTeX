@@ -9,10 +9,10 @@ use uuid::Uuid;
 use super::main_window::MainWindow;
 use super::theme;
 use super::widgets::{
-    btn, copy_row, icon_btn, kbd_chip, missing_image_slot, overlay_y_scrollbar, section_label,
-    IconKind,
+    btn, copy_row, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, overlay_y_scrollbar,
+    section_label, IconKind,
 };
-use crate::doc::{CopyKind, DocStatus, ImageSlot};
+use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta};
 use crate::preview::{self, InlineSeg, PreviewBlock, SvgMath};
 use crate::state::AppState;
 
@@ -45,6 +45,7 @@ impl MainWindow {
         let orig_hover = self.orig_hover;
         let image_missing = matches!(doc.image, ImageSlot::Missing);
         let can_retry = doc.can_retry();
+        let ocr = doc.ocr;
         let orig = self.render_orig_strip(doc_id, full, orig_hover, image_missing, cx);
 
         if self.preview_scroll_doc != Some(doc_id) {
@@ -120,8 +121,8 @@ impl MainWindow {
                     )
                     .child(overlay_y_scrollbar(&self.preview_scroll)),
             )
-            .when(ready && !copy_rows.is_empty(), |d| {
-                d.child(self.render_copy_rows(doc_id, &copy_rows, copied, cx))
+            .when(ready && (!copy_rows.is_empty() || ocr.is_some()), |d| {
+                d.child(self.render_copy_rows(doc_id, &copy_rows, copied, ocr, cx))
             })
     }
 
@@ -269,6 +270,7 @@ impl MainWindow {
         doc_id: Uuid,
         rows: &[crate::doc::CopyRow],
         copied: Option<(Uuid, CopyKind)>,
+        ocr: Option<OcrMeta>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut col = div()
@@ -300,6 +302,9 @@ impl MainWindow {
                     });
                 },
             ));
+        }
+        if let Some(meta) = ocr {
+            col = col.child(ocr_meta_bar(meta));
         }
         col
     }

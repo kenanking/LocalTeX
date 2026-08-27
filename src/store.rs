@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -7,7 +7,7 @@ use chrono::{Datelike, Duration as ChronoDuration, Local, NaiveDate, TimeZone};
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::doc::{Block, Document};
+use crate::doc::{Block, Document, OcrMeta};
 use crate::identity::APP_SLUG;
 use crate::imgutil;
 
@@ -65,6 +65,7 @@ pub struct SnipListItem {
     pub first_line: String,
     pub thumb_jpeg: Vec<u8>,
     pub png_missing: bool,
+    pub ocr: Option<OcrMeta>,
 }
 
 pub struct Store {
@@ -81,7 +82,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&conn)?;
+        migrate(&conn, &root)?;
         Ok(Self {
             conn: Mutex::new(conn),
             root,
@@ -95,7 +96,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<SnipListItem>> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, first_line, thumb_jpeg, image_relpath
+            "SELECT id, created_at, first_line, thumb_jpeg, image_relpath, ocr_s, confidence
              FROM snips ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -105,19 +106,29 @@ impl Store {
                 row.get::<_, String>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+                row.get::<_, Option<f64>>(6)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id_s, ms, first_line, thumb_jpeg, rel) = row?;
+            let (id_s, ms, first_line, thumb_jpeg, rel, ocr_s, confidence) = row?;
             let id = Uuid::parse_str(&id_s).map_err(|e| anyhow!("uuid: {e}"))?;
             let png_missing = !self.root.join(&rel).is_file();
+            let ocr = match (ocr_s, confidence) {
+                (Some(elapsed_s), Some(confidence)) => Some(OcrMeta {
+                    elapsed_s: elapsed_s as f32,
+                    confidence: confidence as f32,
+                }),
+                _ => None,
+            };
             out.push(SnipListItem {
                 id,
                 created_at: system_time_from_ms(ms),
                 first_line,
                 thumb_jpeg,
                 png_missing,
+                ocr,
             });
         }
         Ok(out)
@@ -164,8 +175,8 @@ impl Store {
         let first_line = doc.first_line();
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let sql = conn.execute(
-            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath, ocr_s, confidence)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 doc.id.to_string(),
                 unix_ms(doc.created_at),
@@ -174,6 +185,8 @@ impl Store {
                 search_text,
                 thumb.clone(),
                 rel,
+                doc.ocr.map(|m| m.elapsed_s as f64),
+                doc.ocr.map(|m| m.confidence as f64),
             ],
         );
         if let Err(err) = sql {
@@ -183,13 +196,20 @@ impl Store {
         Ok(thumb)
     }
 
-    pub fn update_ocr(&self, id: Uuid, first_line: &str, blocks: &[Block]) -> Result<()> {
-        let blocks_json = serde_json::to_string(blocks)?;
-        let search_text = Document::search_text_for_blocks(blocks);
+    pub fn update_ocr(&self, doc: &Document) -> Result<()> {
+        let blocks_json = serde_json::to_string(&doc.blocks)?;
+        let search_text = Document::search_text_for_blocks(&doc.blocks);
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         conn.execute(
-            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3 WHERE id = ?4",
-            params![first_line, blocks_json, search_text, id.to_string()],
+            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, ocr_s = ?4, confidence = ?5 WHERE id = ?6",
+            params![
+                doc.first_line(),
+                blocks_json,
+                search_text,
+                doc.ocr.map(|m| m.elapsed_s as f64),
+                doc.ocr.map(|m| m.confidence as f64),
+                doc.id.to_string()
+            ],
         )?;
         Ok(())
     }
@@ -312,18 +332,42 @@ fn local_midnight_ms<Tz: TimeZone>(d: NaiveDate, tz: &Tz) -> Option<i64> {
         .map(|t| t.timestamp_millis())
 }
 
-fn migrate(conn: &Connection) -> Result<()> {
-    let ver: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if ver == SCHEMA_VERSION {
+fn migrate(conn: &Connection, root: &Path) -> Result<()> {
+    if snips_schema_ok(conn)? {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         return Ok(());
     }
-    if ver != 0 {
-        return Err(anyhow!(
-            "{APP_SLUG}: unsupported snips.db version {ver} (want {SCHEMA_VERSION})"
-        ));
+    if snips_table_exists(conn)? {
+        eprintln!("{APP_SLUG}: snips.db schema mismatch; recreating");
+        conn.execute_batch(
+            "
+            DROP TRIGGER IF EXISTS snips_ai;
+            DROP TRIGGER IF EXISTS snips_ad;
+            DROP TRIGGER IF EXISTS snips_au;
+            DROP TABLE IF EXISTS snips_fts;
+            DROP TABLE IF EXISTS snips;
+            ",
+        )?;
+        wipe_snip_pngs(root);
     }
-    conn.execute_batch(
-        "
+    conn.execute_batch(SNIPS_SCHEMA)?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+const SNIPS_COLUMNS: [&str; 9] = [
+    "id",
+    "created_at",
+    "first_line",
+    "blocks_json",
+    "search_text",
+    "thumb_jpeg",
+    "image_relpath",
+    "ocr_s",
+    "confidence",
+];
+
+const SNIPS_SCHEMA: &str = "
         CREATE TABLE snips (
           id TEXT PRIMARY KEY NOT NULL,
           created_at INTEGER NOT NULL,
@@ -331,7 +375,9 @@ fn migrate(conn: &Connection) -> Result<()> {
           blocks_json TEXT NOT NULL,
           search_text TEXT NOT NULL,
           thumb_jpeg BLOB NOT NULL,
-          image_relpath TEXT NOT NULL
+          image_relpath TEXT NOT NULL,
+          ocr_s REAL,
+          confidence REAL
         );
         CREATE INDEX snips_created_at ON snips (created_at DESC);
         CREATE VIRTUAL TABLE snips_fts USING fts5(
@@ -352,16 +398,47 @@ fn migrate(conn: &Connection) -> Result<()> {
             VALUES('delete', old.rowid, old.search_text);
           INSERT INTO snips_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
         END;
-        ",
+        ";
+
+fn snips_schema_ok(conn: &Connection) -> Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA table_info(snips)")?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    if names.len() != SNIPS_COLUMNS.len() {
+        return Ok(false);
+    }
+    Ok(SNIPS_COLUMNS
+        .iter()
+        .all(|col| names.iter().any(|n| n == col)))
+}
+
+fn snips_table_exists(conn: &Connection) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'snips'",
+        [],
+        |row| row.get(0),
     )?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    Ok(())
+    Ok(n > 0)
+}
+
+fn wipe_snip_pngs(root: &Path) {
+    let dir = root.join("snips");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "png") {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doc::{Block, BlockKind, DocStatus, ImageSlot, Rect};
+    use crate::doc::{Block, BlockKind, DocStatus, ImageSlot, OcrMeta, Rect};
     use image::{Rgba, RgbaImage};
     use std::sync::Arc;
 
@@ -387,6 +464,7 @@ mod tests {
             thumb_jpeg: Vec::new(),
             persisted: false,
             blocks_loaded: true,
+            ocr: None,
         }
     }
 
@@ -514,22 +592,13 @@ mod tests {
         let id = doc.id;
         let created = doc.created_at;
         store.insert_ready(&doc).unwrap();
-        store
-            .update_ocr(
-                id,
-                "second",
-                &[Block::new(
-                    BlockKind::Text,
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        w: 1,
-                        h: 1,
-                    },
-                    "second",
-                )],
-            )
-            .unwrap();
+        let mut retry = sample_doc("second", created);
+        retry.id = id;
+        retry.ocr = Some(OcrMeta {
+            elapsed_s: 0.5,
+            confidence: 0.9,
+        });
+        store.update_ocr(&retry).unwrap();
         let ms0 = unix_ms(created);
         let listed = store.list().unwrap();
         let ms1 = unix_ms(listed[0].created_at);
@@ -552,5 +621,68 @@ mod tests {
         let blob = Document::search_text_for_blocks(&blocks);
         assert!(blob.contains("x^2"));
         assert!(blob.contains("$"));
+    }
+
+    #[test]
+    fn round_trips_ocr_metrics() {
+        let (store, _) = tmp_store();
+        let mut doc = sample_doc("hello", SystemTime::now());
+        doc.ocr = Some(OcrMeta {
+            elapsed_s: 1.25,
+            confidence: 0.8,
+        });
+        store.insert_ready(&doc).unwrap();
+        let item = &store.list().unwrap()[0];
+        let meta = item.ocr.expect("ocr meta");
+        assert!((meta.elapsed_s - 1.25).abs() < 1e-5);
+        assert!((meta.confidence - 0.8).abs() < 1e-5);
+        let from = Document::from_list_item(item.clone());
+        assert_eq!(from.ocr, item.ocr);
+    }
+
+    #[test]
+    fn incompatible_schema_is_recreated() {
+        let root = std::env::temp_dir().join(format!("localtex-store-old-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("snips")).unwrap();
+        {
+            let conn = Connection::open(root.join("snips.db")).unwrap();
+            conn.execute_batch(
+                "
+                CREATE TABLE snips (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  first_line TEXT NOT NULL,
+                  blocks_json TEXT NOT NULL,
+                  search_text TEXT NOT NULL,
+                  thumb_jpeg BLOB NOT NULL,
+                  image_relpath TEXT NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath)
+                 VALUES (?1, 0, 'old', '[]', 'old', x'00', 'snips/none.png')",
+                params!["00000000-0000-0000-0000-000000000001"],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let orphan = root.join("snips/none.png");
+        std::fs::write(&orphan, b"x").unwrap();
+        let store = Store::open(root).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(!orphan.exists());
+        let mut doc = sample_doc("fresh", SystemTime::now());
+        doc.ocr = Some(OcrMeta {
+            elapsed_s: 0.85,
+            confidence: 0.92,
+        });
+        store.insert_ready(&doc).unwrap();
+        let item = &store.list().unwrap()[0];
+        assert_eq!(item.id, doc.id);
+        let meta = item.ocr.expect("ocr meta");
+        assert!((meta.elapsed_s - 0.85).abs() < 1e-5);
+        assert!((meta.confidence - 0.92).abs() < 1e-5);
     }
 }

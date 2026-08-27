@@ -316,9 +316,10 @@ impl AppState {
             if let Err(err) = this.update(cx, |this, cx| {
                 if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
                     match result {
-                        Ok(blocks) => {
-                            doc.blocks = blocks;
+                        Ok(out) => {
+                            doc.blocks = out.blocks;
                             doc.blocks_loaded = true;
+                            doc.ocr = out.meta;
                             doc.status = DocStatus::Ready;
                             doc.refresh_first_line();
                         }
@@ -491,13 +492,11 @@ impl AppState {
             return;
         }
         let already = doc.persisted;
-        let first_line = doc.first_line();
-        let blocks = doc.blocks.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     if already {
-                        store.update_ocr(id, &first_line, &blocks)?;
+                        store.update_ocr(&doc)?;
                         Ok::<Option<Vec<u8>>, anyhow::Error>(None)
                     } else {
                         Ok(Some(store.insert_ready(&doc)?))

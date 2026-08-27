@@ -1,9 +1,10 @@
 use gpui::{
-    div, img, prelude::*, px, rgb, AnyElement, AnyView, App, Pixels, ScrollHandle, SharedString,
-    Window,
+    div, img, prelude::*, px, relative, rgb, AnyElement, AnyView, App, Pixels, ScrollHandle,
+    SharedString, Window,
 };
 
 use super::theme;
+use crate::doc::OcrMeta;
 
 /// Hover card for icon chrome. GPUI already owns delay / placement /
 /// dismissal via `.tooltip()`; this is only the view it asks for.
@@ -530,6 +531,50 @@ pub fn copy_row(
                         .flex_shrink_0()
                         .object_fit(gpui::ObjectFit::Contain),
                 ),
+        )
+}
+
+pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
+    let color = if meta.confidence >= 0.85 {
+        theme::OK
+    } else if meta.confidence >= 0.65 {
+        theme::WARN
+    } else {
+        theme::DANGER
+    };
+    let width = meta.confidence.clamp(0.0, 1.0);
+    let label = format!(
+        "{}% · {:.2} s",
+        (meta.confidence * 100.0).round() as i32,
+        meta.elapsed_s
+    );
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .pt_1()
+        .min_w_0()
+        .child(
+            div()
+                .flex_1()
+                .h(px(4.))
+                .rounded_full()
+                .bg(rgb(theme::BG_SUNKEN))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(width))
+                        .rounded_full()
+                        .bg(rgb(color)),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(label),
         )
 }
 

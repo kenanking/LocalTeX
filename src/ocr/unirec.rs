@@ -128,6 +128,9 @@ pub(super) struct RecognizeOut {
     pub encode_s: f64,
     pub decode_s: f64,
     pub decode_steps: usize,
+    /// Sum of top-1 softmax over generated tokens (BOS/EOS excluded).
+    pub p_sum: f32,
+    pub p_n: usize,
 }
 
 impl UniRec {
@@ -290,14 +293,14 @@ impl UniRec {
         Ok((enc, t0.elapsed().as_secs_f64()))
     }
 
-    /// One greedy decode step. Returns (next_token, new_past, step_time_s).
+    /// One greedy decode step. Returns (next_token, new_past, step_time_s, p_top1).
     fn decode_step(
         &mut self,
         token: i64,
         past_len: usize,
         enc: &EncodedImage,
         past: &[(DynValue, DynValue)],
-    ) -> Result<(i64, KvCache, f64)> {
+    ) -> Result<(i64, KvCache, f64, f32)> {
         let input_ids = Tensor::from_array((vec![1i64, 1], vec![token]))?;
         let position_ids = Tensor::from_array((vec![1i64, 1], vec![PAD + 1 + past_len as i64]))?;
 
@@ -329,9 +332,10 @@ impl UniRec {
         let mut outputs = self.decoder.run(inputs)?;
         let step_s = t0.elapsed().as_secs_f64();
 
-        let next = {
+        let (next, p_top1) = {
             let (_shape, logits) = outputs["logits"].try_extract_tensor::<f32>()?;
-            argmax(logits) as i64
+            let (idx, p) = softmax_top1(logits);
+            (idx as i64, p)
         };
 
         let mut new_past = Vec::with_capacity(self.num_layers);
@@ -344,7 +348,7 @@ impl UniRec {
                 .ok_or_else(|| anyhow!("missing present_value_{}", i))?;
             new_past.push((pk, pv));
         }
-        Ok((next, new_past, step_s))
+        Ok((next, new_past, step_s, p_top1))
     }
 
     /// Full greedy generation for one block image.
@@ -364,9 +368,11 @@ impl UniRec {
         let mut generated: Vec<i64> = vec![BOS];
         let mut decode_s = 0.0f64;
         let mut steps = 0usize;
+        let mut p_sum = 0.0f32;
+        let mut p_n = 0usize;
         for step in 0..(MAX_LEN - 1) {
             let current = *generated.last().unwrap();
-            let (next, new_past, dt) = self.decode_step(current, step, &enc, &past)?;
+            let (next, new_past, dt, p) = self.decode_step(current, step, &enc, &past)?;
             past = new_past;
             decode_s += dt;
             steps += 1;
@@ -374,6 +380,8 @@ impl UniRec {
             if next == EOS {
                 break;
             }
+            p_sum += p;
+            p_n += 1;
         }
 
         let raw = self.tokenizer.decode(&generated);
@@ -383,18 +391,48 @@ impl UniRec {
             encode_s,
             decode_s,
             decode_steps: steps,
+            p_sum,
+            p_n,
         })
     }
 }
 
-fn argmax(xs: &[f32]) -> usize {
+/// Numerically stable softmax of the argmax: p = 1 / Σ exp(x − max).
+pub(super) fn softmax_top1(logits: &[f32]) -> (usize, f32) {
     let mut best = 0usize;
     let mut best_v = f32::NEG_INFINITY;
-    for (i, &v) in xs.iter().enumerate() {
+    for (i, &v) in logits.iter().enumerate() {
         if v > best_v {
             best_v = v;
             best = i;
         }
     }
-    best
+    if !best_v.is_finite() {
+        return (best, 0.0);
+    }
+    let mut sum = 0.0f32;
+    for &v in logits {
+        sum += (v - best_v).exp();
+    }
+    let p = if sum > 0.0 {
+        (1.0 / sum).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (best, p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::softmax_top1;
+
+    #[test]
+    fn softmax_top1_peaks_at_known_index() {
+        let (idx, p) = softmax_top1(&[1.0, 10.0, 1.0]);
+        assert_eq!(idx, 1);
+        assert!(p > 0.99, "p={p}");
+        let (idx, p) = softmax_top1(&[0.0, 0.0, 0.0]);
+        assert_eq!(idx, 0);
+        assert!((p - 1.0 / 3.0).abs() < 1e-5, "p={p}");
+    }
 }

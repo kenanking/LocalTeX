@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Result};
 use image::RgbaImage;
 
-use crate::doc::Block;
 use crate::identity::{models_dir, APP_SLUG};
 
 mod imgops;
@@ -15,6 +14,8 @@ mod unirec;
 
 use imgops::RgbImg;
 use pipeline::{Pipeline, SHIP_FILES};
+
+pub use pipeline::OcrResult;
 
 #[derive(Debug, Clone)]
 pub enum EngineStatus {
@@ -69,7 +70,7 @@ impl Engine {
         }
     }
 
-    pub fn recognize(&self, image: &RgbaImage) -> Result<Vec<Block>> {
+    pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
         if !ship_present(&self.dir) {
             bail!("OpenDoc ship models missing in {}", self.dir.display());
         }

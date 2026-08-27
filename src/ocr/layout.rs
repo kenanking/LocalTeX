@@ -47,6 +47,7 @@ pub struct Region {
     pub label: String,   // suffixed, e.g. "text_01"
     pub coord: [f32; 4], // x1, y1, x2, y2 in original image coords
     pub img: Option<RgbImg>,
+    pub score: f32,
 }
 
 pub struct LayoutResult {
@@ -54,8 +55,24 @@ pub struct LayoutResult {
     pub layout_s: f64,
 }
 
-fn bbox_area(b: &[f32; 4]) -> f32 {
+pub(super) fn bbox_area(b: &[f32; 4]) -> f32 {
     ((b[2] - b[0]) * (b[3] - b[1])).abs()
+}
+
+fn union_coord_and_weighted_score(regions: &[&Region]) -> ([f32; 4], f32) {
+    let mut coord = regions[0].coord;
+    let mut wsum = 0.0f32;
+    let mut w = 0.0f32;
+    for r in regions {
+        coord[0] = coord[0].min(r.coord[0]);
+        coord[1] = coord[1].min(r.coord[1]);
+        coord[2] = coord[2].max(r.coord[2]);
+        coord[3] = coord[3].max(r.coord[3]);
+        let a = bbox_area(&r.coord).max(1.0);
+        wsum += r.score * a;
+        w += a;
+    }
+    (coord, wsum / w)
 }
 
 /// calculate_overlap_ratio from utils.py.
@@ -102,6 +119,7 @@ struct DetBox {
     label: String,
     coord: [f32; 4],
     order: f32,
+    score: f32,
 }
 
 /// filter_overlap_boxes from utils.py.
@@ -214,6 +232,7 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
             label,
             coord,
             order: row[6],
+            score,
         });
     }
 
@@ -234,6 +253,7 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
             label,
             coord: b.coord,
             img,
+            score: b.score,
         });
     }
 
@@ -376,10 +396,15 @@ fn merge_blocks(blocks: Vec<Region>, non_merge_labels: &[&str]) -> Vec<Region> {
                     }
                 } else {
                     let merged_img = imgops::merge_images(&imgs, aligns);
+                    let members: Vec<&Region> =
+                        group_indices.iter().map(|&i| &blocks[i]).collect();
+                    let (coord, score) = union_coord_and_weighted_score(&members);
                     for (j, &bi) in group_indices.iter().enumerate() {
                         let mut b = blocks[bi].clone();
                         if j == 0 {
                             b.img = merged_img.clone();
+                            b.coord = coord;
+                            b.score = score;
                         } else {
                             b.img = None;
                         }
@@ -408,4 +433,28 @@ fn merge_blocks(blocks: Vec<Region>, non_merge_labels: &[&str]) -> Vec<Region> {
         idx += 1;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merged_score_is_area_weighted() {
+        let a = Region {
+            label: "t".into(),
+            coord: [0.0, 0.0, 2.0, 2.0],
+            img: None,
+            score: 1.0,
+        };
+        let b = Region {
+            label: "t".into(),
+            coord: [2.0, 0.0, 4.0, 2.0],
+            img: None,
+            score: 0.0,
+        };
+        let (coord, score) = union_coord_and_weighted_score(&[&a, &b]);
+        assert_eq!(coord, [0.0, 0.0, 4.0, 2.0]);
+        assert!((score - 0.5).abs() < 1e-5);
+    }
 }
