@@ -27,7 +27,7 @@ pub struct Pipeline {
     unirec: UniRec,
 }
 
-fn build_session(path: &Path, intra: usize) -> Result<Session> {
+fn build_session(path: &Path, intra: usize, spinning: bool) -> Result<Session> {
     // Builder errors carry the builder for recovery (not Send/Sync); stringify.
     fn e<E: std::fmt::Display>(err: E) -> anyhow::Error {
         anyhow!("{}", err)
@@ -43,22 +43,39 @@ fn build_session(path: &Path, intra: usize) -> Result<Session> {
         .map_err(e)?
         .with_flush_to_zero()
         .map_err(e)?
-        .with_intra_op_spinning(true)
+        .with_intra_op_spinning(spinning)
         .map_err(e)?
-        .with_inter_op_spinning(true)
+        .with_inter_op_spinning(spinning)
         .map_err(e)?
         .commit_from_file(path)
         .with_context(|| format!("commit session {}", path.display()))
 }
 
+fn env_flag(localtex: &str, opendoc: &str) -> bool {
+    std::env::var(localtex)
+        .or_else(|_| std::env::var(opendoc))
+        .is_ok_and(|v| v != "0")
+}
+
 impl Pipeline {
     pub fn load(dir: &Path, intra: usize) -> Result<Self> {
         ort::init().with_name("localtex").commit();
-        let layout = build_session(&dir.join(LAYOUT_ONNX), intra)?;
-        let encoder = build_session(&dir.join(ENCODER_ONNX), intra)?;
-        let decoder = build_session(&dir.join(DECODER_ONNX), intra)?;
+        let spinning = env_flag("LOCALTEX_SPINNING", "OPENDOC_SPINNING");
+        eprintln!(
+            "{APP_SLUG}: intra_op_threads={intra} spinning={}",
+            if spinning { "on" } else { "off" }
+        );
+        let layout = build_session(&dir.join(LAYOUT_ONNX), intra, spinning)?;
+        if layout.inputs().iter().any(|i| i.name() == "im_shape") {
+            return Err(anyhow!(
+                "layout.onnx is not the freeze-fold ship (unexpected im_shape input)"
+            ));
+        }
+        let encoder = build_session(&dir.join(ENCODER_ONNX), intra, spinning)?;
+        let decoder = build_session(&dir.join(DECODER_ONNX), intra, spinning)?;
         let tokenizer = Tokenizer::load(&dir.join(TOKENIZER_JSON))?;
         let unirec = UniRec::new(encoder, decoder, tokenizer)?;
+        eprintln!("{APP_SLUG}: layout freeze-fold · decoder GQA");
         Ok(Self { layout, unirec })
     }
 
@@ -151,6 +168,8 @@ pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Bl
     }
     let kind = if is_formula(base) {
         BlockKind::Formula
+    } else if base.contains("table") {
+        BlockKind::Table
     } else {
         BlockKind::Text
     };

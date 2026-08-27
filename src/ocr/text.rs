@@ -212,7 +212,7 @@ fn chars(s: &str) -> Vec<char> {
 fn find_shortest_repeating_substring(s: &[char]) -> Option<Vec<char>> {
     let n = s.len();
     for i in 1..=(n / 2) {
-        if n % i == 0 {
+        if n.is_multiple_of(i) {
             let unit = &s[..i];
             let reps = n / i;
             let mut built = Vec::with_capacity(n);
@@ -616,17 +616,20 @@ fn export_to_html(cells: &[TableCell], num_rows: usize, num_cols: usize) -> Stri
         .map(|i| (0..num_cols).map(|j| default_cell(i, j)).collect())
         .collect();
     for cell in cells {
-        for i in cell.start_row.min(num_rows)..cell.end_row.min(num_rows) {
-            for j in cell.start_col.min(num_cols)..cell.end_col.min(num_cols) {
-                grid[i][j] = cell.clone();
+        let r0 = cell.start_row.min(num_rows);
+        let r1 = cell.end_row.min(num_rows);
+        let c0 = cell.start_col.min(num_cols);
+        let c1 = cell.end_col.min(num_cols);
+        for row in grid[r0..r1].iter_mut() {
+            for slot in row[c0..c1].iter_mut() {
+                *slot = cell.clone();
             }
         }
     }
     let mut body = String::new();
-    for i in 0..num_rows {
+    for (i, row) in grid.iter().enumerate() {
         body.push_str("<tr>");
-        for j in 0..num_cols {
-            let cell = &grid[i][j];
+        for (j, cell) in row.iter().enumerate() {
             if cell.start_row != i || cell.start_col != j {
                 continue;
             }

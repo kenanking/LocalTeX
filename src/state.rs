@@ -2,39 +2,63 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::{
-    px, size, App, AppContext, ClipboardItem, Context, Focusable, Timer, TitlebarOptions, Window,
-    WindowDecorations, WindowHandle, WindowKind, WindowOptions,
-};
+use gpui::{App, AppContext, ClipboardItem, Context, Timer, Window, WindowHandle};
 use image::RgbaImage;
 use uuid::Uuid;
 
 use crate::capture;
 use crate::desktop::DesktopCmd;
-use crate::doc::{DocStatus, Document, ExportFmt};
+use crate::doc::{DocStatus, Document, ExportFmt, ImageSlot};
 use crate::identity::APP_SLUG;
 use crate::ocr::Engine;
 use crate::prefs::{Prefs, WindowCloseAction};
-use crate::ui::{MainWindow, Overlay};
+use crate::store::{self, CivilDate, DateRange, Store};
+use crate::ui::MainWindow;
 
 enum Capture {
     Idle,
     Grabbing,
-    Overlay,
     Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatePreset {
+    All,
+    Today,
+    Last7Days,
+    Last30Days,
+}
+
+impl DatePreset {
+    pub fn to_range(self, today: CivilDate) -> DateRange {
+        match self {
+            Self::All => DateRange::default(),
+            Self::Today => DateRange::last_n_days(today, 1),
+            Self::Last7Days => DateRange::last_n_days(today, 7),
+            Self::Last30Days => DateRange::last_n_days(today, 30),
+        }
+    }
 }
 
 pub struct AppState {
     pub documents: Vec<Document>,
     pub selected: Option<Uuid>,
+    /// Sidebar order after search + date filter (in-flight snips first).
+    pub visible_ids: Vec<Uuid>,
+    pub date_preset: DatePreset,
     export_fmt: ExportFmt,
     pub prefs: Prefs,
     engine: Arc<Engine>,
+    store: Option<Arc<Store>>,
+    search_query: String,
+    search_gen: u64,
+    /// Most-recent-last ids with `ImageSlot::Loaded` (max 3, including selected).
+    loaded_lru: Vec<Uuid>,
     capture: Capture,
     pub main_window: Option<WindowHandle<MainWindow>>,
-    overlay_window: Option<WindowHandle<Overlay>>,
-    /// Set when capture minimized the main window; OCR/cancel clears it.
-    hidden_for_capture: bool,
+    /// Nested hide count: one increment per capture request, one decrement
+    /// on that capture's cancel/error or its OCR finish. Tray Show zeros it.
+    hide_depth: u32,
     /// Successful snip: leave Settings/Draw when the result is shown.
     reveal_on_main: bool,
 }
@@ -42,16 +66,40 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         let prefs = Prefs::load();
+        let store = match Store::open_default() {
+            Ok(store) => Some(Arc::new(store)),
+            Err(err) => {
+                eprintln!("{APP_SLUG}: snip store unavailable (RAM-only): {err}");
+                None
+            }
+        };
+        let documents = match store.as_ref() {
+            Some(store) => match store.list() {
+                Ok(items) => items.into_iter().map(Document::from_list_item).collect(),
+                Err(err) => {
+                    eprintln!("{APP_SLUG}: list snips: {err}");
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+        let selected = documents.first().map(|d| d.id);
+        let visible_ids: Vec<Uuid> = documents.iter().map(|d| d.id).collect();
         Self {
-            documents: Vec::new(),
-            selected: None,
+            documents,
+            selected,
+            visible_ids,
+            date_preset: DatePreset::All,
             export_fmt: prefs.default_fmt,
             prefs,
             engine: Engine::load(),
+            store,
+            search_query: String::new(),
+            search_gen: 0,
+            loaded_lru: Vec::new(),
             capture: Capture::Idle,
             main_window: None,
-            overlay_window: None,
-            hidden_for_capture: false,
+            hide_depth: 0,
             reveal_on_main: false,
         }
     }
@@ -80,17 +128,13 @@ impl AppState {
         }
     }
 
-    pub fn export_fmt(&self) -> ExportFmt {
-        self.export_fmt
-    }
-
     pub fn set_format(&mut self, fmt: ExportFmt, cx: &mut Context<Self>) {
         self.export_fmt = fmt;
         cx.notify();
     }
 
     pub fn is_capturing(&self) -> bool {
-        matches!(self.capture, Capture::Grabbing | Capture::Overlay)
+        matches!(self.capture, Capture::Grabbing)
     }
 
     pub fn capture_error(&self) -> Option<&str> {
@@ -109,33 +153,44 @@ impl AppState {
         self.documents.iter().find(|d| d.id == id)
     }
 
-    pub fn selected_index(&self) -> Option<usize> {
-        let id = self.selected?;
-        self.documents.iter().position(|d| d.id == id)
-    }
-
     pub fn request_capture(&mut self, cx: &mut Context<Self>) {
         if matches!(self.capture, Capture::Grabbing) {
             return;
-        }
-        // A stuck overlay otherwise eats the desktop and this early-return
-        // (plus the global hotkey) can never recover.
-        if matches!(self.capture, Capture::Overlay) {
-            self.abort_overlay_session(cx);
         }
         self.capture = Capture::Grabbing;
         cx.notify();
         self.dismiss_main_sheet(cx);
 
-        if self.prefs.hide_on_capture {
+        let hide = self.prefs.hide_on_capture;
+        if hide {
             self.hide_main(cx);
         }
 
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(400)).await;
-            let grabbed = cx.background_spawn(async { capture::grab_primary() }).await;
-            if let Err(err) = this.update(cx, |this, cx| match grabbed {
-                Ok(grab) => this.open_overlay(grab, cx),
+            if hide {
+                cx.background_spawn(async { crate::desktop::wait_until_iconified() })
+                    .await;
+            } else {
+                // Sheet dismiss is deferred; a short settle keeps it out of the freeze.
+                cx.background_spawn(async {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                })
+                .await;
+            }
+            let picked = cx
+                .background_spawn(async {
+                    let shot = capture::grab_desktop()?;
+                    crate::desktop::select_region(&shot)
+                })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| match picked {
+                Ok(Some(crop)) => this.finish_capture(crop, cx),
+                Ok(None) => {
+                    this.capture = Capture::Idle;
+                    this.reveal_on_main = false;
+                    this.restore_after_hide(cx);
+                    cx.notify();
+                }
                 Err(err) => {
                     this.capture = Capture::Failed(err.to_string());
                     this.restore_after_hide(cx);
@@ -148,149 +203,30 @@ impl AppState {
         .detach();
     }
 
-    fn open_overlay(&mut self, grab: capture::Grab, cx: &mut Context<Self>) {
-        if self.overlay_is_reusable(cx) {
-            self.reuse_overlay(grab, cx);
-            return;
-        }
-        self.overlay_window = None;
-        self.create_overlay(grab, cx);
-    }
-
-    fn overlay_is_reusable(&self, cx: &mut Context<Self>) -> bool {
-        self.overlay_window
-            .is_some_and(|handle| handle.update(cx, |_, _, _| ()).is_ok())
-    }
-
-    /// Linux keeps one GPUI overlay (unmap/map). Reset it instead of opening
-    /// a second X11 window that never receives input.
-    fn reuse_overlay(&mut self, grab: capture::Grab, cx: &mut Context<Self>) {
-        let Some(handle) = self.overlay_window else {
-            return;
-        };
-        if handle
-            .update(cx, |view, window, cx| {
-                view.reset(grab, window, cx);
-            })
-            .is_err()
-        {
-            self.overlay_window = None;
-            self.capture = Capture::Failed("overlay window lost".into());
-            self.restore_after_hide(cx);
-            cx.notify();
-            return;
-        }
-        self.begin_overlay_session(cx);
-    }
-
-    fn create_overlay(&mut self, grab: capture::Grab, cx: &mut Context<Self>) {
-        let w = grab.image.width() as f32;
-        let h = grab.image.height() as f32;
-        let bounds = cx
-            .primary_display()
-            .map(|d| d.bounds())
-            .unwrap_or_else(|| gpui::Bounds {
-                origin: gpui::point(px(0.), px(0.)),
-                size: size(px(w), px(h)),
-            });
-
-        let state = cx.entity();
-        let result = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(crate::desktop::overlay_window_bounds(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(crate::identity::OVERLAY_TITLE.into()),
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                // Borderless: a server titlebar would shrink the client below
-                // the freeze-frame and GNOME would scale the shot to fit.
-                window_decorations: Some(WindowDecorations::Client),
-                kind: WindowKind::Normal,
-                is_movable: false,
-                is_resizable: false,
-                is_minimizable: false,
-                focus: true,
-                show: true,
-                app_id: Some(crate::identity::APP_ID.into()),
-                window_background: gpui::WindowBackgroundAppearance::Opaque,
-                ..Default::default()
-            },
-            move |window, cx| cx.new(|cx| Overlay::new(state, grab, window, cx)),
-        );
-        match result {
-            Ok(handle) => {
-                self.overlay_window = Some(handle);
-                self.begin_overlay_session(cx);
-            }
-            Err(err) => {
-                self.capture = Capture::Failed(format!("overlay: {err}"));
-                self.restore_after_hide(cx);
-                cx.notify();
-            }
-        }
-    }
-
-    fn begin_overlay_session(&mut self, cx: &mut Context<Self>) {
-        self.capture = Capture::Overlay;
-        crate::desktop::arm_overlay();
-        self.schedule_overlay_raises(cx);
-    }
-
-    /// Park (Linux) or destroy (Win/mac) a live overlay so a new snip can start.
-    fn abort_overlay_session(&mut self, cx: &mut Context<Self>) {
-        if crate::desktop::overlay_keeps_window() {
-            crate::desktop::park_overlay();
-        } else {
-            self.force_close_overlay(cx);
-        }
-        self.capture = Capture::Idle;
-    }
-
-    fn force_close_overlay(&mut self, cx: &mut Context<Self>) {
-        if let Some(handle) = self.overlay_window.take() {
-            if let Err(err) = handle.update(cx, |_, window, _| {
-                window.remove_window();
-            }) {
-                eprintln!("{APP_SLUG}: close overlay: {err}");
-            }
-        }
-    }
-
-    /// Overlay already called `remove_window` on Win/mac. Linux parks the
-    /// same GPUI window (unmap) so the next snip does not create a second
-    /// X11 window that never receives input.
-    fn end_overlay_session(&mut self, cx: &mut Context<Self>) {
-        self.capture = Capture::Idle;
-        if crate::desktop::overlay_keeps_window() {
-            cx.defer(|_| {
-                crate::desktop::park_overlay();
-            });
-        } else {
-            self.overlay_window = None;
-        }
-    }
-
-    pub fn cancel_capture(&mut self, cx: &mut Context<Self>) {
-        self.reveal_on_main = false;
-        self.end_overlay_session(cx);
-        self.restore_after_hide(cx);
-        cx.notify();
-    }
-
     pub fn finish_capture(&mut self, crop: RgbaImage, cx: &mut Context<Self>) {
         self.reveal_on_main = true;
-        self.end_overlay_session(cx);
+        self.capture = Capture::Idle;
         self.ingest_image(crop, cx);
-        // Stay minimized until OCR finishes (or fails). Cancel still
-        // restores immediately via cancel_capture.
     }
 
     pub fn ingest_image(&mut self, image: RgbaImage, cx: &mut Context<Self>) {
+        let (w0, h0) = image.dimensions();
+        let image = crate::imgutil::cap_megapixels(image);
+        if image.dimensions() != (w0, h0) {
+            eprintln!(
+                "{APP_SLUG}: snip {w0}×{h0} downscaled to {}×{} (24 MP cap)",
+                image.width(),
+                image.height()
+            );
+        }
         let doc = Document::pending(Arc::new(image));
         let id = doc.id;
         self.documents.insert(0, doc);
         self.selected = Some(id);
+        if !self.visible_ids.contains(&id) {
+            self.visible_ids.insert(0, id);
+        }
+        self.touch_lru(id);
         self.start_ocr(id, cx);
         cx.notify();
     }
@@ -315,12 +251,11 @@ impl AppState {
     }
 
     fn hide_main(&mut self, cx: &mut Context<Self>) {
-        self.hidden_for_capture = true;
+        self.hide_depth = self.hide_depth.saturating_add(1);
+        // EWMH HIDDEN does not nest `handle.update` (in-app Snip runs while the
+        // main window is already on GPUI's update stack).
+        crate::desktop::iconify_main_window();
         let handle = self.main_window;
-        // Never `handle.update` the main window here: in-app Snip / Ctrl+Shift+S
-        // run while that window is already on GPUI's update stack (`take()`),
-        // so a nested update fails with "window not found" and the window
-        // stays mapped.
         cx.defer(move |cx| {
             if let Some(handle) = handle {
                 if let Err(err) = handle.update(cx, |_, window, _| {
@@ -330,31 +265,6 @@ impl AppState {
                 }
             }
         });
-    }
-
-    fn schedule_overlay_raises(&self, cx: &mut Context<Self>) {
-        let handle = self.overlay_window;
-        cx.defer(move |cx| {
-            raise_overlay_once(handle, cx);
-        });
-        cx.spawn(async move |this, cx| {
-            for delay in [50u64, 100, 200, 400, 800] {
-                Timer::after(Duration::from_millis(delay)).await;
-                let keep_going = this.update(cx, |this, _cx| {
-                    if !matches!(this.capture, Capture::Overlay) {
-                        return false;
-                    }
-                    // Retries only restack via EWMH. handle.update here races
-                    // the X11 client RefCell and can drop overlay input.
-                    crate::desktop::raise_overlay();
-                    true
-                });
-                if !matches!(keep_going, Ok(true)) {
-                    break;
-                }
-            }
-        })
-        .detach();
     }
 
     fn dismiss_main_sheet(&self, cx: &mut Context<Self>) {
@@ -371,13 +281,18 @@ impl AppState {
     }
 
     fn restore_after_hide(&mut self, cx: &mut Context<Self>) {
-        if self.hidden_for_capture {
+        if self.hide_depth == 0 {
+            return;
+        }
+        self.hide_depth -= 1;
+        if self.hide_depth == 0 {
             self.restore_main(cx);
         }
     }
 
     fn restore_main(&mut self, cx: &mut Context<Self>) {
-        self.hidden_for_capture = false;
+        self.hide_depth = 0;
+        crate::desktop::deiconify_main_window();
         let handle = self.main_window;
         cx.defer(move |cx| {
             if let Some(handle) = handle {
@@ -390,30 +305,37 @@ impl AppState {
         let Some(doc) = self.documents.iter().find(|d| d.id == id) else {
             return;
         };
-        let image = doc.image.clone();
+        let Some(image) = doc.image.pixels().cloned() else {
+            return;
+        };
         let engine = self.engine.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { engine.recognize(&image) })
+                .background_spawn(async move { engine.recognize(image.as_ref()) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
                     match result {
                         Ok(blocks) => {
                             doc.blocks = blocks;
+                            doc.blocks_loaded = true;
                             doc.status = DocStatus::Ready;
+                            doc.refresh_first_line();
                         }
                         Err(err) => {
                             doc.status = DocStatus::Failed(err.to_string());
                         }
                     }
                 }
-                if this.prefs.autocopy
-                    && this
-                        .selected_doc()
-                        .is_some_and(|d| matches!(d.status, DocStatus::Ready))
-                {
-                    this.copy_selected(cx);
+                let ready = this
+                    .documents
+                    .iter()
+                    .any(|d| d.id == id && matches!(d.status, DocStatus::Ready));
+                if ready {
+                    this.persist_ready(id, cx);
+                    if this.prefs.autocopy && this.selected == Some(id) {
+                        this.copy_selected(cx);
+                    }
                 }
                 this.restore_after_hide(cx);
                 if this.reveal_on_main {
@@ -429,13 +351,25 @@ impl AppState {
     }
 
     pub fn retry_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected {
-            if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                doc.status = DocStatus::Recognizing;
-                doc.blocks.clear();
+        let Some(id) = self.selected else {
+            return;
+        };
+        let slot = self
+            .documents
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.image.clone());
+        match slot {
+            None | Some(ImageSlot::Missing) => (),
+            Some(ImageSlot::Loaded(_)) => {
+                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
+                    doc.status = DocStatus::Recognizing;
+                    doc.blocks.clear();
+                }
+                self.start_ocr(id, cx);
+                cx.notify();
             }
-            self.start_ocr(id, cx);
-            cx.notify();
+            Some(ImageSlot::OnDisk) => self.load_png_then_retry(id, cx),
         }
     }
 
@@ -443,20 +377,30 @@ impl AppState {
         let Some(doc) = self.selected_doc() else {
             return;
         };
-        let text = doc.export(self.export_fmt, &self.prefs);
+        let text = doc.primary_copy(self.export_fmt, &self.prefs);
+        Self::write_clipboard(text, cx);
+    }
+
+    pub fn copy_text(text: String, cx: &mut App) {
+        Self::write_clipboard(text, cx);
+    }
+
+    fn write_clipboard(text: String, cx: &mut App) {
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
     pub fn select_delta(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.documents.is_empty() {
+        if self.visible_ids.is_empty() {
             return;
         }
-        let idx = self.selected_index().unwrap_or(0) as isize;
-        let next = (idx + delta).clamp(0, self.documents.len() as isize - 1) as usize;
-        self.selected = Some(self.documents[next].id);
-        cx.notify();
+        let idx = self
+            .selected
+            .and_then(|id| self.visible_ids.iter().position(|x| *x == id))
+            .unwrap_or(0) as isize;
+        let next = (idx + delta).clamp(0, self.visible_ids.len() as isize - 1) as usize;
+        self.select(self.visible_ids[next], cx);
     }
 
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
@@ -464,7 +408,24 @@ impl AppState {
             return;
         };
         self.documents.retain(|d| d.id != id);
-        self.selected = self.documents.first().map(|d| d.id);
+        self.visible_ids.retain(|x| *x != id);
+        self.loaded_lru.retain(|x| *x != id);
+        self.selected = self
+            .visible_ids
+            .first()
+            .copied()
+            .or_else(|| self.documents.first().map(|d| d.id));
+        if let Some(store) = self.store.clone() {
+            cx.background_spawn(async move {
+                if let Err(err) = store.delete(id) {
+                    eprintln!("{APP_SLUG}: delete snip: {err}");
+                }
+            })
+            .detach();
+        }
+        if let Some(id) = self.selected {
+            self.ensure_detail(id, cx);
+        }
         cx.notify();
     }
 
@@ -475,7 +436,306 @@ impl AppState {
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {
         self.selected = Some(id);
+        self.touch_lru(id);
+        self.ensure_detail(id, cx);
         cx.notify();
+    }
+
+    pub fn set_search_query(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.search_query == query {
+            return;
+        }
+        self.search_query = query;
+        self.schedule_filter(cx);
+    }
+
+    pub fn set_date_preset(&mut self, preset: DatePreset, cx: &mut Context<Self>) {
+        if self.date_preset == preset {
+            return;
+        }
+        self.date_preset = preset;
+        self.schedule_filter(cx);
+    }
+
+    pub fn gpu_full_ids(&self) -> Vec<Uuid> {
+        let mut ids = self.loaded_lru.clone();
+        if let Some(sel) = self.selected {
+            if !ids.contains(&sel) {
+                ids.push(sel);
+            }
+        }
+        ids
+    }
+
+    pub fn boot_selected(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected {
+            self.ensure_detail(id, cx);
+        }
+    }
+
+    pub fn visible_docs(&self) -> Vec<&Document> {
+        self.visible_ids
+            .iter()
+            .filter_map(|id| self.documents.iter().find(|d| d.id == *id))
+            .collect()
+    }
+
+    fn persist_ready(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let Some(doc) = self.documents.iter().find(|d| d.id == id).cloned() else {
+            return;
+        };
+        if !matches!(doc.status, DocStatus::Ready) || doc.image.pixels().is_none() {
+            return;
+        }
+        let already = doc.persisted;
+        let first_line = doc.first_line();
+        let blocks = doc.blocks.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if already {
+                        store.update_ocr(id, &first_line, &blocks)?;
+                        Ok::<Option<Vec<u8>>, anyhow::Error>(None)
+                    } else {
+                        Ok(Some(store.insert_ready(&doc)?))
+                    }
+                })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Some(thumb)) => {
+                        if let Some(d) = this.documents.iter_mut().find(|d| d.id == id) {
+                            d.persisted = true;
+                            d.thumb_jpeg = thumb;
+                        }
+                        this.schedule_filter(cx);
+                    }
+                    Ok(None) => {}
+                    Err(err) => eprintln!("{APP_SLUG}: persist snip: {err}"),
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: persist task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    fn schedule_filter(&mut self, cx: &mut Context<Self>) {
+        self.search_gen = self.search_gen.wrapping_add(1);
+        let gen = self.search_gen;
+        let query = self.search_query.clone();
+        let range = self.date_preset.to_range(CivilDate::today_local());
+        let store = self.store.clone();
+        let inflight: Vec<(Uuid, std::time::SystemTime, String)> = self
+            .documents
+            .iter()
+            .filter(|d| !d.persisted)
+            .map(|d| {
+                let blob = if matches!(d.status, DocStatus::Ready) {
+                    Document::search_text_for_blocks(&d.blocks)
+                } else {
+                    d.first_line()
+                };
+                (d.id, d.created_at, blob)
+            })
+            .collect();
+        let ram_only: Option<Vec<(Uuid, std::time::SystemTime, String)>> = if store.is_none() {
+            Some(
+                self.documents
+                    .iter()
+                    .filter(|d| d.persisted)
+                    .map(|d| {
+                        (
+                            d.id,
+                            d.created_at,
+                            Document::search_text_for_blocks(&d.blocks),
+                        )
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(120)).await;
+            let ids = cx
+                .background_spawn(async move {
+                    let mut persisted = if let Some(store) = store {
+                        store.query_ids(&query, range).unwrap_or_else(|err| {
+                            eprintln!("{APP_SLUG}: search: {err}");
+                            Vec::new()
+                        })
+                    } else {
+                        ram_only
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|(_, created, blob)| {
+                                store::instant_in_range(*created, range)
+                                    && text_matches(&query, blob)
+                            })
+                            .map(|(id, _, _)| id)
+                            .collect()
+                    };
+                    let mut out = Vec::new();
+                    for (id, created, blob) in inflight {
+                        if store::instant_in_range(created, range) && text_matches(&query, &blob) {
+                            out.push(id);
+                        }
+                    }
+                    persisted.retain(|id| !out.contains(id));
+                    out.append(&mut persisted);
+                    out
+                })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                if this.search_gen != gen {
+                    return;
+                }
+                this.visible_ids = ids;
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: filter task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    fn load_png_then_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
+            doc.status = DocStatus::Recognizing;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let loaded = cx.background_spawn(async move { store.load_png(id) }).await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                match loaded {
+                    Ok(img) => {
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.image = ImageSlot::Loaded(Arc::new(img));
+                            doc.blocks.clear();
+                        }
+                        this.touch_lru(id);
+                        this.start_ocr(id, cx);
+                    }
+                    Err(err) => {
+                        eprintln!("{APP_SLUG}: load png: {err}");
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.image = ImageSlot::Missing;
+                            doc.status = DocStatus::Ready;
+                        }
+                    }
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: retry load: {err}");
+            }
+        })
+        .detach();
+    }
+
+    pub fn ensure_detail(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(doc) = self.documents.iter().find(|d| d.id == id) else {
+            return;
+        };
+        let need_blocks = doc.persisted && !doc.blocks_loaded;
+        let need_png = matches!(doc.image, ImageSlot::OnDisk);
+        if need_blocks {
+            self.load_blocks(id, cx);
+        }
+        if need_png {
+            self.load_png(id, cx);
+        }
+    }
+
+    fn load_blocks(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { store.load_blocks(id) })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                match result {
+                    Ok(blocks) => {
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.blocks = blocks;
+                            doc.blocks_loaded = true;
+                            doc.refresh_first_line();
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("{APP_SLUG}: load blocks: {err}");
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.blocks_loaded = true;
+                        }
+                    }
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: blocks task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    fn load_png(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { store.load_png(id) }).await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                if this.selected != Some(id) {
+                    return;
+                }
+                match result {
+                    Ok(img) => {
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.image = ImageSlot::Loaded(Arc::new(img));
+                        }
+                        this.touch_lru(id);
+                    }
+                    Err(err) => {
+                        eprintln!("{APP_SLUG}: load png: {err}");
+                        if let Some(doc) = this.documents.iter_mut().find(|d| d.id == id) {
+                            doc.image = ImageSlot::Missing;
+                        }
+                    }
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: png task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    fn touch_lru(&mut self, id: Uuid) {
+        self.loaded_lru.retain(|x| *x != id);
+        self.loaded_lru.push(id);
+        while self.loaded_lru.len() > 3 {
+            let Some(pos) = self
+                .loaded_lru
+                .iter()
+                .position(|x| Some(*x) != self.selected)
+            else {
+                break;
+            };
+            let evict = self.loaded_lru.remove(pos);
+            if let Some(doc) = self.documents.iter_mut().find(|d| d.id == evict) {
+                if doc.persisted && matches!(doc.image, ImageSlot::Loaded(_)) {
+                    doc.image = ImageSlot::OnDisk;
+                }
+            }
+        }
     }
 
     fn handle_desktop(&mut self, cmd: DesktopCmd, cx: &mut Context<Self>) {
@@ -487,24 +747,16 @@ impl AppState {
     }
 }
 
+fn text_matches(query: &str, blob: &str) -> bool {
+    let q = query.trim();
+    q.is_empty() || blob.to_lowercase().contains(&q.to_lowercase())
+}
+
 fn activate_window<V: 'static>(handle: WindowHandle<V>, cx: &mut App) {
     if let Err(err) = handle.update(cx, |_, window, _| {
         window.activate_window();
     }) {
         eprintln!("{APP_SLUG}: activate window: {err}");
-    }
-}
-
-fn raise_overlay_once(handle: Option<WindowHandle<Overlay>>, cx: &mut App) {
-    crate::desktop::raise_overlay();
-    let Some(handle) = handle else {
-        return;
-    };
-    if let Err(err) = handle.update(cx, |view, window, cx| {
-        window.focus(&view.focus_handle(cx));
-        crate::desktop::focus_native_overlay(window);
-    }) {
-        eprintln!("{APP_SLUG}: raise overlay: {err}");
     }
 }
 
@@ -541,15 +793,18 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-c", CopyExport, None),
         KeyBinding::new("ctrl-c", CopyExport, None),
         KeyBinding::new("down", SelectNext, None),
-        KeyBinding::new("j", SelectNext, None),
+        KeyBinding::new("j", SelectNext, Some("SnipList && !SearchField")),
         KeyBinding::new("up", SelectPrev, None),
-        KeyBinding::new("k", SelectPrev, None),
-        KeyBinding::new("delete", DeleteSelected, None),
-        KeyBinding::new("backspace", DeleteSelected, None),
+        KeyBinding::new("k", SelectPrev, Some("SnipList && !SearchField")),
+        KeyBinding::new("delete", DeleteSelected, Some("SnipList && !SearchField")),
+        KeyBinding::new(
+            "backspace",
+            DeleteSelected,
+            Some("SnipList && !SearchField"),
+        ),
         KeyBinding::new("ctrl-l", ToggleFormat, None),
-        KeyBinding::new("enter", ConfirmOverlay, Some("Overlay")),
-        KeyBinding::new("escape", CancelOverlay, Some("Overlay")),
         KeyBinding::new("ctrl-r", RetryOcr, None),
         KeyBinding::new("ctrl-q", QuitApp, None),
     ]);
+    crate::ui::search_field::bind_keys(cx);
 }

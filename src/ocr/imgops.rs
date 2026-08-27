@@ -39,7 +39,7 @@ pub fn luma_of(r: u8, g: u8, b: u8) -> u8 {
 /// Arithmetic mean of per-pixel luma.
 pub fn mean_luma(img: &RgbImg) -> f64 {
     let mut acc: u64 = 0;
-    for px in img.data.chunks_exact(3) {
+    for px in img.data.as_chunks::<3>().0 {
         acc += luma_of(px[0], px[1], px[2]) as u64;
     }
     acc as f64 / (img.w as f64 * img.h as f64)
@@ -157,7 +157,7 @@ pub fn merge_images(imgs: &[&RgbImg], aligns: &[Align]) -> Option<RgbImg> {
 pub fn crop_margin(img: &RgbImg) -> RgbImg {
     let n = (img.w * img.h) as usize;
     let mut gray = vec![0u8; n];
-    for (i, px) in img.data.chunks_exact(3).enumerate() {
+    for (i, px) in img.data.as_chunks::<3>().0.iter().enumerate() {
         gray[i] = luma_of(px[0], px[1], px[2]);
     }
     let max_val = *gray.iter().max().unwrap_or(&0);

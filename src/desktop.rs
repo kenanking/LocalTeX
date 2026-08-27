@@ -5,14 +5,14 @@ use std::thread;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
-use gpui::{Bounds, Pixels, Window, WindowBounds};
-
 use crate::identity::APP_SLUG;
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod other;
+#[cfg(target_os = "linux")]
+mod x11_snip;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DesktopCmd {
@@ -30,7 +30,7 @@ struct Services {
 }
 
 thread_local! {
-    static SERVICES: RefCell<Option<Services>> = RefCell::new(None);
+    static SERVICES: RefCell<Option<Services>> = const { RefCell::new(None) };
 }
 
 /// Register hotkey + tray. Must be called from the GPUI UI thread.
@@ -80,48 +80,37 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
-/// Linux: keep one GPUI overlay window (unmap/map). Win/mac: destroy each snip.
-pub fn overlay_keeps_window() -> bool {
-    cfg!(target_os = "linux")
-}
-
-/// Allow `raise_overlay` to map/restack. Call once per snip session.
-pub fn arm_overlay() {
-    #[cfg(target_os = "linux")]
-    linux::arm_overlay();
-}
-
-/// Raise the snip overlay if the session is armed. No-op after `park_overlay`.
-pub fn raise_overlay() {
-    #[cfg(target_os = "linux")]
-    linux::raise_overlay();
-}
-
-/// Disarm and unmap. In-flight raises become no-ops.
-pub fn park_overlay() {
-    #[cfg(target_os = "linux")]
-    linux::park_overlay();
-}
-
-/// Win/mac: GPUI activate. Linux: skip SetInputFocus (breaks overlay input).
-pub fn focus_native_overlay(window: &mut Window) {
-    #[cfg(not(target_os = "linux"))]
-    window.activate_window();
+/// Native snip overlay (Linux X11: override-redirect freeze-frame).
+/// Returns `Ok(None)` if the user cancelled. Must run off the GPUI thread.
+pub fn select_region(
+    shot: &crate::capture::DesktopShot,
+) -> anyhow::Result<Option<image::RgbaImage>> {
     #[cfg(target_os = "linux")]
     {
-        let _ = window;
-    }
-}
-
-/// Linux fullscreen is `_NET_WM_STATE ADD` in `raise_overlay`. GPUI's
-/// `WindowBounds::Fullscreen` is a TOGGLE and races with that ADD.
-pub fn overlay_window_bounds(bounds: Bounds<Pixels>) -> WindowBounds {
-    #[cfg(target_os = "linux")]
-    {
-        WindowBounds::Windowed(bounds)
+        x11_snip::select_region(shot)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        WindowBounds::Fullscreen(bounds)
+        let _ = shot;
+        anyhow::bail!(
+            "snip overlay is Linux X11 only for now (Windows/macOS: do not open a second GPUI window)"
+        )
     }
+}
+
+/// Iconify the main window so it is gone from the freeze-frame (Linux: EWMH
+/// `_NET_WM_STATE_HIDDEN`; GPUI's ICCCM minimize is not enough on GNOME).
+pub fn iconify_main_window() {
+    #[cfg(target_os = "linux")]
+    linux::iconify_main_window();
+}
+
+pub fn deiconify_main_window() {
+    #[cfg(target_os = "linux")]
+    linux::deiconify_main_window();
+}
+
+pub fn wait_until_iconified() {
+    #[cfg(target_os = "linux")]
+    linux::wait_until_iconified();
 }

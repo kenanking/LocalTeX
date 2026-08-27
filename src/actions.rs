@@ -13,8 +13,6 @@ actions!(
         SelectPrev,
         DeleteSelected,
         ToggleFormat,
-        ConfirmOverlay,
-        CancelOverlay,
         RetryOcr,
         QuitApp,
     ]

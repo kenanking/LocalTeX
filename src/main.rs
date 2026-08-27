@@ -9,6 +9,8 @@ mod ocr;
 mod prefs;
 mod preview;
 mod state;
+mod store;
+mod table;
 mod ui;
 
 use gpui::{
@@ -27,42 +29,44 @@ use crate::ui::MainWindow;
 fn main() {
     pin_display_vulkan();
     crate::icon::install_desktop_identity();
-    Application::new().run(|cx: &mut App| {
-        crate::state::bind_keys(cx);
-        set_app_menus(cx);
+    Application::new()
+        .with_assets(crate::icon::Assets)
+        .run(|cx: &mut App| {
+            crate::state::bind_keys(cx);
+            set_app_menus(cx);
 
-        let state = cx.new(|_| AppState::new());
-        let bounds = Bounds::centered(None, size(px(880.), px(640.)), cx);
-        let handle = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some(APP_NAME.into()),
+            let state = cx.new(|_| AppState::new());
+            let bounds = Bounds::centered(None, size(px(800.), px(560.)), cx);
+            let handle = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some(APP_NAME.into()),
+                            ..Default::default()
+                        }),
+                        app_id: Some(APP_ID.into()),
+                        window_min_size: Some(size(px(520.), px(400.))),
+                        window_background: gpui::WindowBackgroundAppearance::Opaque,
                         ..Default::default()
-                    }),
-                    app_id: Some(APP_ID.into()),
-                    window_min_size: Some(size(px(680.), px(500.))),
-                    window_background: gpui::WindowBackgroundAppearance::Opaque,
-                    ..Default::default()
-                },
-                {
-                    let state = state.clone();
-                    move |window, cx| cx.new(|cx| MainWindow::new(state, window, cx))
-                },
-            )
-            .expect("open main window");
+                    },
+                    {
+                        let state = state.clone();
+                        move |window, cx| cx.new(|cx| MainWindow::new(state, window, cx))
+                    },
+                )
+                .expect("open main window");
 
-        state.update(cx, |state, _| {
-            state.main_window = Some(handle);
+            state.update(cx, |state, _| {
+                state.main_window = Some(handle);
+            });
+
+            // Hotkey manager must be created on this GPUI UI thread (Windows
+            // win32 loop / macOS main thread). Event recv is forwarded off-thread.
+            let rx = desktop::spawn();
+            state::pump_desktop_events(state, rx, cx);
+            cx.activate(true);
         });
-
-        // Hotkey manager must be created on this GPUI UI thread (Windows
-        // win32 loop / macOS main thread). Event recv is forwarded off-thread.
-        let rx = desktop::spawn();
-        state::pump_desktop_events(state, rx, cx);
-        cx.activate(true);
-    });
 }
 
 fn pin_display_vulkan() {

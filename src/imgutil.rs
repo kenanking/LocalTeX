@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use gpui::RenderImage;
-use image::{imageops, Rgba, RgbaImage};
+use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
+use image::{imageops, ColorType, ImageEncoder, Rgba, RgbaImage};
 
 pub fn rgba_to_render(img: &RgbaImage) -> Arc<RenderImage> {
     let mut bgra = img.clone();
@@ -10,6 +12,22 @@ pub fn rgba_to_render(img: &RgbaImage) -> Arc<RenderImage> {
     }
     let frame = image::Frame::new(bgra);
     Arc::new(RenderImage::new(smallvec::smallvec![frame]))
+}
+
+/// GPU display texture. Blade's Linux atlas grows to the bitmap size with
+/// no clamp (Metal/DX cap at 16k). Keep the original `RgbaImage` for
+/// cropping / OCR; this is display only.
+const GPU_DISPLAY_MAX_EDGE: u32 = 1024;
+
+pub fn gpu_display_image(img: &RgbaImage) -> Arc<RenderImage> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return rgba_to_render(img);
+    }
+    if w <= GPU_DISPLAY_MAX_EDGE && h <= GPU_DISPLAY_MAX_EDGE {
+        return rgba_to_render(img);
+    }
+    rgba_to_render(&thumbnail(img, GPU_DISPLAY_MAX_EDGE, GPU_DISPLAY_MAX_EDGE))
 }
 
 pub fn thumbnail(img: &RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
@@ -23,6 +41,65 @@ pub fn thumbnail(img: &RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     let tw = (w as f32 * scale).round().max(1.0) as u32;
     let th = (h as f32 * scale).round().max(1.0) as u32;
     imageops::thumbnail(img, tw, th)
+}
+
+/// Bound decoded snips before OCR so layout boxes stay in the stored-image
+/// coordinate system. 24 MP is the ocr-pipeline recommendation for LocalTeX.
+pub const OCR_MAX_PIXELS: u64 = 24_000_000;
+
+pub fn cap_megapixels(img: RgbaImage) -> RgbaImage {
+    cap_megapixels_at(img, OCR_MAX_PIXELS)
+}
+
+pub fn cap_megapixels_at(img: RgbaImage, max_px: u64) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let px = u64::from(w) * u64::from(h);
+    if px <= max_px || w == 0 || h == 0 {
+        return img;
+    }
+    let scale = (max_px as f64 / px as f64).sqrt();
+    let tw = ((w as f64) * scale).round().max(1.0) as u32;
+    let th = ((h as f64) * scale).round().max(1.0) as u32;
+    imageops::resize(&img, tw, th, imageops::FilterType::Triangle)
+}
+
+pub fn encode_png_fast(img: &RgbaImage) -> anyhow::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let encoder =
+        PngEncoder::new_with_quality(&mut buf, CompressionType::Fast, PngFilter::Adaptive);
+    encoder.write_image(
+        img.as_raw(),
+        img.width(),
+        img.height(),
+        ColorType::Rgba8.into(),
+    )?;
+    Ok(buf)
+}
+
+pub fn encode_thumb_jpeg(img: &RgbaImage) -> anyhow::Result<Vec<u8>> {
+    let thumb = thumbnail(img, 112, 80);
+    let rgb = image::DynamicImage::ImageRgba8(thumb).to_rgb8();
+    let mut buf = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut buf, 70);
+    encoder.encode(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        ColorType::Rgb8.into(),
+    )?;
+    Ok(buf)
+}
+
+pub fn jpeg_to_render(jpeg: &[u8]) -> Option<Arc<RenderImage>> {
+    if jpeg.is_empty() {
+        return None;
+    }
+    let img = image::load_from_memory(jpeg).ok()?.to_rgba8();
+    Some(rgba_to_render(&img))
+}
+
+pub fn decode_png_file(path: &std::path::Path) -> anyhow::Result<RgbaImage> {
+    Ok(image::open(path)?.to_rgba8())
 }
 
 pub fn crop(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> RgbaImage {
@@ -137,5 +214,42 @@ mod tests {
         let img = rasterize_strokes(&[vec![(10.0, 10.0), (40.0, 12.0)]], 3).unwrap();
         assert!(img.width() >= 64);
         assert!(img.pixels().any(|p| p.0[0] < 40));
+    }
+
+    #[test]
+    fn gpu_display_image_caps_long_edge() {
+        let img = RgbaImage::from_pixel(1920, 1080, Rgba([10, 20, 30, 255]));
+        let render = gpu_display_image(&img);
+        let size = render.size(0);
+        let w = u32::from(size.width);
+        let h = u32::from(size.height);
+        assert!(w <= GPU_DISPLAY_MAX_EDGE, "w={w}");
+        assert!(h <= GPU_DISPLAY_MAX_EDGE, "h={h}");
+        assert!((w as f32 / h as f32 - 1920.0 / 1080.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn gpu_display_image_keeps_small_shots() {
+        let img = RgbaImage::from_pixel(64, 48, Rgba([1, 2, 3, 255]));
+        let render = gpu_display_image(&img);
+        let size = render.size(0);
+        assert_eq!(u32::from(size.width), 64);
+        assert_eq!(u32::from(size.height), 48);
+    }
+
+    #[test]
+    fn cap_megapixels_keeps_1080p() {
+        let img = RgbaImage::from_pixel(1920, 1080, Rgba([1, 2, 3, 255]));
+        let out = cap_megapixels(img);
+        assert_eq!(out.dimensions(), (1920, 1080));
+    }
+
+    #[test]
+    fn cap_megapixels_shrinks_huge_scans() {
+        let img = RgbaImage::from_pixel(400, 400, Rgba([1, 2, 3, 255]));
+        let out = cap_megapixels_at(img, 90_000);
+        let px = u64::from(out.width()) * u64::from(out.height());
+        assert!(px <= 90_000);
+        assert!(out.width() > 200 && out.height() > 200);
     }
 }

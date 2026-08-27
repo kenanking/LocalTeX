@@ -1,7 +1,7 @@
 use gpui::{rgb, Rgba};
 
 // Light graphite surfaces. Accent is reserved for actions and selection,
-// not chrome (same rule as Waku's palette). Overlay keeps its own dim.
+// not chrome (same rule as Waku's palette).
 pub const BG: u32 = 0xf6f5f6;
 pub const BG_RAISED: u32 = 0xffffff;
 pub const BG_SUNKEN: u32 = 0xefefef;
@@ -15,12 +15,6 @@ pub const BORDER: u32 = 0xe6e6e6;
 pub const ACCENT_SOFT_FILL: u32 = 0xeff6ff;
 pub const ON_ACCENT: u32 = 0xffffff;
 
-pub fn dim() -> Rgba {
-    let mut c = rgb(0x000000);
-    c.a = 0.45;
-    c
-}
-
 pub fn accent_soft() -> Rgba {
     rgb(ACCENT_SOFT_FILL)
 }
@@ -33,6 +27,10 @@ pub fn row_hover() -> Rgba {
     let mut c = rgb(0x000000);
     c.a = 0.04;
     c
+}
+
+pub fn scrollbar_thumb() -> Rgba {
+    rgb(0x9ca3af)
 }
 
 pub fn status_color(kind: StatusKind) -> Rgba {

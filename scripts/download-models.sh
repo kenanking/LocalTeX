@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Fetch OpenDoc-0.1B ship weights from the GitHub release into the models dir.
+# The tarball is ocr-pipeline `models/ship` (V2 layout freeze-fold + GQA decoder).
 # Override with LOCALTEX_MODELS, LOCALTEX_MODELS_REPO, LOCALTEX_MODELS_TAG.
 set -euo pipefail
 

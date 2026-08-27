@@ -11,12 +11,12 @@ Models are **not** embedded in the binary (~44 MB release build + ~244 MB Op
 
 ## Platforms
 
-| Target | Capture | Hotkey | Tray | Notes |
-|---|---|---|---|---|
-| **Linux X11** | xcap | Ctrl+Shift+S | StatusNotifier (`ksni`) | Current product |
-| **Windows** | xcap (WGC) | Ctrl+Shift+S (UI thread) | `tray-icon` | Next test machine |
-| **macOS** | xcap | same as Windows | `tray-icon` | Compiles; no dedicated QA yet |
-| **Linux Wayland** | — | — | — | Not supported |
+| Target | Capture | Snip UI | Hotkey | Tray | Notes |
+|---|---|---|---|---|---|
+| **Linux X11** | xcap | override-redirect freeze-frame | Ctrl+Shift+S | StatusNotifier (`ksni`) | Current product |
+| **Windows** | xcap (WGC) | not implemented yet | Ctrl+Shift+S (UI thread) | `tray-icon` | Next test machine |
+| **macOS** | xcap | not implemented yet | same as Windows | `tray-icon` | Compiles; no dedicated QA yet |
+| **Linux Wayland** | — | — | — | — | Not supported |
 
 The global hotkey uses `global-hotkey`, which on Linux is **X11 only**. Wayland has no standard global-hotkey API.
 
@@ -49,7 +49,7 @@ That unpacks `opendoc-0.1b-ship.tar.gz` into `$LOCALTEX_MODELS`, else:
 - Linux: `~/.local/share/localtex/models`
 - Windows: `%LOCALAPPDATA%\localtex\models`
 
-Required files: `layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`. `manifest.json` documents the ship strategy (int8/WOQ + decoder KV-v2). The decoder must be the KV-v2 contract (`cross_kt_0` input). Without those files the app still starts; snip OCR errors until the weights are in place.
+Required files: `layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`. `manifest.json` documents the ship strategy (INT8 + layout freeze-fold + GQA decoder). Layout is image-only (boxes in 800-space); the decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; snip OCR errors until the weights are in place.
 
 The GitHub repo may be private: `download-models.sh` uses `gh` when you are logged in (`gh auth status`).
 
@@ -72,22 +72,23 @@ Hotkey **Ctrl+Shift+S** starts a capture. Overlay: drag to confirm; click or Esc
 
 ## Layout
 
-Single crate (`localtex`). Product name / app id / data dir live in `src/identity.rs`. OS-owned services (tray, hotkey) are `#[cfg]` backends; overlay and `AppState` are shared.
+Single crate (`localtex`). Product name / app id / data dir live in `src/identity.rs`. OS-owned services (tray, hotkey, Linux snip overlay) are `#[cfg]` backends; `AppState` is shared.
 
 ```
 src/
   main.rs           entry, native menus, main window
   identity.rs       LocalTeX / localtex / com.localtex.app
   actions.rs        GPUI actions (namespace `localtex`)
-  state.rs          documents, overlay lifecycle, OCR jobs
+  state.rs          documents, capture lifecycle, OCR jobs
   doc.rs            Block / Document / export
-  capture.rs        xcap grab (physical-pixel freeze-frame)
+  capture.rs        xcap grab + virtual-desktop stitch
   desktop.rs        DesktopCmd; hotkey on the UI thread
   desktop/linux.rs  ksni tray
+  desktop/x11_snip.rs  override-redirect freeze-frame overlay
   desktop/other.rs  tray-icon (Windows / macOS)
   preview.rs        RaTeX → SVG
   ocr/              PP-DocLayoutV2 + UniRec-0.1B (OpenDoc)
-  ui/               main window, overlay, theme
+  ui/               main window, theme
 scripts/            Linux desktop/SSH helpers
 ```
 

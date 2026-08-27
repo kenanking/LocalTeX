@@ -2,78 +2,92 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gpui::{
-    canvas, div, img, prelude::*, px, rgb, App, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, ImageFormat, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point,
-    RenderImage, SharedString, Window,
+    div, prelude::*, px, rgb, App, Context, CursorStyle, Entity, FocusHandle, Focusable, Image,
+    RenderImage, ScrollHandle, SharedString, Window,
 };
 use uuid::Uuid;
 
+use super::draw::DrawBoard;
+use super::search_field::SearchField;
+use super::settings::SettingsTab;
 use super::theme;
-use super::widgets::{
-    app_icon_image, btn, ghost_btn, icon_btn, kbd_chip, section_label, segmented, status_dot,
-    IconKind,
-};
+use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, QuitApp, RetryOcr, SelectNext,
     SelectPrev, StartDraw, ToggleFormat, UploadImage,
 };
-use crate::doc::{BlockKind, DocStatus, ExportFmt};
+use crate::doc::{CopyKind, DocStatus};
 use crate::imgutil;
 use crate::ocr::EngineStatus;
-use crate::preview;
+use crate::preview::PreviewBlock;
 use crate::state::AppState;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Sheet {
-    None,
+#[derive(Clone)]
+pub(crate) enum View {
+    Library,
     Draw,
     Settings,
 }
 
-struct DrawBoard {
-    lines: Vec<Vec<Point<Pixels>>>,
-    painting: bool,
-}
-
-impl DrawBoard {
-    fn has_ink(&self) -> bool {
-        self.lines.iter().any(|line| line.len() >= 2)
-    }
-}
-
 pub struct MainWindow {
-    state: Entity<AppState>,
+    pub(crate) state: Entity<AppState>,
     focus: FocusHandle,
-    thumbs: HashMap<Uuid, Arc<RenderImage>>,
-    fulls: HashMap<Uuid, Arc<RenderImage>>,
-    previews: HashMap<Uuid, (String, Option<Arc<Image>>)>,
-    sheet: Sheet,
-    board: DrawBoard,
-    toolbar_hint: Option<SharedString>,
+    pub(crate) snip_list_focus: FocusHandle,
+    pub(crate) search: Entity<SearchField>,
+    pub(crate) thumbs: HashMap<Uuid, Arc<RenderImage>>,
+    pub(crate) fulls: HashMap<Uuid, Arc<RenderImage>>,
+    pub(crate) previews: HashMap<Uuid, (String, Vec<PreviewBlock>)>,
+    pub(crate) math_imgs: HashMap<String, Arc<Image>>,
+    pub(crate) view: View,
+    pub(crate) board: DrawBoard,
+    settings_tab: SettingsTab,
+    pub(crate) copied: Option<(Uuid, CopyKind)>,
+    pub(crate) orig_hover: bool,
+    orig_zoomed: bool,
+    zoom_doc: Option<Uuid>,
+    pub(crate) preview_scroll: ScrollHandle,
+    pub(crate) preview_scroll_doc: Option<Uuid>,
+    pub(crate) preview_bar_pending: bool,
 }
 
 impl MainWindow {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        let snip_list_focus = cx.focus_handle();
+        window.focus(&snip_list_focus);
         let state_for_close = state.clone();
         window.on_window_should_close(cx, move |window, cx| {
             let action = state_for_close.read(cx).prefs.close_action;
             AppState::handle_main_close(action, window, cx)
         });
         cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        let search = cx.new(|cx| SearchField::new("Search text or LaTeX", cx));
+        cx.observe(&search, |this, field, cx| {
+            let query = field.read(cx).text();
+            this.state
+                .update(cx, |state, cx| state.set_search_query(query, cx));
+        })
+        .detach();
+        state.update(cx, |state, cx| state.boot_selected(cx));
         Self {
             state,
             focus,
+            snip_list_focus,
+            search,
             thumbs: HashMap::new(),
             fulls: HashMap::new(),
             previews: HashMap::new(),
-            sheet: Sheet::None,
-            board: DrawBoard {
-                lines: Vec::new(),
-                painting: false,
-            },
-            toolbar_hint: None,
+            math_imgs: HashMap::new(),
+            view: View::Library,
+            board: DrawBoard::new(),
+            settings_tab: SettingsTab::General,
+            copied: None,
+            orig_hover: false,
+            orig_zoomed: false,
+            zoom_doc: None,
+            preview_scroll: ScrollHandle::new(),
+            preview_scroll_doc: None,
+            preview_bar_pending: false,
         }
     }
 
@@ -83,24 +97,28 @@ impl MainWindow {
     }
 
     fn start_draw(&mut self, _: &StartDraw, _: &mut Window, cx: &mut Context<Self>) {
-        self.sheet = Sheet::Draw;
-        self.board = DrawBoard {
-            lines: Vec::new(),
-            painting: false,
-        };
+        self.unzoom();
+        self.view = View::Draw;
+        self.board = DrawBoard::new();
         cx.notify();
     }
 
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
-        self.sheet = if self.sheet == Sheet::Settings {
-            Sheet::None
+        self.unzoom();
+        self.view = if matches!(self.view, View::Settings) {
+            View::Library
         } else {
-            Sheet::Settings
+            View::Settings
         };
         cx.notify();
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, _: &mut Window, cx: &mut Context<Self>) {
+        if self.orig_zoomed {
+            self.unzoom();
+            cx.notify();
+            return;
+        }
         self.dismiss_sheet(cx);
     }
 
@@ -110,10 +128,27 @@ impl MainWindow {
     }
 
     pub fn dismiss_sheet(&mut self, cx: &mut Context<Self>) {
-        if self.sheet != Sheet::None {
-            self.sheet = Sheet::None;
+        let was_zoom = self.orig_zoomed;
+        self.unzoom();
+        if matches!(self.view, View::Draw | View::Settings) {
+            self.view = View::Library;
+            cx.notify();
+        } else if was_zoom {
             cx.notify();
         }
+    }
+
+    pub(crate) fn unzoom(&mut self) {
+        self.orig_zoomed = false;
+        self.orig_hover = false;
+        self.zoom_doc = None;
+    }
+
+    pub(crate) fn zoom_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        self.orig_zoomed = true;
+        self.orig_hover = false;
+        self.zoom_doc = Some(id);
+        cx.notify();
     }
 
     fn copy(&mut self, _: &CopyExport, _: &mut Window, cx: &mut Context<Self>) {
@@ -148,16 +183,33 @@ impl MainWindow {
     fn ensure_images(&mut self, state: &AppState) {
         let live: HashSet<Uuid> = state.documents.iter().map(|d| d.id).collect();
         self.thumbs.retain(|id, _| live.contains(id));
-        self.fulls.retain(|id, _| live.contains(id));
         self.previews.retain(|id, _| live.contains(id));
-        for doc in &state.documents {
-            self.thumbs.entry(doc.id).or_insert_with(|| {
-                let thumb = imgutil::thumbnail(&doc.image, 56, 40);
-                imgutil::rgba_to_render(&thumb)
-            });
-            self.fulls
-                .entry(doc.id)
-                .or_insert_with(|| imgutil::rgba_to_render(&doc.image));
+        let keep_full: HashSet<Uuid> = state.gpu_full_ids().into_iter().collect();
+        self.fulls
+            .retain(|id, _| live.contains(id) && keep_full.contains(id));
+
+        for doc in state.visible_docs() {
+            if self.thumbs.contains_key(&doc.id) {
+                continue;
+            }
+            if let Some(render) = imgutil::jpeg_to_render(&doc.thumb_jpeg) {
+                self.thumbs.insert(doc.id, render);
+            } else if let Some(pixels) = doc.image.pixels() {
+                let thumb = imgutil::thumbnail(pixels, 56, 40);
+                self.thumbs.insert(doc.id, imgutil::rgba_to_render(&thumb));
+            }
+        }
+
+        let Some(sel) = state.selected else {
+            return;
+        };
+        if self.fulls.contains_key(&sel) {
+            return;
+        }
+        if let Some(doc) = state.selected_doc() {
+            if let Some(pixels) = doc.image.pixels() {
+                self.fulls.insert(sel, imgutil::gpu_display_image(pixels));
+            }
         }
     }
 }
@@ -172,19 +224,26 @@ impl gpui::Render for MainWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
             let state = self.state.read(cx);
-            self.ensure_images(&state);
-            let (status_kind, status_label) = chrome(&state);
+            self.ensure_images(state);
+            if self.orig_zoomed && self.zoom_doc != state.selected {
+                self.orig_zoomed = false;
+                self.orig_hover = false;
+                self.zoom_doc = None;
+            }
+            let (status_kind, status_label) = chrome(state);
             (
                 status_kind,
                 status_label,
                 state.is_capturing(),
                 !state.documents.is_empty(),
-                state.documents.len(),
+                state.visible_ids.len(),
             )
         };
         let history = self.render_history(n_docs, cx);
         let detail = self.render_detail(capturing, cx);
-        let sheet = self.sheet;
+        let zoom = self.render_orig_zoom(cx);
+        let view = self.view.clone();
+        let orig_zoomed = self.orig_zoomed;
         let has_selected = {
             let state = self.state.read(cx);
             state.selected.is_some()
@@ -218,15 +277,34 @@ impl gpui::Render for MainWindow {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .when(sheet == Sheet::None, |d| {
+                    .w_full()
+                    .when(matches!(view, View::Library) && orig_zoomed, |d| {
+                        d.child(zoom)
+                    })
+                    .when(matches!(view, View::Library) && !orig_zoomed, |d| {
                         d.when(has_docs, |d| d.child(history)).child(detail)
                     })
-                    .when(sheet == Sheet::Draw, |d| d.child(self.render_draw(cx)))
-                    .when(sheet == Sheet::Settings, |d| {
-                        d.child(super::settings::page(self.state.clone(), cx))
+                    .when(matches!(view, View::Draw), |d| {
+                        d.child(self.render_draw(cx))
+                    })
+                    .when(matches!(view, View::Settings), |d| {
+                        let tab = self.settings_tab;
+                        let entity = cx.entity();
+                        d.flex_col().child(super::settings::page(
+                            self.state.clone(),
+                            tab,
+                            move |tab, cx| {
+                                entity.update(cx, |this, cx| {
+                                    this.settings_tab = tab;
+                                    cx.notify();
+                                });
+                            },
+                            cx,
+                        ))
                     }),
             )
             .child(self.render_footer(status_kind, status_label))
+            .into_any_element()
     }
 }
 
@@ -238,11 +316,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
-        let hint = self
-            .toolbar_hint
-            .clone()
-            .unwrap_or_else(|| crate::identity::APP_NAME.into());
-        let sheet = self.sheet;
+        let view = self.view.clone();
 
         div()
             .flex()
@@ -268,7 +342,6 @@ impl MainWindow {
                         });
                     }
                 },
-                cx,
             ))
             .child(self.tool_btn(
                 "tool-upload",
@@ -282,71 +355,68 @@ impl MainWindow {
                         state.update(cx, |s, cx| s.request_upload(cx));
                     }
                 },
-                cx,
             ))
             .child(self.tool_btn(
                 "tool-draw",
                 IconKind::Draw,
                 "Create snip from drawing  Ctrl+D",
-                sheet == Sheet::Draw,
+                matches!(view, View::Draw),
                 !capturing,
                 {
                     let entity = cx.entity();
                     move |_, cx| {
                         entity.update(cx, |this, cx| {
-                            this.sheet = Sheet::Draw;
-                            this.board = DrawBoard {
-                                lines: Vec::new(),
-                                painting: false,
-                            };
+                            this.unzoom();
+                            this.view = View::Draw;
+                            this.board = DrawBoard::new();
                             cx.notify();
                         });
                     }
                 },
-                cx,
             ))
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .px_3()
                     .text_sm()
+                    .text_ellipsis()
                     .text_color(rgb(theme::MUTED))
-                    .child(hint),
+                    .child(crate::identity::APP_NAME),
             )
             .child(self.tool_btn(
                 "tool-delete",
                 IconKind::Delete,
                 "Delete snip  Delete",
                 false,
-                has_selected && sheet == Sheet::None,
+                has_selected && matches!(view, View::Library),
                 {
                     let state = state.clone();
                     move |_, cx| {
                         state.update(cx, |s, cx| s.delete_selected(cx));
                     }
                 },
-                cx,
             ))
             .child(self.tool_btn(
                 "tool-settings",
                 IconKind::Settings,
                 "Settings  Ctrl+,",
-                sheet == Sheet::Settings,
+                matches!(view, View::Settings),
                 true,
                 {
                     let entity = cx.entity();
                     move |_, cx| {
                         entity.update(cx, |this, cx| {
-                            this.sheet = if this.sheet == Sheet::Settings {
-                                Sheet::None
+                            this.unzoom();
+                            this.view = if matches!(this.view, View::Settings) {
+                                View::Library
                             } else {
-                                Sheet::Settings
+                                View::Settings
                             };
                             cx.notify();
                         });
                     }
                 },
-                cx,
             ))
     }
 
@@ -358,22 +428,8 @@ impl MainWindow {
         active: bool,
         enabled: bool,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
-        cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let entity = cx.entity();
-        icon_btn(
-            id,
-            kind,
-            active,
-            enabled,
-            on_click,
-            move |hovered, _, cx| {
-                entity.update(cx, |this, cx| {
-                    this.toolbar_hint = hovered.then(|| SharedString::from(hint));
-                    cx.notify();
-                });
-            },
-        )
+        icon_btn(id, kind, hint, active, enabled, on_click)
     }
 
     fn render_footer(
@@ -393,494 +449,13 @@ impl MainWindow {
             .child(status_dot(status_kind))
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .text_xs()
+                    .text_ellipsis()
                     .text_color(rgb(theme::MUTED))
                     .child(SharedString::from(status_label)),
             )
-    }
-
-    fn render_draw(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines = self.board.lines.clone();
-        let has_ink = self.board.has_ink();
-
-        div()
-            .id("draw")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::BG_RAISED))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h(px(40.))
-                    .px_4()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(theme::BORDER))
-                    .child(section_label("Draw a formula or note"))
-                    .child(div().flex_1())
-                    .child(ghost_btn("draw-clear", "Clear", has_ink, {
-                        let entity = cx.entity();
-                        move |_, cx| {
-                            entity.update(cx, |this, cx| {
-                                this.board.lines.clear();
-                                this.board.painting = false;
-                                cx.notify();
-                            });
-                        }
-                    }))
-                    .child(ghost_btn("draw-cancel", "Cancel", true, {
-                        let entity = cx.entity();
-                        move |_, cx| {
-                            entity.update(cx, |this, cx| {
-                                this.sheet = Sheet::None;
-                                cx.notify();
-                            });
-                        }
-                    }))
-                    .child(btn("draw-go", "Recognize", true, has_ink, {
-                        let entity = cx.entity();
-                        move |_, cx| {
-                            entity.update(cx, |this, cx| {
-                                let pts: Vec<Vec<(f32, f32)>> = this
-                                    .board
-                                    .lines
-                                    .iter()
-                                    .map(|line| {
-                                        line.iter()
-                                            .map(|p| (f32::from(p.x), f32::from(p.y)))
-                                            .collect()
-                                    })
-                                    .collect();
-                                if let Some(img) = imgutil::rasterize_strokes(&pts, 3) {
-                                    this.sheet = Sheet::None;
-                                    this.state.update(cx, |s, cx| s.ingest_image(img, cx));
-                                }
-                                cx.notify();
-                            });
-                        }
-                    })),
-            )
-            .child(
-                div()
-                    .id("draw-canvas")
-                    .flex_1()
-                    .min_h_0()
-                    .m_4()
-                    .rounded_md()
-                    .bg(rgb(0xffffff))
-                    .border_1()
-                    .border_color(rgb(theme::BORDER))
-                    .cursor(CursorStyle::Arrow)
-                    .child(
-                        canvas(
-                            move |_, _, _| {},
-                            move |_, _, window, _| {
-                                for points in &lines {
-                                    if points.len() < 2 {
-                                        continue;
-                                    }
-                                    let mut builder = PathBuilder::stroke(px(2.4));
-                                    for (i, p) in points.iter().enumerate() {
-                                        if i == 0 {
-                                            builder.move_to(*p);
-                                        } else {
-                                            builder.line_to(*p);
-                                        }
-                                    }
-                                    if let Ok(path) = builder.build() {
-                                        window.paint_path(path, rgb(theme::TEXT));
-                                    }
-                                }
-                            },
-                        )
-                        .size_full(),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, ev: &MouseDownEvent, _, cx| {
-                            this.board.painting = true;
-                            this.board.lines.push(vec![ev.position]);
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
-                        if !this.board.painting {
-                            return;
-                        }
-                        if let Some(line) = this.board.lines.last_mut() {
-                            line.push(ev.position);
-                        }
-                        cx.notify();
-                    }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.board.painting = false;
-                            cx.notify();
-                        }),
-                    ),
-            )
-    }
-
-    fn render_history(&self, n_docs: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let state = self.state.read(cx);
-        let mut list = div()
-            .id("history")
-            .w(px(196.))
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::BG))
-            .border_r_1()
-            .border_color(rgb(theme::BORDER));
-
-        list = list.child(
-            div()
-                .flex()
-                .items_center()
-                .h(px(36.))
-                .px_3()
-                .child(section_label("Snips"))
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .child(SharedString::from(n_docs.to_string())),
-                ),
-        );
-
-        let mut rows = div()
-            .id("history-rows")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .px_2()
-            .pb_2()
-            .overflow_y_scroll();
-
-        for doc in &state.documents {
-            let id = doc.id;
-            let selected = state.selected == Some(id);
-            let thumb = self.thumbs.get(&id).cloned();
-            let title = doc.first_line();
-            let age = doc.age_label();
-            let state_ent = self.state.clone();
-
-            rows = rows.child(
-                div()
-                    .id(SharedString::from(id.to_string()))
-                    .flex()
-                    .gap_2()
-                    .p_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(theme::accent_soft()))
-                    .when(!selected, |d| d.hover(|d| d.bg(theme::row_hover())))
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        state_ent.update(cx, |s, cx| s.select(id, cx));
-                    })
-                    .child(
-                        div()
-                            .w(px(56.))
-                            .h(px(40.))
-                            .rounded_sm()
-                            .bg(rgb(theme::BG_SUNKEN))
-                            .border_1()
-                            .border_color(rgb(theme::BORDER))
-                            .overflow_hidden()
-                            .when_some(thumb, |d, img_data| {
-                                d.child(
-                                    img(img_data)
-                                        .w(px(56.))
-                                        .h(px(40.))
-                                        .object_fit(gpui::ObjectFit::Cover),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_ellipsis()
-                                    .text_color(rgb(theme::TEXT))
-                                    .child(SharedString::from(title)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(theme::MUTED))
-                                    .child(SharedString::from(age)),
-                            ),
-                    ),
-            );
-        }
-        list.child(rows)
-    }
-
-    fn render_detail(&mut self, capturing: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let (doc, fmt, prefs) = {
-            let state = self.state.read(cx);
-            let Some(doc) = state.selected_doc() else {
-                return empty_state(self.state.clone(), capturing);
-            };
-            (doc.clone(), state.export_fmt(), state.prefs.clone())
-        };
-
-        let source = doc.export(fmt, &prefs);
-        let full = self.fulls.get(&doc.id).cloned();
-        let failed = matches!(doc.status, DocStatus::Failed(_));
-        let recognizing = matches!(doc.status, DocStatus::Recognizing);
-        let can_copy = matches!(doc.status, DocStatus::Ready) && !source.is_empty();
-        let show_orig = prefs.show_original || recognizing;
-        let orig_label = if show_orig {
-            "Hide original"
-        } else {
-            "Show original"
-        };
-        let retry_state = self.state.clone();
-        let fmt_state = self.state.clone();
-        let copy_state = self.state.clone();
-        let age = doc.age_label();
-        let preview = self.preview_element(&doc);
-        let source_bar = if source.is_empty() {
-            match doc.status {
-                DocStatus::Recognizing => "Recognizing…".into(),
-                _ => String::new(),
-            }
-        } else {
-            source.split_whitespace().collect::<Vec<_>>().join(" ")
-        };
-
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::BG_RAISED))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h(px(36.))
-                    .px_4()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(theme::MUTED))
-                            .child(SharedString::from(age)),
-                    )
-                    .child(div().flex_1())
-                    .child(ghost_btn("orig", orig_label, !recognizing, {
-                        let persist = self.state.clone();
-                        move |_, cx| {
-                            persist.update(cx, |s, cx| {
-                                s.update_prefs(cx, |p| p.show_original = !p.show_original);
-                            });
-                        }
-                    })),
-            )
-            .when(show_orig, |d| {
-                d.child(
-                    div().px_4().child(
-                        div()
-                            .w_full()
-                            .h(px(96.))
-                            .rounded_md()
-                            .bg(rgb(theme::BG_SUNKEN))
-                            .border_1()
-                            .border_color(rgb(theme::BORDER))
-                            .overflow_hidden()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(full, |d, img_data| {
-                                d.child(
-                                    img(img_data)
-                                        .w_full()
-                                        .h(px(96.))
-                                        .object_fit(gpui::ObjectFit::Contain),
-                                )
-                            }),
-                    ),
-                )
-            })
-            .when(failed, |d| {
-                d.child(
-                    div()
-                        .mx_4()
-                        .mt_3()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .bg(theme::danger_soft())
-                        .text_color(rgb(theme::DANGER))
-                        .child(div().flex_1().text_xs().child(doc.first_line()))
-                        .child(btn("retry", "Retry", true, true, move |_, cx| {
-                            retry_state.update(cx, |s, cx| s.retry_selected(cx));
-                        })),
-                )
-            })
-            .child(
-                div()
-                    .id("preview")
-                    .flex_1()
-                    .min_h_0()
-                    .m_4()
-                    .p_4()
-                    .rounded_md()
-                    .bg(rgb(theme::BG))
-                    .border_1()
-                    .border_color(rgb(theme::BORDER))
-                    .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(preview),
-            )
-            .child(
-                div()
-                    .px_4()
-                    .pb_4()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .child(segmented(
-                                "fmt-md",
-                                ExportFmt::Markdown.label(),
-                                fmt == ExportFmt::Markdown,
-                                {
-                                    let state = fmt_state.clone();
-                                    move |_, cx| {
-                                        state.update(cx, |s, cx| {
-                                            s.set_format(ExportFmt::Markdown, cx);
-                                        });
-                                    }
-                                },
-                                "fmt-tex",
-                                ExportFmt::Latex.label(),
-                                fmt == ExportFmt::Latex,
-                                {
-                                    move |_, cx| {
-                                        fmt_state.update(cx, |s, cx| {
-                                            s.set_format(ExportFmt::Latex, cx);
-                                        });
-                                    }
-                                },
-                            ))
-                            .child(div().flex_1()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .h(px(36.))
-                            .pl_3()
-                            .pr_1()
-                            .rounded_md()
-                            .bg(theme::accent_soft())
-                            .child(
-                                div()
-                                    .id("copy-bar")
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .font_family("monospace")
-                                    .text_sm()
-                                    .text_ellipsis()
-                                    .text_color(rgb(theme::TEXT))
-                                    .child(SharedString::from(source_bar)),
-                            )
-                            .child(btn("copy", "Copy", true, can_copy, move |_, cx| {
-                                copy_state.update(cx, |s, cx| s.copy_selected(cx));
-                            })),
-                    ),
-            )
-    }
-
-    fn preview_element(&mut self, doc: &crate::doc::Document) -> impl IntoElement {
-        let key = preview_key(doc);
-        let cached = self
-            .previews
-            .get(&doc.id)
-            .filter(|(k, _)| k == &key)
-            .map(|(_, image)| image.clone());
-        let image = if let Some(cached) = cached {
-            cached
-        } else {
-            let image = match preview::document_preview_svg(&doc.blocks) {
-                Ok(Some(svg)) => Some(Arc::new(Image::from_bytes(
-                    ImageFormat::Svg,
-                    svg.into_bytes(),
-                ))),
-                Ok(None) => None,
-                Err(err) => {
-                    eprintln!(
-                        "{}: formula preview failed ({err})",
-                        crate::identity::APP_SLUG
-                    );
-                    None
-                }
-            };
-            self.previews.insert(doc.id, (key, image.clone()));
-            image
-        };
-        if let Some(image) = image {
-            div()
-                .id("preview-svg")
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    img(image)
-                        .max_w_full()
-                        .max_h_full()
-                        .object_fit(gpui::ObjectFit::Contain),
-                )
-        } else {
-            let plain = doc
-                .blocks
-                .iter()
-                .map(|b| b.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            div()
-                .id("preview-plain")
-                .size_full()
-                .text_sm()
-                .text_color(rgb(theme::TEXT))
-                .overflow_y_scroll()
-                .child(SharedString::from(if plain.is_empty() {
-                    match doc.status {
-                        DocStatus::Recognizing => "Recognizing…".into(),
-                        DocStatus::Ready => "No preview yet.".into(),
-                        DocStatus::Failed(_) => String::new(),
-                    }
-                } else {
-                    plain
-                }))
-        }
     }
 }
 
@@ -900,54 +475,4 @@ fn chrome(state: &AppState) -> (theme::StatusKind, String) {
         status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
         EngineStatus::Ready => (theme::StatusKind::Ready, "Ready".into()),
     }
-}
-
-fn preview_key(doc: &crate::doc::Document) -> String {
-    doc.blocks
-        .iter()
-        .filter(|b| b.kind == BlockKind::Formula)
-        .map(|b| b.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .bg(rgb(theme::BG_RAISED))
-        .child(
-            img(app_icon_image())
-                .size(px(72.))
-                .rounded_xl()
-                .object_fit(gpui::ObjectFit::Contain),
-        )
-        .child(
-            div()
-                .text_lg()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::TEXT))
-                .child("Snip the screen"),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(rgb(theme::MUTED))
-                .child("Capture text or formulas, then copy as Markdown or LaTeX."),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .mt_2()
-                .child(btn("empty-snip", "Snip", true, !capturing, move |_, cx| {
-                    state.update(cx, |s, cx| s.request_capture(cx));
-                }))
-                .child(kbd_chip("Ctrl+Shift+S")),
-        )
 }

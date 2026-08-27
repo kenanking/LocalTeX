@@ -1,9 +1,52 @@
-use std::sync::Arc;
-use std::sync::OnceLock;
-
-use gpui::{div, img, prelude::*, px, rgb, App, Image, ImageFormat, SharedString, Window};
+use gpui::{
+    div, img, prelude::*, px, rgb, AnyElement, AnyView, App, Pixels, ScrollHandle, SharedString,
+    Window,
+};
 
 use super::theme;
+
+/// Hover card for icon chrome. GPUI already owns delay / placement /
+/// dismissal via `.tooltip()`; this is only the view it asks for.
+/// Adapted from Waku's tooltip surface (no `shadow_md` on gpui 0.2).
+pub struct Tooltip {
+    label: SharedString,
+}
+
+impl Tooltip {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+        }
+    }
+
+    pub fn build(self, _window: &mut Window, cx: &mut App) -> AnyView {
+        cx.new(|_| self).into()
+    }
+
+    pub fn text(
+        label: impl Into<SharedString>,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        let label = label.into();
+        move |window, cx| Tooltip::new(label.clone()).build(window, cx)
+    }
+}
+
+impl Render for Tooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().pt(px(4.)).pl(px(2.)).child(
+            div()
+                .px(px(7.))
+                .py(px(4.))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .bg(rgb(theme::BG_RAISED))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(self.label.clone()),
+        )
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
@@ -12,77 +55,45 @@ pub enum IconKind {
     Draw,
     Delete,
     Settings,
+    Copy,
+    Zoom,
 }
 
-fn icon_svg(kind: IconKind) -> &'static [u8] {
-    match kind {
-        IconKind::Snip => {
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="#1a1a1a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path stroke-dasharray="3 2.4" d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z"/></svg>"##
-        }
-        IconKind::Upload => {
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="#1a1a1a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 5-5 4 4 3-3 6 6"/><path d="M16 5v5M16 5l-2.2 2.2M16 5l2.2 2.2"/></svg>"##
-        }
-        IconKind::Draw => {
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="#1a1a1a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>"##
-        }
-        IconKind::Delete => {
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="#1a1a1a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M7 7l1 12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2l1-12"/></svg>"##
-        }
-        IconKind::Settings => {
-            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" stroke="#1a1a1a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg>"##
+impl IconKind {
+    pub fn asset_path(self) -> &'static str {
+        match self {
+            Self::Snip => "icons/snip.svg",
+            Self::Upload => "icons/upload.svg",
+            Self::Draw => "icons/draw.svg",
+            Self::Delete => "icons/delete.svg",
+            Self::Settings => "icons/settings.svg",
+            Self::Copy => "icons/copy.svg",
+            Self::Zoom => "icons/zoom.svg",
         }
     }
-}
 
-pub fn app_icon_image() -> Arc<Image> {
-    static ICON: OnceLock<Arc<Image>> = OnceLock::new();
-    ICON.get_or_init(|| {
-        Arc::new(Image::from_bytes(
-            ImageFormat::Svg,
-            crate::icon::APP_ICON_SVG.to_vec(),
-        ))
-    })
-    .clone()
-}
-
-fn icon_image(kind: IconKind) -> Arc<Image> {
-    static CACHE: OnceLock<[Arc<Image>; 5]> = OnceLock::new();
-    let all = CACHE.get_or_init(|| {
-        [
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                icon_svg(IconKind::Snip).to_vec(),
-            )),
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                icon_svg(IconKind::Upload).to_vec(),
-            )),
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                icon_svg(IconKind::Draw).to_vec(),
-            )),
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                icon_svg(IconKind::Delete).to_vec(),
-            )),
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                icon_svg(IconKind::Settings).to_vec(),
-            )),
-        ]
-    });
-    all[kind as usize].clone()
+    #[cfg(test)]
+    const ALL: [Self; 7] = [
+        Self::Snip,
+        Self::Upload,
+        Self::Draw,
+        Self::Delete,
+        Self::Settings,
+        Self::Copy,
+        Self::Zoom,
+    ];
 }
 
 pub fn icon_btn(
     id: impl Into<SharedString>,
     kind: IconKind,
+    hint: impl Into<SharedString>,
     active: bool,
     enabled: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
-    on_hover: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let id = id.into();
+    let hint = hint.into();
     div()
         .id(id)
         .size(px(32.))
@@ -99,10 +110,15 @@ pub fn icon_btn(
         .when(enabled, |d| {
             d.on_click(move |_, window, cx| on_click(window, cx))
         })
-        .on_hover(move |hovered, window, cx| on_hover(*hovered, window, cx))
+        .tooltip(Tooltip::text(hint))
         .child(
-            img(icon_image(kind))
+            // `img()` + AssetSource. GPUI rasters SVG at 2× the file's
+            // width/height; the 96px sources stay sharp when downscaled
+            // into this 18px slot. Do not switch to `svg().path` on this
+            // NVIDIA/Vulkan host until a filled rect actually paints.
+            img(kind.asset_path())
                 .size(px(18.))
+                .flex_shrink_0()
                 .object_fit(gpui::ObjectFit::Contain),
         )
 }
@@ -117,14 +133,17 @@ pub fn checkbox(
     div()
         .id(id)
         .flex()
-        .items_center()
+        .items_start()
         .gap_2()
         .py_1()
+        .min_w_0()
         .cursor_pointer()
         .on_click(move |_, window, cx| on_click(window, cx))
         .child(
             div()
                 .size(px(16.))
+                .mt(px(2.))
+                .flex_shrink_0()
                 .rounded_sm()
                 .border_1()
                 .flex()
@@ -143,8 +162,11 @@ pub fn checkbox(
         )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .text_sm()
                 .text_color(rgb(theme::TEXT))
+                .whitespace_normal()
                 .child(label.into()),
         )
 }
@@ -228,77 +250,70 @@ pub fn kbd_chip(label: impl Into<SharedString>) -> impl IntoElement {
         .child(label.into())
 }
 
-pub fn segmented(
-    left_id: impl Into<SharedString>,
-    left_label: impl Into<SharedString>,
-    left_active: bool,
-    left_click: impl Fn(&mut Window, &mut App) + 'static,
-    right_id: impl Into<SharedString>,
-    right_label: impl Into<SharedString>,
-    right_active: bool,
-    right_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
+pub fn segmented(items: impl IntoIterator<Item = AnyElement>) -> impl IntoElement {
+    let mut row = div()
         .flex()
+        .w_full()
+        .min_w_0()
         .p_1()
         .rounded_md()
         .bg(rgb(theme::BG_SUNKEN))
         .border_1()
-        .border_color(rgb(theme::BORDER))
-        .child(seg_item(left_id, left_label, left_active, left_click))
-        .child(seg_item(right_id, right_label, right_active, right_click))
+        .border_color(rgb(theme::BORDER));
+    for item in items {
+        row = row.child(item);
+    }
+    row
 }
 
-pub fn segmented3(
-    a_id: impl Into<SharedString>,
-    a_label: impl Into<SharedString>,
-    a_active: bool,
-    a_click: impl Fn(&mut Window, &mut App) + 'static,
-    b_id: impl Into<SharedString>,
-    b_label: impl Into<SharedString>,
-    b_active: bool,
-    b_click: impl Fn(&mut Window, &mut App) + 'static,
-    c_id: impl Into<SharedString>,
-    c_label: impl Into<SharedString>,
-    c_active: bool,
-    c_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+pub fn missing_image_slot(width: Pixels, height: Pixels) -> gpui::Div {
     div()
-        .flex()
-        .p_1()
-        .rounded_md()
+        .w(width)
+        .h(height)
+        .rounded_sm()
         .bg(rgb(theme::BG_SUNKEN))
         .border_1()
         .border_color(rgb(theme::BORDER))
-        .child(seg_item(a_id, a_label, a_active, a_click))
-        .child(seg_item(b_id, b_label, b_active, b_click))
-        .child(seg_item(c_id, c_label, c_active, c_click))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .text_color(rgb(theme::MUTED))
+        .child("Image missing")
 }
 
-fn seg_item(
+pub fn seg_item(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
+) -> AnyElement {
     div()
-        .id(id.into())
-        .px_2()
-        .h(px(24.))
-        .flex()
-        .items_center()
-        .rounded_sm()
-        .text_xs()
-        .cursor_pointer()
-        .when(active, |d| {
-            d.bg(rgb(theme::BG_RAISED)).text_color(rgb(theme::TEXT))
-        })
-        .when(!active, |d| {
-            d.text_color(rgb(theme::MUTED))
-                .hover(|d| d.text_color(rgb(theme::TEXT)))
-        })
-        .on_click(move |_, window, cx| on_click(window, cx))
-        .child(label.into())
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .id(id.into())
+                .h(px(24.))
+                .w_full()
+                .px_2()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_sm()
+                .text_xs()
+                .cursor_pointer()
+                .when(active, |d| {
+                    d.bg(rgb(theme::BG_RAISED)).text_color(rgb(theme::TEXT))
+                })
+                .when(!active, |d| {
+                    d.text_color(rgb(theme::MUTED))
+                        .hover(|d| d.text_color(rgb(theme::TEXT)))
+                })
+                .on_click(move |_, window, cx| on_click(window, cx))
+                .child(label.into()),
+        )
+        .into_any()
 }
 
 pub fn status_dot(kind: theme::StatusKind) -> impl IntoElement {
@@ -314,4 +329,224 @@ pub fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(rgb(theme::MUTED))
         .child(text.into())
+}
+
+pub fn settings_nav_item(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    active: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // Outer `flex_1` has no `.id()`: gpui 0.2 does not grow a stateful
+    // (id'd) node. Same wrapper as `seg_item`.
+    div().flex_1().min_w_0().h(px(32.)).child(
+        div()
+            .id(id.into())
+            .h(px(32.))
+            .w_full()
+            .px_3()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_sm()
+            .when(active, |d| {
+                d.bg(theme::accent_soft())
+                    .text_color(rgb(theme::ACCENT))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+            })
+            .when(!active, |d| {
+                d.text_color(rgb(theme::TEXT))
+                    .hover(|d| d.bg(theme::row_hover()))
+            })
+            .on_click(move |_, window, cx| on_click(window, cx))
+            .child(label.into()),
+    )
+}
+
+pub fn settings_card(
+    title: impl Into<SharedString>,
+    children: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .w_full()
+        .min_w_0()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .bg(rgb(theme::BG))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(theme::TEXT))
+                .child(title.into()),
+        )
+        .child(children)
+}
+
+pub fn setting_row(
+    title: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
+    control: impl IntoElement,
+) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(theme::TEXT))
+                        .child(title.into()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .whitespace_normal()
+                        .child(hint.into()),
+                ),
+        )
+        .child(div().w_full().min_w_0().child(control))
+}
+
+/// GPUI 0.2 `overflow_y_scroll` enables wheel scrolling but does not
+/// paint a native thumb. Overlay this on a `relative` parent that
+/// `track_scroll`s the same handle.
+pub fn overlay_y_scrollbar(handle: &ScrollHandle) -> impl IntoElement {
+    let max_y: f32 = handle.max_offset().height.into();
+    let view_h: f32 = handle.bounds().size.height.into();
+    let offset_y: f32 = handle.offset().y.into();
+    let show = max_y > 1.0 && view_h > 1.0;
+    let thumb_h = if show {
+        (view_h * view_h / (view_h + max_y)).clamp(24.0, view_h)
+    } else {
+        0.0
+    };
+    let travel = (view_h - thumb_h).max(0.0);
+    let top = if max_y > 0.0 {
+        (-offset_y / max_y).clamp(0.0, 1.0) * travel
+    } else {
+        0.0
+    };
+
+    if !show {
+        return div().into_any();
+    }
+    div()
+        .id("y-scroll-thumb")
+        .absolute()
+        .top(px(top))
+        .right(px(3.))
+        .w(px(6.))
+        .h(px(thumb_h))
+        .rounded_full()
+        .bg(theme::scrollbar_thumb())
+        .into_any()
+}
+
+pub fn copy_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    preview: impl Into<SharedString>,
+    copied: bool,
+    enabled: bool,
+    on_copy: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let id = id.into();
+    let btn_id = SharedString::from(format!("{id}-btn"));
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .min_w_0()
+        .h(px(24.))
+        .overflow_hidden()
+        .pl_3()
+        .pr_1()
+        .rounded_md()
+        .when(copied, |d| d.bg(theme::accent_soft()))
+        .when(!copied, |d| d.bg(rgb(theme::BG_SUNKEN)))
+        .child(
+            div()
+                .w(px(110.))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(label.into()),
+        )
+        .child(
+            // Outer `flex_1` has no `.id()`: gpui 0.2 does not shrink an
+            // id'd node, so the preview would wrap to two lines.
+            div().flex_1().min_w_0().overflow_hidden().child(
+                div()
+                    .id(id)
+                    .w_full()
+                    .overflow_hidden()
+                    .font_family("monospace")
+                    .text_sm()
+                    .line_height(px(18.))
+                    .truncate()
+                    .text_color(rgb(theme::TEXT))
+                    .child(preview.into()),
+            ),
+        )
+        .child(
+            div()
+                .id(btn_id)
+                .size(px(24.))
+                .rounded_sm()
+                .flex()
+                .items_center()
+                .justify_center()
+                .flex_shrink_0()
+                .when(enabled, |d| d.cursor_pointer())
+                .when(!enabled, |d| d.opacity(0.38))
+                .when(copied, |d| d.bg(theme::accent_soft()))
+                .when(enabled && !copied, |d| {
+                    d.hover(|d| d.bg(theme::row_hover()))
+                })
+                .when(enabled, |d| {
+                    d.on_click(move |_, window, cx| on_copy(window, cx))
+                })
+                .tooltip(Tooltip::text(if copied { "Copied" } else { "Copy" }))
+                .child(
+                    img(IconKind::Copy.asset_path())
+                        .size(px(14.))
+                        .flex_shrink_0()
+                        .object_fit(gpui::ObjectFit::Contain),
+                ),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IconKind;
+    use crate::icon::Assets;
+    use gpui::AssetSource;
+
+    #[test]
+    fn every_toolbar_kind_has_an_embedded_asset() {
+        for kind in IconKind::ALL {
+            let path = kind.asset_path();
+            assert!(
+                Assets.load(path).expect("load").is_some(),
+                "missing embedded icon: {path}"
+            );
+        }
+    }
 }

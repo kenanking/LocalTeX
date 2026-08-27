@@ -13,6 +13,8 @@ use ort::value::{DynValue, Tensor};
 use super::imgops::{self, RgbImg};
 use super::text::clean_special_tokens;
 
+type KvCache = Vec<(DynValue, DynValue)>;
+
 const BOS: i64 = 0;
 const EOS: i64 = 2;
 const PAD: i64 = 1;
@@ -130,11 +132,15 @@ pub(super) struct RecognizeOut {
 
 impl UniRec {
     pub fn new(encoder: Session, decoder: Session, tokenizer: Tokenizer) -> Result<Self> {
-        // The decoder must be the KV-v2 build: per-layer cross_kt_l/cross_v_l
-        // inputs and a transposed self-attention K cache [b,6,128,past].
+        // Ship decoder: GQA + per-layer cross_kt_l / cross_v_l.
         if !decoder.inputs().iter().any(|i| i.name() == "cross_kt_0") {
             return Err(anyhow!(
-                "decoder is not the KV-v2 build; rebuild models/ship via scripts/build_ship_pipeline.py"
+                "decoder is not the GQA ship; expected input cross_kt_0"
+            ));
+        }
+        if !decoder.inputs().iter().any(|i| i.name() == "seqlens_k") {
+            return Err(anyhow!(
+                "decoder is not the GQA ship; expected input seqlens_k"
             ));
         }
         let mut num_layers = 0usize;
@@ -199,6 +205,11 @@ impl UniRec {
         }
         if !has("logits", false) {
             return Err(anyhow!("decoder missing logits output"));
+        }
+        for name in ["seqlens_k", "total_seq_len"] {
+            if !has(name, true) {
+                return Err(anyhow!("GQA decoder missing input {}", name));
+            }
         }
         Ok(Self {
             encoder,
@@ -286,7 +297,7 @@ impl UniRec {
         past_len: usize,
         enc: &EncodedImage,
         past: &[(DynValue, DynValue)],
-    ) -> Result<(i64, Vec<(DynValue, DynValue)>, f64)> {
+    ) -> Result<(i64, KvCache, f64)> {
         let input_ids = Tensor::from_array((vec![1i64, 1], vec![token]))?;
         let position_ids = Tensor::from_array((vec![1i64, 1], vec![PAD + 1 + past_len as i64]))?;
 
@@ -308,6 +319,11 @@ impl UniRec {
             inputs.push((Cow::from(format!("past_key_{}", i)), k.into()));
             inputs.push((Cow::from(format!("past_value_{}", i)), v.into()));
         }
+        // s = 1 decode step: last-key index = past, total = past + 1.
+        let seqlens_k = Tensor::from_array((vec![1i64], vec![past_len as i32]))?;
+        let total_seq_len = Tensor::from_array((vec![1i64], vec![past_len as i32 + 1]))?;
+        inputs.push((Cow::from("seqlens_k"), seqlens_k.into()));
+        inputs.push((Cow::from("total_seq_len"), total_seq_len.into()));
 
         let t0 = std::time::Instant::now();
         let mut outputs = self.decoder.run(inputs)?;
@@ -321,10 +337,10 @@ impl UniRec {
         let mut new_past = Vec::with_capacity(self.num_layers);
         for i in 0..self.num_layers {
             let pk = outputs
-                .remove(&format!("present_key_{}", i))
+                .remove(format!("present_key_{}", i))
                 .ok_or_else(|| anyhow!("missing present_key_{}", i))?;
             let pv = outputs
-                .remove(&format!("present_value_{}", i))
+                .remove(format!("present_value_{}", i))
                 .ok_or_else(|| anyhow!("missing present_value_{}", i))?;
             new_past.push((pk, pv));
         }
@@ -339,8 +355,8 @@ impl UniRec {
         for _ in 0..self.num_layers {
             let empty: Vec<f32> = Vec::new();
             let (h, d) = (self.num_heads as i64, self.head_dim as i64);
-            // past_key is stored transposed: [1,6,128,0]; past_value: [1,6,0,128].
-            let k: DynValue = Tensor::from_array((vec![1i64, h, d, 0], empty.clone()))?.into();
+            // GQA past_key / past_value: [1, heads, 0, dim].
+            let k: DynValue = Tensor::from_array((vec![1i64, h, 0, d], empty.clone()))?.into();
             let v: DynValue = Tensor::from_array((vec![1i64, h, 0, d], empty))?.into();
             past.push((k, v));
         }

@@ -37,14 +37,14 @@ Do not scatter `"Texpix"` / `"texpix"` (legacy) or invent a new name.
 
 ## Target matrix
 
-GPUI already owns windows / GPU / input. Only OS-owned services use `#[cfg(target_os)]`. Overlay and `AppState` must not `cfg`.
+GPUI already owns windows / GPU / input. Only OS-owned services use `#[cfg(target_os)]`. Snip overlay lives in `desktop::select_region`; `AppState` must not `cfg`.
 
-| Target | Capture | Global hotkey | Tray | Status |
-|---|---|---|---|---|
-| Linux X11 | xcap | `global-hotkey` | `ksni` | Supported (this host) |
-| Windows | xcap (WGC) | `global-hotkey` on UI thread | `tray-icon` | Next test machine |
-| macOS | xcap | same as Windows | `tray-icon` | Compile path only |
-| Linux Wayland | incomplete in xcap | no standard API | — | **Out of scope** |
+| Target | Capture | Snip UI | Global hotkey | Tray | Status |
+|---|---|---|---|---|---|
+| Linux X11 | xcap | x11rb override-redirect (`desktop/x11_snip.rs`) | `global-hotkey` | `ksni` | Supported (this host) |
+| Windows | xcap (WGC) | **not implemented** | `global-hotkey` on UI thread | `tray-icon` | Next test machine |
+| macOS | xcap | **not implemented** | same as Windows | `tray-icon` | Compile path only |
+| Linux Wayland | incomplete in xcap | — | no standard API | — | **Out of scope** |
 
 - Do not switch capture to GPUI `ScreenCaptureSource` / Zed `scap` (those are live streams). Keep **xcap** for a one-shot freeze-frame. Do not shell-out to ffmpeg from the app.
 - `GlobalHotKeyManager` is created inside `Application::run` on the GPUI UI thread. Do not `thread::spawn` the manager (Windows needs that thread's win32 loop; macOS needs main). Event `recv` may still be forwarded off-thread onto `DesktopCmd`.
@@ -54,33 +54,40 @@ GPUI already owns windows / GPU / input. Only OS-owned services use `#[cfg(targe
 
 ## GPUI
 
-Follow Zed's GPUI discipline, adapted to **gpui 0.2** in this repo. For *what* a polished native GPUI client feels like (theme tokens, empty state, menus), [Waku](https://github.com/egoist/waku) is a useful peer. Do **not** copy Waku's daemon/workspace split — LocalTeX stays one process.
+Follow Zed's GPUI discipline, adapted to **gpui 0.2** in this repo. For *how* a polished GPUI client writes UI (assets, icons, frame budget, theme tokens), [Waku](https://github.com/egoist/waku) is the peer to read — not its layout, and **not** its daemon/workspace split. LocalTeX stays one process on crates.io `gpui 0.2` (Waku tracks a Zed git fork; `WindowOptions.icon` and some `svg()` paths are newer than we have).
+
+Waku icon traps (paid for here, do not cargo-cult):
+
+- In-app chrome: Waku uses `svg().path("icons/foo.svg")` + `AssetSource` (`include_bytes!` map) so GPUI paints an **alpha mask at device DPI**, tinted with `text_color`. Polychrome file-type marks use `img(path)` so authored colors survive. Sources are Lucide-style `viewBox="0 0 24 24"` with **no** `width`/`height`.
+- This NVIDIA/Vulkan host: `svg()` + `AssetSource` **loads** but does **not paint** (even a filled rect). Toolbar icons stay `img("icons/*.svg")` with a large declared size (96) so the 2× raster downscales into the 18px slot. Do not reintroduce `svg()` until a probe rect is visibly drawn. The empty-state app tile is polychrome: `img("icon.svg")` stays blank here — keep `Image::from_bytes(ImageFormat::Svg, APP_ICON_SVG)`.
+- Toolbar hints: GPUI already owns hover delay/placement via `.tooltip()`. Do not swap the topbar brand label for a hint string. The tooltip view lives in `widgets.rs` (gpui 0.2 has no `shadow_md`).
+- App/window icon: Waku embeds a PNG and passes `WindowOptions.icon` (Linux X11). gpui 0.2 has no that field. Linux identity stays `.desktop` + hicolor from `src/icon.rs`. Windows later: PE `.ico` via `build.rs` (Waku's `embed_resource` pattern), not a GPUI bump.
 
 - `cx` is last (after `window` when present). Callbacks come after `cx`.
 - Do not nest `entity.update` while that entity is already being updated (panic).
 - After mutating view state, call `cx.notify()`.
 - `cx.spawn` is the UI thread; OCR / capture go in `cx.background_spawn`. Store or `.detach()` tasks you intend to keep alive.
 - Never block `render` with I/O. Image/SVG caches on `MainWindow` are the allowed pattern.
-- Actions live in `src/actions.rs`. Overlay keys must stay scoped to `key_context("Overlay")`.
+- Actions live in `src/actions.rs`.
 - Comments only for non-obvious *why*. Prefer extending an existing file over adding a tiny new one.
 - Prefer `?` over `unwrap()`. New modules: `foo.rs`, not `foo/mod.rs` (except `desktop/` and `ocr/`, which already split backends).
 - Accent color is for actions and selection, not chrome. Status is a dot **plus** a text label (never color alone).
 
 UI / overlay traps (already paid for):
 
-- Overlay is `WindowKind::Normal`. Linux fullscreen is `_NET_WM_STATE ADD` in `desktop::raise_overlay` (`overlay_window_bounds` is Windowed). Do **not** `toggle_fullscreen` after map — GPUI's X11 hint is TOGGLE, `is_fullscreen()` is stale, and a second toggle cancels the first. Close overlay **before** restoring the main window (`cx.defer`).
-- Linux reuses one overlay GPUI window (unmap on dismiss, map on next snip). Destroying and opening a second X11 window in the same process often gets no XI2/focus. Session API: `arm_overlay` / `raise_overlay` / `park_overlay`. Raises no-op after park so in-flight retries cannot map a parked overlay back.
+- Do **not** `open_window` a second GPUI/Vulkan window for capture. On this NVIDIA host a second swapchain presents as Xid 31 (`FAULT_PDE` @ `0xC000`) and blade aborts.
+- Linux snip UI is an **override-redirect X11 window** on its own x11rb connection (`desktop/x11_snip.rs`), not the GPUI main window. That overlay connection must not `_NET_ACTIVE_WINDOW` or `ConfigureWindow` GPUI's XID (races XI2, `RefCell already borrowed`). Hide-before-grab is a separate root ClientMessage: `_NET_WM_STATE ADD HIDDEN` (`linux::iconify_main_window`). GPUI's ICCCM `WM_CHANGE_STATE` iconify is not enough on GNOME; wait until unmapped/hidden before xcap.
+- Do **not** paint the freeze-frame inside the decorated main window (GNOME `_NET_WORKAREA` excludes the panel/dock; 1:1 shot then shifts up and leaves a black corner).
 - Do **not** set `CursorStyle::Crosshair` (X11 can leak the cursor after destroy; cheap insurance on Win/mac too).
-- Freeze-frame is **physical pixels, 1:1**. Never `ObjectFit::Fill` a full-monitor shot into `_NET_WORKAREA`. Windows DPI uses GPUI's `scale_factor()`, not a second manual scale.
-- Tiny click on the overlay cancels (Mathpix-style). Do not early-return and leave the overlay up.
+- Freeze-frame is **physical pixels, 1:1** (RandR/root). `capture::stitch` builds the virtual desktop; the overlay sits at that origin. Library previews stay on `gpu_display_image` (long edge 1024). Crop from the original `RgbaImage`. Tiny click on the overlay cancels (Mathpix-style). Ungrab pointer/keyboard in `Drop`.
 
 ## OCR and binary size
 
 - ONNX weights stay **on disk**, not in the ELF. Do not `include_bytes!` models.
-- OCR is `Engine` in `src/ocr/mod.rs`. It is OpenDoc-0.1B: **PP-DocLayoutV2** (`src/ocr/layout.rs`) + **UniRec-0.1B** (`src/ocr/unirec.rs`), orchestrated by `src/ocr/pipeline.rs` which emits `doc::Block`s (formula labels → `BlockKind::Formula` with `$`/`$$` stripped so prefs/preview still wrap; tables stay `Text` HTML). Decoder **must** be KV-v2 (`cross_kt_0` input). Intra-op threads default **8**. Dark images invert if mean luma < 128 inside the pipeline — do **not** also invert in `imgutil`. Page-chrome labels are skipped before UniRec. Layout already has reading order. Missing ship files: app still starts, status shows missing, snip OCR returns `Err` (no dummy blocks). Do not add RapidOCR / FormulaNet / SLANet / PP-OCRv6 back, and do not reintroduce RecItem/markdown-file assembly.
-- Keep `ort` `download-binaries` (static ONNX Runtime). Do not switch to a system `libonnxruntime.so` for “smaller binary.” Need **ort 2.0.0-rc.13** for MatMulNBits + the KV-v2 decoder. Do not drop below rc.13.
+- OCR is `Engine` in `src/ocr/mod.rs`. It is OpenDoc-0.1B: **PP-DocLayoutV2** (`src/ocr/layout.rs`) + **UniRec-0.1B** (`src/ocr/unirec.rs`), orchestrated by `src/ocr/pipeline.rs` which emits `doc::Block`s (formula labels → `BlockKind::Formula` with `$`/`$$` stripped so prefs/preview still wrap; table labels → `BlockKind::Table` HTML, converted to Markdown / LaTeX / TSV on copy). Ship contract only: layout freeze-fold (image-only, boxes in 800-space, output `[N,8]`) and **GQA** decoder (`cross_kt_0` + `seqlens_k`; past `[b,heads,len,dim]`). Reject older KV-v2 / `im_shape` weights at load. Stay on **V2**. Intra-op threads default to `clamp(cores/2, 2, 4)` with spinning **off**; override `LOCALTEX_INTRA_THREADS` / `LOCALTEX_SPINNING=1` (also accepts `OPENDOC_*`). Dark images invert if mean luma < 128 inside the pipeline — do **not** also invert in `imgutil`. Snips larger than **24 MP** are downscaled at ingest (`imgutil::cap_megapixels`) so OCR boxes match the stored PNG. Page-chrome labels are skipped before UniRec. Layout already has reading order. Missing ship files: app still starts, status shows missing, snip OCR returns `Err` (no dummy blocks). Do not add RapidOCR / FormulaNet / SLANet / PP-OCRv6 back, and do not reintroduce RecItem/markdown-file assembly.
+- Keep `ort` `download-binaries` (static ONNX Runtime). Do not switch to a system `libonnxruntime.so` for “smaller binary.” Need **ort 2.0.0-rc.13** for MatMulNBits + GQA. Do not drop below rc.13.
 - UniRec / DocLayoutV2 inference is **CPU only**.
-- Do **not** eager-load ONNX at startup. Ship weights are ~244 MB on disk (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`) and become large anonymous RSS once `Session` is created. Install with `./scripts/download-models.sh` (GitHub release `v0.0.0`, asset `opendoc-0.1b-ship.tar.gz`) into `$LOCALTEX_MODELS` or `dirs::data_local_dir()/localtex/models`. `manifest.json` in that tarball records the ship strategy (int8/WOQ + decoder KV-v2). Sessions are created on the first snip (`Engine` + `Mutex<Option<Pipeline>>`). Do not `commit_from_file` in `Engine::load`.
+- Do **not** eager-load ONNX at startup. Ship weights are ~244 MB on disk (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`) and become large anonymous RSS once `Session` is created. Install with `./scripts/download-models.sh` (GitHub release `v0.0.0`, asset `opendoc-0.1b-ship.tar.gz`) into `$LOCALTEX_MODELS` or `dirs::data_local_dir()/localtex/models`. `manifest.json` records INT8 + layout freeze-fold + GQA. Sessions are created on the first snip (`Engine` + `Mutex<Option<Pipeline>>`). Do not `commit_from_file` in `Engine::load`. Rebuild ship weights from the ocr-pipeline `models/ship` pipeline (`scripts/build_ship_pipeline.py`). Do not swap in PP-DocLayoutV3.
 - Release profile already uses thin LTO + strip. Do not add UPX unless asked.
 
 ## Host-only files

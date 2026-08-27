@@ -88,14 +88,29 @@ fn ship_present(dir: &Path) -> bool {
 }
 
 fn load_pipeline(dir: &Path) -> Result<Pipeline> {
-    let intra = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(8)
-        .clamp(1, 8);
+    let intra = default_intra();
     eprintln!("{APP_SLUG}: loading OpenDoc ship ({intra} intra-op threads)");
     let pipeline = Pipeline::load(dir, intra)?;
     eprintln!("{APP_SLUG}: loaded PP-DocLayoutV2 + UniRec-0.1B");
     Ok(pipeline)
+}
+
+/// ORT binds thread pools at session commit. Default: at most half the
+/// cores, clamped to [2, 4] — decode is bandwidth-bound; 4 vs 8 costs ~5%
+/// latency and keeps the desktop responsive. Override with
+/// `LOCALTEX_INTRA_THREADS` (or `OPENDOC_INTRA_THREADS`).
+fn default_intra() -> usize {
+    for key in ["LOCALTEX_INTRA_THREADS", "OPENDOC_INTRA_THREADS"] {
+        if let Ok(v) = std::env::var(key) {
+            if let Ok(n) = v.parse::<usize>() {
+                return n.max(1);
+            }
+        }
+    }
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    (cores / 2).clamp(2, 4)
 }
 
 fn rgba_to_rgb(image: &RgbaImage) -> Result<RgbImg> {
@@ -132,6 +147,13 @@ mod tests {
         let text = to_doc_block("text", [0.0, 0.0, 10.0, 10.0], "hello").expect("text");
         assert_eq!(text.kind, BlockKind::Text);
         assert_eq!(text.text, "hello");
+        let table = to_doc_block(
+            "table",
+            [0.0, 0.0, 10.0, 10.0],
+            "<table><tr><td>a</td></tr></table>",
+        )
+        .expect("table");
+        assert_eq!(table.kind, BlockKind::Table);
         assert!(to_doc_block("text", [0.0, 0.0, 10.0, 10.0], "  ").is_none());
     }
 

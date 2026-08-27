@@ -149,40 +149,40 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
     let t0 = std::time::Instant::now();
     let orig_h = image.h as f32;
     let orig_w = image.w as f32;
-    let scale_h = 800.0 / orig_h;
-    let scale_w = 800.0 / orig_w;
 
     // Resize original to exactly 800x800 (aspect-distorting, cv2 INTER_LINEAR).
     let resized = imgops::resize(image, 800, 800, FilterType::Bilinear)?;
 
     // NCHW f32, /255 only.
-    let mut blob = vec![0f32; 3 * 800 * 800];
-    for y in 0..800usize {
-        for x in 0..800usize {
-            let o = (y * 800 + x) * 3;
-            blob[0 * 800 * 800 + y * 800 + x] = resized.data[o] as f32 / 255.0;
-            blob[1 * 800 * 800 + y * 800 + x] = resized.data[o + 1] as f32 / 255.0;
-            blob[2 * 800 * 800 + y * 800 + x] = resized.data[o + 2] as f32 / 255.0;
+    const SIDE: usize = 800;
+    const PLANE: usize = SIDE * SIDE;
+    let mut blob = vec![0f32; 3 * PLANE];
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let o = (y * SIDE + x) * 3;
+            let i = y * SIDE + x;
+            blob[i] = resized.data[o] as f32 / 255.0;
+            blob[PLANE + i] = resized.data[o + 1] as f32 / 255.0;
+            blob[2 * PLANE + i] = resized.data[o + 2] as f32 / 255.0;
         }
     }
 
-    let im_shape = Tensor::from_array((vec![1i64, 2], vec![800.0f32, 800.0]))?;
     let image_t = Tensor::from_array((vec![1i64, 3, 800, 800], blob))?;
-    let scale_factor = Tensor::from_array((vec![1i64, 2], vec![scale_h, scale_w]))?;
-
+    if session.inputs().iter().any(|i| i.name() == "im_shape") {
+        return Err(anyhow!(
+            "layout.onnx is not the freeze-fold ship (unexpected im_shape input)"
+        ));
+    }
     let out_name = session
         .outputs()
         .first()
         .ok_or_else(|| anyhow!("layout model has no outputs"))?
         .name()
         .to_string();
-    let outputs = session.run(ort::inputs! {
-        "im_shape" => im_shape,
-        "image" => image_t,
-        "scale_factor" => scale_factor
-    })?;
+    let outputs = session.run(ort::inputs! { "image" => image_t })?;
 
     let (shape, data) = outputs[out_name.as_str()].try_extract_tensor::<f32>()?;
+    // V2 freeze-fold: [N,8] = (label, score, x1, y1, x2, y2, order, unused) in 800-space.
     if shape.len() != 2 || shape[1] != 8 {
         return Err(anyhow!("unexpected layout output shape {:?}", shape));
     }
@@ -200,11 +200,15 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
             .get(class_id as usize)
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("class_{}", class_id));
+        let x1 = row[2] * orig_w / 800.0;
+        let y1 = row[3] * orig_h / 800.0;
+        let x2 = row[4] * orig_w / 800.0;
+        let y2 = row[5] * orig_h / 800.0;
         let coord = [
-            row[2].clamp(0.0, orig_w),
-            row[3].clamp(0.0, orig_h),
-            row[4].clamp(0.0, orig_w),
-            row[5].clamp(0.0, orig_h),
+            x1.clamp(0.0, orig_w),
+            y1.clamp(0.0, orig_h),
+            x2.clamp(0.0, orig_w),
+            y2.clamp(0.0, orig_h),
         ];
         boxes.push(DetBox {
             label,
