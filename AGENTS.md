@@ -42,7 +42,7 @@ GPUI already owns windows / GPU / input. Only OS-owned services use `#[cfg(targe
 | Target | Capture | Snip UI | Global hotkey | Tray | Status |
 |---|---|---|---|---|---|
 | Linux X11 | xcap | x11rb override-redirect (`desktop/x11_snip.rs`) | `global-hotkey` | `ksni` | Supported (this host) |
-| Windows | xcap (WGC) | **not implemented** | `global-hotkey` on UI thread | `tray-icon` | Next test machine |
+| Windows | xcap (WGC) | per-monitor Win32 (`desktop/win_snip.rs`) | `global-hotkey` on UI thread | `tray-icon` | Dual-monitor / mixed DPI |
 | macOS | xcap | **not implemented** | same as Windows | `tray-icon` | Compile path only |
 | Linux Wayland | incomplete in xcap | — | no standard API | — | **Out of scope** |
 
@@ -61,7 +61,7 @@ Waku icon traps (paid for here, do not cargo-cult):
 - In-app chrome: Waku uses `svg().path("icons/foo.svg")` + `AssetSource` (`include_bytes!` map) so GPUI paints an **alpha mask at device DPI**, tinted with `text_color`. Polychrome file-type marks use `img(path)` so authored colors survive. Sources are Lucide-style `viewBox="0 0 24 24"` with **no** `width`/`height`.
 - This NVIDIA/Vulkan host: `svg()` + `AssetSource` **loads** but does **not paint** (even a filled rect). Toolbar icons stay `img("icons/*.svg")` with a large declared size (96) so the 2× raster downscales into the 18px slot. Do not reintroduce `svg()` until a probe rect is visibly drawn. The empty-state app tile is polychrome: `img("icon.svg")` stays blank here — keep `Image::from_bytes(ImageFormat::Svg, APP_ICON_SVG)`.
 - Toolbar hints: GPUI already owns hover delay/placement via `.tooltip()`. Do not swap the topbar brand label for a hint string. The tooltip view lives in `widgets.rs` (gpui 0.2 has no `shadow_md`).
-- App/window icon: Waku embeds a PNG and passes `WindowOptions.icon` (Linux X11). gpui 0.2 has no that field. Linux identity stays `.desktop` + hicolor from `src/icon.rs`. Windows later: PE `.ico` via `build.rs` (Waku's `embed_resource` pattern), not a GPUI bump.
+- App/window icon: Waku embeds a PNG and passes `WindowOptions.icon` (Linux X11). gpui 0.2 has no that field. Linux identity stays `.desktop` + hicolor from `src/icon.rs`. Windows: PE `1 ICON` via `build.rs` (`embed-resource`); GPUI `load_icon` reads resource id 1. Do **not** add a second `RT_MANIFEST` (gpui already embeds PerMonitorV2).
 
 - `cx` is last (after `window` when present). Callbacks come after `cx`.
 - Do not nest `entity.update` while that entity is already being updated (panic).
@@ -77,6 +77,7 @@ UI / overlay traps (already paid for):
 
 - Do **not** `open_window` a second GPUI/Vulkan window for capture. On this NVIDIA host a second swapchain presents as Xid 31 (`FAULT_PDE` @ `0xC000`) and blade aborts.
 - Linux snip UI is an **override-redirect X11 window** on its own x11rb connection (`desktop/x11_snip.rs`), not the GPUI main window. That overlay connection must not `_NET_ACTIVE_WINDOW` or `ConfigureWindow` GPUI's XID (races XI2, `RefCell already borrowed`). Hide-before-grab is a separate root ClientMessage: `_NET_WM_STATE ADD HIDDEN` (`linux::iconify_main_window`). GPUI's ICCCM `WM_CHANGE_STATE` iconify is not enough on GNOME; wait until unmapped/hidden before xcap.
+- Windows snip UI is **one Win32 popup per monitor** (`desktop/win_snip.rs`), physical pixels, matching `capture::stitch`. Place each HWND from the **same `Grab` list** that built the stitch (bitmap size, not a second `Monitor::all()`). Each overlay paints a **monitor-local** DIB at 1:1; do **not** `StretchDIBits` a shared canvas with image-top `nYSrc` (GDI measures source Y from the DIB lower-left, which swaps stacked monitors). Do not span mixed-DPI monitors with a single HWND. Recreate overlays every snip; do **not** restart the process on display plug/unplug the way Mathpix/Qt does. `WM_DISPLAYCHANGE` during a snip cancels that snip. Wait ~280ms after GPUI minimize before WGC. xcap's Windows WGC path is the `wgc` feature (not default).
 - Do **not** paint the freeze-frame inside the decorated main window (GNOME `_NET_WORKAREA` excludes the panel/dock; 1:1 shot then shifts up and leaves a black corner).
 - Do **not** set `CursorStyle::Crosshair` (X11 can leak the cursor after destroy; cheap insurance on Win/mac too).
 - Freeze-frame is **physical pixels, 1:1** (RandR/root). `capture::stitch` builds the virtual desktop; the overlay sits at that origin. Library previews stay on `gpu_display_image` (long edge 1024). Crop from the original `RgbaImage`. Tiny click on the overlay cancels (Mathpix-style). Ungrab pointer/keyboard in `Drop`.

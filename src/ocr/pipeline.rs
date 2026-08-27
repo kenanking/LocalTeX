@@ -189,15 +189,23 @@ pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Bl
     } else {
         BlockKind::Text
     };
-    let text = if kind == BlockKind::Formula {
-        strip_math_wrappers(text)
-    } else {
-        text.to_string()
-    };
-    if text.is_empty() {
-        return None;
+    let mut block = Block::new(kind, bbox_to_rect(coord), text);
+    if kind == BlockKind::Formula {
+        let (body, from_dollars) = crate::math::unwrap_formula(&block.text);
+        if body.is_empty() {
+            return None;
+        }
+        block.text = body;
+        block.display = from_dollars
+            || base.contains("display_formula")
+            || crate::math::is_display_body(&block.text);
+    } else if kind == BlockKind::Text {
+        block.text = crate::math::canonicalize_mixed_text(&block.text);
+        if block.text.is_empty() {
+            return None;
+        }
     }
-    Some(Block::new(kind, bbox_to_rect(coord), text))
+    Some(block)
 }
 
 fn region_area(coord: [f32; 4]) -> f32 {
@@ -245,19 +253,6 @@ fn bbox_to_rect(coord: [f32; 4]) -> Rect {
     let x1 = coord[2].max(0.0).round() as u32;
     let y1 = coord[3].max(0.0).round() as u32;
     Rect::from_points(x0, y0, x1, y1)
-}
-
-pub(super) fn strip_math_wrappers(text: &str) -> String {
-    let t = text.trim();
-    let t = t
-        .strip_prefix("$$")
-        .and_then(|s| s.strip_suffix("$$"))
-        .unwrap_or(t);
-    let t = t
-        .strip_prefix('$')
-        .and_then(|s| s.strip_suffix('$'))
-        .unwrap_or(t);
-    t.trim().to_string()
 }
 
 #[cfg(test)]

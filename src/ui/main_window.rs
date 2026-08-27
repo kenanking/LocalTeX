@@ -1,14 +1,18 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, rgb, App, Context, CursorStyle, Entity, FocusHandle, Focusable, Image,
-    RenderImage, ScrollHandle, SharedString, Window,
+    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
+    Focusable, Image, RenderImage, ScrollHandle, SharedString, Window,
 };
 use uuid::Uuid;
 
 use super::draw::DrawBoard;
+use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
+use super::selectable::PreviewSel;
 use super::settings::SettingsTab;
 use super::theme;
 use super::widgets::{icon_btn, status_dot, IconKind};
@@ -29,6 +33,47 @@ pub(crate) enum View {
     Settings,
 }
 
+pub(crate) struct PreviewPane {
+    pub(crate) vscroll: ScrollHandle,
+    hscrolls: HashMap<String, ScrollHandle>,
+    pub(crate) sel: Rc<RefCell<PreviewSel>>,
+    pub(crate) thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
+    doc: Option<Uuid>,
+    pub(crate) bar_pending: bool,
+}
+
+impl PreviewPane {
+    fn new() -> Self {
+        Self {
+            vscroll: ScrollHandle::new(),
+            hscrolls: HashMap::new(),
+            sel: Rc::new(RefCell::new(PreviewSel::default())),
+            thumb: Rc::new(RefCell::new(None)),
+            doc: None,
+            bar_pending: false,
+        }
+    }
+
+    pub(crate) fn reset_for(&mut self, doc_id: Uuid) {
+        if self.doc == Some(doc_id) {
+            return;
+        }
+        self.vscroll.set_offset(point(px(0.), px(0.)));
+        self.hscrolls.clear();
+        self.thumb.borrow_mut().take();
+        self.doc = Some(doc_id);
+        self.bar_pending = true;
+        self.sel.borrow_mut().clear();
+    }
+
+    pub(crate) fn hscroll_handle(&mut self, key: &str) -> ScrollHandle {
+        self.hscrolls
+            .entry(key.to_string())
+            .or_insert_with(ScrollHandle::new)
+            .clone()
+    }
+}
+
 pub struct MainWindow {
     pub(crate) state: Entity<AppState>,
     focus: FocusHandle,
@@ -45,9 +90,7 @@ pub struct MainWindow {
     pub(crate) orig_hover: bool,
     orig_zoomed: bool,
     zoom_doc: Option<Uuid>,
-    pub(crate) preview_scroll: ScrollHandle,
-    pub(crate) preview_scroll_doc: Option<Uuid>,
-    pub(crate) preview_bar_pending: bool,
+    pub(crate) preview: PreviewPane,
 }
 
 impl MainWindow {
@@ -85,9 +128,7 @@ impl MainWindow {
             orig_hover: false,
             orig_zoomed: false,
             zoom_doc: None,
-            preview_scroll: ScrollHandle::new(),
-            preview_scroll_doc: None,
-            preview_bar_pending: false,
+            preview: PreviewPane::new(),
         }
     }
 
@@ -152,6 +193,10 @@ impl MainWindow {
     }
 
     fn copy(&mut self, _: &CopyExport, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.preview.sel.borrow().selected_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            return;
+        }
         self.state.update(cx, |state, cx| state.copy_selected(cx));
     }
 
@@ -271,6 +316,10 @@ impl gpui::Render for MainWindow {
             .size_full()
             .bg(rgb(theme::BG))
             .text_color(rgb(theme::TEXT))
+            .child(ThumbDragCatcher::new(
+                self.preview.thumb.clone(),
+                cx.entity_id(),
+            ))
             .child(self.render_topbar(capturing, has_selected, cx))
             .child(
                 div()

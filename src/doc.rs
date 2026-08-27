@@ -5,7 +5,10 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::math;
 use crate::table;
+
+pub use crate::math::{split_math, unwrap_formula, MathRun};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockKind {
@@ -65,6 +68,9 @@ pub struct Block {
     pub kind: BlockKind,
     pub bbox: Rect,
     pub text: String,
+    /// Layout `display_formula`, or OCR wrapped the body in `$$`.
+    #[serde(default)]
+    pub display: bool,
 }
 
 impl Block {
@@ -73,6 +79,7 @@ impl Block {
             kind,
             bbox,
             text: text.into(),
+            display: false,
         }
     }
 }
@@ -247,16 +254,6 @@ impl Document {
         snip_kind(&self.blocks)
     }
 
-    pub fn export(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
-        match &self.status {
-            DocStatus::Recognizing => String::new(),
-            DocStatus::Failed(err) => {
-                format!("% {} error: {err}", crate::identity::APP_NAME)
-            }
-            DocStatus::Ready => export_blocks(&self.blocks, fmt, prefs),
-        }
-    }
-
     /// FTS blob: raw block text + Markdown with default delimiters.
     pub fn search_text_for_blocks(blocks: &[Block]) -> String {
         let mut out = String::new();
@@ -277,16 +274,7 @@ impl Document {
             return Vec::new();
         }
         match snip_kind(&self.blocks) {
-            SnipKind::Mixed => vec![
-                CopyRow {
-                    kind: CopyKind::Markdown,
-                    text: self.export(ExportFmt::Markdown, prefs),
-                },
-                CopyRow {
-                    kind: CopyKind::LatexDoc,
-                    text: self.export(ExportFmt::Latex, prefs),
-                },
-            ],
+            SnipKind::Mixed => mixed_copy_rows(&self.blocks, prefs),
             _ => copy_rows(&self.blocks, prefs),
         }
     }
@@ -358,18 +346,20 @@ fn export_block(block: &Block, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> S
     let kind = effective_kind(block);
     match (fmt, kind) {
         (ExportFmt::Markdown, BlockKind::Formula) => {
-            let body = block.text.trim();
-            if body.contains('\n') || body.len() > 48 {
-                prefs.wrap_block(body)
+            let body = unwrap_formula(&block.text).0;
+            if block.display || math::is_display_body(&body) {
+                prefs.wrap_block(&body)
             } else {
-                prefs.wrap_inline(body)
+                prefs.wrap_inline(&body)
             }
         }
         (ExportFmt::Markdown, BlockKind::Table) => table::html_to_markdown(&block.text),
-        (ExportFmt::Markdown, BlockKind::Text) => block.text.clone(),
-        (ExportFmt::Latex, BlockKind::Formula) => prefs.wrap_block(block.text.trim()),
+        (ExportFmt::Markdown, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
+        (ExportFmt::Latex, BlockKind::Formula) => {
+            prefs.wrap_block(unwrap_formula(&block.text).0.trim())
+        }
         (ExportFmt::Latex, BlockKind::Table) => table::html_to_latex(&block.text),
-        (ExportFmt::Latex, BlockKind::Text) => latex_from_text(&block.text, prefs),
+        (ExportFmt::Latex, BlockKind::Text) => emit_text_block(&block.text, fmt, prefs),
     }
 }
 
@@ -385,7 +375,8 @@ fn formula_body(blocks: &[Block]) -> String {
     blocks
         .iter()
         .filter(|b| b.kind == BlockKind::Formula && !b.text.trim().is_empty())
-        .map(|b| b.text.trim())
+        .map(|b| unwrap_formula(&b.text).0)
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" \\\\ ")
 }
@@ -462,21 +453,42 @@ pub fn copy_rows(blocks: &[Block], prefs: &crate::prefs::Prefs) -> Vec<CopyRow> 
             }
             rows
         }
-        SnipKind::Mixed => {
-            let md = export_blocks(blocks, ExportFmt::Markdown, prefs);
-            let tex = export_blocks(blocks, ExportFmt::Latex, prefs);
-            vec![
-                CopyRow {
-                    kind: CopyKind::Markdown,
-                    text: md,
-                },
-                CopyRow {
-                    kind: CopyKind::LatexDoc,
-                    text: tex,
-                },
-            ]
-        }
+        SnipKind::Mixed => mixed_copy_rows(blocks, prefs),
     }
+}
+
+fn mixed_copy_rows(blocks: &[Block], prefs: &crate::prefs::Prefs) -> Vec<CopyRow> {
+    let md = export_blocks(blocks, ExportFmt::Markdown, prefs);
+    let tex = export_blocks(blocks, ExportFmt::Latex, prefs);
+    vec![
+        CopyRow {
+            kind: CopyKind::Markdown,
+            text: md,
+        },
+        CopyRow {
+            kind: CopyKind::LatexDoc,
+            text: tex,
+        },
+    ]
+}
+
+/// Whitespace-collapsed equality matches the copy-row preview string.
+pub fn copy_payload_eq(a: &str, b: &str) -> bool {
+    a.split_whitespace().eq(b.split_whitespace())
+}
+
+pub fn visible_copy_rows(rows: &[CopyRow]) -> Vec<CopyRow> {
+    let md = rows.iter().find(|r| r.kind == CopyKind::Markdown);
+    rows.iter()
+        .filter(|r| {
+            if r.kind == CopyKind::LatexDoc {
+                !md.is_some_and(|m| copy_payload_eq(&m.text, &r.text))
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 fn ready_first_line(blocks: &[Block]) -> String {
@@ -492,12 +504,14 @@ fn ready_first_line(blocks: &[Block]) -> String {
 
 fn table_preview_line(html: &str) -> String {
     if let Some(t) = table::parse_html(html) {
-        let grid = t.grid();
-        let cells: Vec<&str> = grid
+        let slots = t.slot_grid();
+        let cells: Vec<&str> = slots
             .iter()
             .flatten()
-            .map(|s| s.as_str())
-            .filter(|s| !s.is_empty())
+            .filter_map(|s| match s {
+                table::Slot::Origin { text, .. } if !text.is_empty() => Some(text.as_str()),
+                _ => None,
+            })
             .take(4)
             .collect();
         if !cells.is_empty() {
@@ -508,83 +522,25 @@ fn table_preview_line(html: &str) -> String {
     "Table".into()
 }
 
-fn latex_from_text(text: &str, prefs: &crate::prefs::Prefs) -> String {
+fn emit_text_block(text: &str, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
     if table::looks_like_html_table(text) {
-        return table::html_to_latex(text);
+        return match fmt {
+            ExportFmt::Latex => table::html_to_latex(text),
+            ExportFmt::Markdown => table::html_to_markdown(text),
+        };
     }
     let mut out = String::new();
     for run in split_math(text) {
         match run {
-            MathRun::Text(s) => out.push_str(&escape_latex(&s)),
+            MathRun::Text(s) => match fmt {
+                ExportFmt::Latex => out.push_str(&escape_latex(&s)),
+                ExportFmt::Markdown => out.push_str(&s),
+            },
             MathRun::Inline(s) => out.push_str(&prefs.wrap_inline(&s)),
-            MathRun::Display(s) => {
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                out.push_str(&prefs.wrap_block(&s));
-                out.push('\n');
-            }
+            MathRun::Display(s) => out.push_str(&prefs.wrap_block(&s)),
         }
     }
     out
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MathRun {
-    Text(String),
-    Inline(String),
-    Display(String),
-}
-
-/// Split mixed OCR text into prose and `$` / `$$` math.
-pub fn split_math(input: &str) -> Vec<MathRun> {
-    let mut runs = Vec::new();
-    let chars: Vec<char> = input.chars().collect();
-    let mut i = 0usize;
-    let mut buf = String::new();
-    let push_text = |buf: &mut String, runs: &mut Vec<MathRun>| {
-        if !buf.is_empty() {
-            runs.push(MathRun::Text(std::mem::take(buf)));
-        }
-    };
-    while i < chars.len() {
-        if chars[i] == '$' {
-            let display = i + 1 < chars.len() && chars[i + 1] == '$';
-            let delim_len = if display { 2 } else { 1 };
-            if let Some(end) = find_closer(&chars, i + delim_len, display) {
-                push_text(&mut buf, &mut runs);
-                let body: String = chars[i + delim_len..end].iter().collect();
-                if display {
-                    runs.push(MathRun::Display(body.trim().to_string()));
-                } else {
-                    runs.push(MathRun::Inline(body.trim().to_string()));
-                }
-                i = end + delim_len;
-                continue;
-            }
-        }
-        buf.push(chars[i]);
-        i += 1;
-    }
-    push_text(&mut buf, &mut runs);
-    runs
-}
-
-fn find_closer(chars: &[char], start: usize, display: bool) -> Option<usize> {
-    let mut i = start;
-    while i < chars.len() {
-        if chars[i] == '$' {
-            if display {
-                if i + 1 < chars.len() && chars[i + 1] == '$' {
-                    return Some(i);
-                }
-            } else {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
@@ -639,10 +595,6 @@ pub fn escape_latex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dummy_image() -> Arc<RgbaImage> {
-        Arc::new(RgbaImage::new(1, 1))
-    }
 
     fn rect(y: u32) -> Rect {
         Rect {
@@ -727,19 +679,7 @@ mod tests {
         let blocks = vec![Block::new(BlockKind::Table, rect(0), html)];
         assert_eq!(snip_kind(&blocks), SnipKind::Table);
         let prefs = crate::prefs::Prefs::default();
-        let doc = Document {
-            id: Uuid::nil(),
-            created_at: SystemTime::UNIX_EPOCH,
-            image: ImageSlot::Loaded(dummy_image()),
-            blocks: blocks.clone(),
-            status: DocStatus::Ready,
-            first_line: String::new(),
-            thumb_jpeg: Vec::new(),
-            persisted: false,
-            blocks_loaded: true,
-            ocr: None,
-        };
-        let md = doc.export(ExportFmt::Markdown, &prefs);
+        let md = export_blocks(&blocks, ExportFmt::Markdown, &prefs);
         assert!(md.contains("| A | B |"), "{md}");
         let tex = export_blocks(&blocks, ExportFmt::Latex, &prefs);
         assert!(tex.contains("\\begin{tabular}"), "{tex}");
@@ -749,17 +689,40 @@ mod tests {
     }
 
     #[test]
-    fn split_math_inline_and_display() {
-        let runs = split_math("Because $c$ and $$1-c$$.");
+    fn mixed_copy_keeps_latex_row_in_api() {
+        let prefs = crate::prefs::Prefs::default();
+        let blocks = vec![Block::new(
+            BlockKind::Text,
+            rect(0),
+            "A long paragraph without math.",
+        )];
+        let rows = copy_rows(&blocks, &prefs);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, CopyKind::Markdown);
+        assert_eq!(rows[1].kind, CopyKind::LatexDoc);
+        assert_eq!(visible_copy_rows(&rows).len(), 1);
+        let blocks = vec![Block::new(
+            BlockKind::Text,
+            rect(0),
+            r"Hence $$R@K=\frac{1}{N}$$ (11) holds.",
+        )];
+        let rows = copy_rows(&blocks, &prefs);
+        assert_eq!(rows.len(), 2, "API still has both formats");
         assert_eq!(
-            runs,
-            vec![
-                MathRun::Text("Because ".into()),
-                MathRun::Inline("c".into()),
-                MathRun::Text(" and ".into()),
-                MathRun::Display("1-c".into()),
-                MathRun::Text(".".into()),
-            ]
+            visible_copy_rows(&rows).len(),
+            1,
+            "UI hides LaTeX when the preview payload matches Markdown"
+        );
+        let blocks = vec![
+            Block::new(BlockKind::Text, rect(0), "Let "),
+            Block::new(BlockKind::Formula, rect(20), "x_1"),
+        ];
+        let rows = copy_rows(&blocks, &prefs);
+        assert!(
+            visible_copy_rows(&rows)
+                .iter()
+                .any(|r| r.kind == CopyKind::LatexDoc),
+            "LaTeX stays visible when it differs from Markdown"
         );
     }
 }

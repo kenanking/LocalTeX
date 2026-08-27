@@ -15,6 +15,9 @@ pub struct DesktopShot {
     /// Top-left of this canvas on the virtual desktop, in physical pixels.
     pub origin_x: i32,
     pub origin_y: i32,
+    /// Physical rects of the grabs that built this canvas: `(x, y, w, h)`.
+    /// Overlay placement must use these, not a second `Monitor::all()`.
+    pub monitors: Vec<(i32, i32, i32, i32)>,
 }
 
 /// Minimum drag (pixels) that counts as a snip. Smaller = cancel.
@@ -55,10 +58,19 @@ pub fn stitch(grabs: &[Grab]) -> Result<DesktopShot> {
         let dy = i64::from(grab.origin_y) - i64::from(min_y);
         image::imageops::replace(&mut image, &grab.image, dx, dy);
     }
+    let monitors = grabs
+        .iter()
+        .filter_map(|grab| {
+            let w = i32::try_from(grab.image.width()).ok()?;
+            let h = i32::try_from(grab.image.height()).ok()?;
+            (w > 0 && h > 0).then_some((grab.origin_x, grab.origin_y, w, h))
+        })
+        .collect();
     Ok(DesktopShot {
         image,
         origin_x: min_x,
         origin_y: min_y,
+        monitors,
     })
 }
 
@@ -155,6 +167,7 @@ mod tests {
         assert_eq!(shot.image.get_pixel(0, 0).0, [10, 0, 0, 255]);
         assert_eq!(shot.image.get_pixel(4, 0).0, [20, 0, 0, 255]);
         assert_eq!(shot.image.get_pixel(2, 0).0, [0, 0, 0, 255]);
+        assert_eq!(shot.monitors, vec![(0, 0, 2, 2), (4, 0, 2, 2)]);
     }
 
     #[test]

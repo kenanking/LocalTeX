@@ -1,6 +1,5 @@
 use gpui::{
-    div, img, prelude::*, px, relative, rgb, AnyElement, AnyView, App, Pixels, ScrollHandle,
-    SharedString, Window,
+    div, img, prelude::*, px, relative, rgb, AnyElement, AnyView, App, Pixels, SharedString, Window,
 };
 
 use super::theme;
@@ -425,41 +424,6 @@ pub fn setting_row(
         .child(div().w_full().min_w_0().child(control))
 }
 
-/// GPUI 0.2 `overflow_y_scroll` enables wheel scrolling but does not
-/// paint a native thumb. Overlay this on a `relative` parent that
-/// `track_scroll`s the same handle.
-pub fn overlay_y_scrollbar(handle: &ScrollHandle) -> impl IntoElement {
-    let max_y: f32 = handle.max_offset().height.into();
-    let view_h: f32 = handle.bounds().size.height.into();
-    let offset_y: f32 = handle.offset().y.into();
-    let show = max_y > 1.0 && view_h > 1.0;
-    let thumb_h = if show {
-        (view_h * view_h / (view_h + max_y)).clamp(24.0, view_h)
-    } else {
-        0.0
-    };
-    let travel = (view_h - thumb_h).max(0.0);
-    let top = if max_y > 0.0 {
-        (-offset_y / max_y).clamp(0.0, 1.0) * travel
-    } else {
-        0.0
-    };
-
-    if !show {
-        return div().into_any();
-    }
-    div()
-        .id("y-scroll-thumb")
-        .absolute()
-        .top(px(top))
-        .right(px(3.))
-        .w(px(6.))
-        .h(px(thumb_h))
-        .rounded_full()
-        .bg(theme::scrollbar_thumb())
-        .into_any()
-}
-
 pub fn copy_row(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -475,7 +439,7 @@ pub fn copy_row(
         .items_center()
         .gap_2()
         .min_w_0()
-        .h(px(24.))
+        .h(px(36.))
         .overflow_hidden()
         .pl_3()
         .pr_1()
@@ -500,7 +464,7 @@ pub fn copy_row(
                     .overflow_hidden()
                     .font_family("monospace")
                     .text_sm()
-                    .line_height(px(18.))
+                    .line_height(px(20.))
                     .truncate()
                     .text_color(rgb(theme::TEXT))
                     .child(preview.into()),
@@ -509,7 +473,7 @@ pub fn copy_row(
         .child(
             div()
                 .id(btn_id)
-                .size(px(24.))
+                .size(px(28.))
                 .rounded_sm()
                 .flex()
                 .items_center()
@@ -557,7 +521,9 @@ pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
         .child(
             div()
                 .flex_1()
-                .h(px(4.))
+                .h(px(12.))
+                .min_h(px(12.))
+                .flex_shrink_0()
                 .rounded_full()
                 .bg(rgb(theme::BG_SUNKEN))
                 .overflow_hidden()

@@ -1,3 +1,8 @@
+// Explorer (and shortcuts) attach a console to CONSOLE-subsystem PE files.
+// `dev-opt` / `release` inherit `debug_assertions = false`, so those builds
+// are WINDOWS-subsystem. Default `cargo run` stays CONSOLE so logs still print.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod actions;
 mod capture;
 mod desktop;
@@ -5,6 +10,7 @@ mod doc;
 mod icon;
 mod identity;
 mod imgutil;
+mod math;
 mod ocr;
 mod prefs;
 mod preview;

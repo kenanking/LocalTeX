@@ -11,6 +11,8 @@ use crate::identity::APP_SLUG;
 mod linux;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod other;
+#[cfg(target_os = "windows")]
+mod win_snip;
 #[cfg(target_os = "linux")]
 mod x11_snip;
 
@@ -80,8 +82,8 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
-/// Native snip overlay (Linux X11: override-redirect freeze-frame).
-/// Returns `Ok(None)` if the user cancelled. Must run off the GPUI thread.
+/// Native snip overlay. Returns `Ok(None)` if the user cancelled.
+/// Must run off the GPUI thread. Never opens a second GPUI/Vulkan window.
 pub fn select_region(
     shot: &crate::capture::DesktopShot,
 ) -> anyhow::Result<Option<image::RgbaImage>> {
@@ -89,12 +91,14 @@ pub fn select_region(
     {
         x11_snip::select_region(shot)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        win_snip::select_region(shot)
+    }
+    #[cfg(target_os = "macos")]
     {
         let _ = shot;
-        anyhow::bail!(
-            "snip overlay is Linux X11 only for now (Windows/macOS: do not open a second GPUI window)"
-        )
+        anyhow::bail!("snip overlay is not implemented on macOS yet")
     }
 }
 
@@ -113,4 +117,9 @@ pub fn deiconify_main_window() {
 pub fn wait_until_iconified() {
     #[cfg(target_os = "linux")]
     linux::wait_until_iconified();
+    #[cfg(target_os = "windows")]
+    {
+        // GPUI minimize is async; WGC would include the main window otherwise.
+        std::thread::sleep(std::time::Duration::from_millis(280));
+    }
 }

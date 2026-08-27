@@ -129,7 +129,8 @@ fn rgba_to_rgb(image: &RgbaImage) -> Result<RgbImg> {
 mod tests {
     use super::*;
     use crate::doc::BlockKind;
-    use pipeline::{is_formula, strip_math_wrappers, to_doc_block};
+    use crate::math::unwrap_formula;
+    use pipeline::{is_formula, to_doc_block};
 
     #[test]
     fn formula_label_excludes_formula_number() {
@@ -145,6 +146,18 @@ mod tests {
             to_doc_block("display_formula", [0.0, 0.0, 10.0, 10.0], "$$a+b$$").expect("formula");
         assert_eq!(formula.kind, BlockKind::Formula);
         assert_eq!(formula.text, "a+b");
+        assert!(formula.display);
+        let numbered = to_doc_block(
+            "display_formula",
+            [0.0, 0.0, 10.0, 10.0],
+            "$$a+b$$ (1)",
+        )
+        .expect("numbered");
+        assert_eq!(numbered.text, r"a+b \tag{1}");
+        assert!(numbered.display);
+        let inline = to_doc_block("inline_formula", [0.0, 0.0, 10.0, 10.0], "$x$").expect("inline");
+        assert_eq!(inline.text, "x");
+        assert!(!inline.display);
         let text = to_doc_block("text", [0.0, 0.0, 10.0, 10.0], "hello").expect("text");
         assert_eq!(text.kind, BlockKind::Text);
         assert_eq!(text.text, "hello");
@@ -160,8 +173,31 @@ mod tests {
 
     #[test]
     fn strip_display_wrappers() {
-        assert_eq!(strip_math_wrappers("$$a+b$$\n\n"), "a+b");
-        assert_eq!(strip_math_wrappers("$x$"), "x");
+        assert_eq!(unwrap_formula("$$a+b$$\n\n").0, "a+b");
+        assert_eq!(unwrap_formula("$x$").0, "x");
+        assert_eq!(unwrap_formula("$$a+b$$ (1)").0, r"a+b \tag{1}");
+        assert_eq!(unwrap_formula("$$a+b$$\n(2.1)").0, r"a+b \tag{2.1}");
+    }
+
+    #[test]
+    fn handle_formula_folds_bracket_eqno_as_tag_not_linebreak() {
+        let out = text::handle_formula(
+            r"\[{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right]\] (1)
+
+",
+        );
+        assert!(
+            out.contains(r"\tag{1}"),
+            "expected \\tag command, got {out:?}"
+        );
+        assert!(
+            !out.contains(r"\\tag{"),
+            "\\tag is a line-break plus 'tag', got {out:?}"
+        );
+        assert!(
+            !out.ends_with('\\'),
+            "trailing \\\\ after \\tag breaks display math, got {out:?}"
+        );
     }
 
     #[test]

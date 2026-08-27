@@ -15,13 +15,37 @@ pub struct Table {
     pub rows: Vec<Vec<Cell>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Slot {
+    Origin {
+        text: String,
+        rowspan: usize,
+        colspan: usize,
+    },
+    /// Occupied by a rowspan from a previous row — still a tabular column.
+    RowSpan,
+    /// Occupied by a colspan on this row — do not emit another `&` cell.
+    ColSpan,
+}
+
+impl Slot {
+    fn origin_text(&self) -> &str {
+        match self {
+            Slot::Origin { text, .. } => text,
+            Slot::RowSpan | Slot::ColSpan => "",
+        }
+    }
+}
+
 impl Table {
-    /// Expand rowspan/colspan into a rectangular grid of strings.
-    pub fn grid(&self) -> Vec<Vec<String>> {
+    /// Occupied grid that keeps span metadata for LaTeX `\multirow` / `\multicolumn`
+    /// and for preview cells that should look merged. Continuation rows that
+    /// `\multirow` spans are kept (an Origin-only filter would drop them).
+    pub fn slot_grid(&self) -> Vec<Vec<Slot>> {
         if self.rows.is_empty() {
             return Vec::new();
         }
-        let mut occupied: Vec<Vec<Option<String>>> = Vec::new();
+        let mut occupied: Vec<Vec<Option<Slot>>> = Vec::new();
         for (r, row) in self.rows.iter().enumerate() {
             while occupied.len() <= r {
                 occupied.push(Vec::new());
@@ -37,37 +61,64 @@ impl Table {
                         occupied[r].push(None);
                     }
                 }
-                for dr in 0..cell.rowspan.max(1) {
+                let rs = cell.rowspan.max(1);
+                let cs = cell.colspan.max(1);
+                for dr in 0..rs {
                     let rr = r + dr;
                     while occupied.len() <= rr {
                         occupied.push(Vec::new());
                     }
-                    for dc in 0..cell.colspan.max(1) {
+                    for dc in 0..cs {
                         let cc = c + dc;
                         while occupied[rr].len() <= cc {
                             occupied[rr].push(None);
                         }
                         if occupied[rr][cc].is_none() {
                             occupied[rr][cc] = Some(if dr == 0 && dc == 0 {
-                                cell.text.clone()
+                                Slot::Origin {
+                                    text: cell.text.clone(),
+                                    rowspan: rs,
+                                    colspan: cs,
+                                }
+                            } else if dr == 0 {
+                                Slot::ColSpan
                             } else {
-                                String::new()
+                                Slot::RowSpan
                             });
                         }
                     }
                 }
-                c += cell.colspan.max(1);
+                c += cs;
             }
         }
         occupied
             .into_iter()
-            .map(|row| row.into_iter().map(|c| c.unwrap_or_default()).collect())
+            .map(|row| {
+                row.into_iter()
+                    .map(|c| c.unwrap_or(Slot::RowSpan))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Markdown / TSV projection: Origin text, empty for span occupancy.
+    /// All-empty rows (pure continuation) are dropped from these formats.
+    fn plain_rows(&self) -> Vec<Vec<String>> {
+        let slots = self.slot_grid();
+        let width = slots.iter().map(|r| r.len()).max().unwrap_or(0);
+        slots
+            .into_iter()
+            .map(|row| {
+                (0..width)
+                    .map(|c| row.get(c).map(Slot::origin_text).unwrap_or("").to_string())
+                    .collect()
+            })
             .filter(|row: &Vec<String>| !row.iter().all(|c| c.is_empty()))
             .collect()
     }
 
     pub fn to_markdown(&self) -> String {
-        let grid = self.grid();
+        let grid = self.plain_rows();
         if grid.is_empty() {
             return String::new();
         }
@@ -97,20 +148,44 @@ impl Table {
     }
 
     pub fn to_latex(&self) -> String {
-        let grid = self.grid();
-        if grid.is_empty() {
+        let slots = self.slot_grid();
+        if slots.is_empty() {
             return String::new();
         }
-        let width = grid.iter().map(|r| r.len()).max().unwrap_or(0);
+        let width = slots.iter().map(|r| r.len()).max().unwrap_or(0);
         if width == 0 {
             return String::new();
         }
         let cols = vec!["l"; width].join("|");
         let mut out = format!("\\begin{{tabular}}[t]{{|{cols}|}}\n\\hline\n");
-        for row in &grid {
-            let cells: Vec<String> = (0..width)
-                .map(|c| latex_cell(row.get(c).map(|s| s.as_str()).unwrap_or("")))
-                .collect();
+        for row in &slots {
+            let mut cells = Vec::new();
+            let mut c = 0usize;
+            while c < width {
+                let slot = row.get(c).cloned().unwrap_or(Slot::RowSpan);
+                match slot {
+                    Slot::ColSpan => c += 1,
+                    Slot::RowSpan => {
+                        cells.push(String::new());
+                        c += 1;
+                    }
+                    Slot::Origin {
+                        text,
+                        rowspan,
+                        colspan,
+                    } => {
+                        let mut body = latex_cell(&text);
+                        if rowspan > 1 {
+                            body = format!("\\multirow{{{rowspan}}}{{*}}{{{body}}}");
+                        }
+                        if colspan > 1 {
+                            body = format!("\\multicolumn{{{colspan}}}{{|c|}}{{{body}}}");
+                        }
+                        cells.push(body);
+                        c += colspan.max(1);
+                    }
+                }
+            }
             out.push_str(&cells.join(" & "));
             out.push_str(" \\\\\n\\hline\n");
         }
@@ -119,7 +194,7 @@ impl Table {
     }
 
     pub fn to_tsv(&self) -> String {
-        let grid = self.grid();
+        let grid = self.plain_rows();
         grid.iter()
             .map(|row| row.join("\t"))
             .collect::<Vec<_>>()
@@ -287,7 +362,7 @@ mod tests {
         let html =
             r#"<table><tr><td colspan="2">ab</td></tr><tr><td>a</td><td>b</td></tr></table>"#;
         let t = parse_html(html).unwrap();
-        let grid = t.grid();
+        let grid = t.plain_rows();
         assert_eq!(grid[0], vec!["ab".to_string(), String::new()]);
         assert_eq!(grid[1], vec!["a".to_string(), "b".to_string()]);
     }
@@ -299,5 +374,19 @@ mod tests {
         assert!(md.contains("$\\lambda=1$"), "{md}");
         let tex = html_to_latex(html);
         assert!(tex.contains("$\\lambda=1$"), "{tex}");
+    }
+
+    #[test]
+    fn latex_keeps_rowspan_and_colspan() {
+        let html = r#"<table><tr><td rowspan="2">A</td><td colspan="2">BC</td></tr><tr><td>B</td><td>C</td></tr></table>"#;
+        let tex = html_to_latex(html);
+        assert!(tex.contains("\\multirow{2}{*}{A}"), "{tex}");
+        assert!(tex.contains("\\multicolumn{2}{|c|}{BC}"), "{tex}");
+        assert!(tex.contains("B & C"), "{tex}");
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("| A | BC |  |"),
+            "markdown stays a flattened pipe table: {md}"
+        );
     }
 }

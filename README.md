@@ -14,7 +14,7 @@ Models are **not** embedded in the binary (~44 MB release build + ~244 MB Op
 | Target | Capture | Snip UI | Hotkey | Tray | Notes |
 |---|---|---|---|---|---|
 | **Linux X11** | xcap | override-redirect freeze-frame | Ctrl+Shift+S | StatusNotifier (`ksni`) | Current product |
-| **Windows** | xcap (WGC) | not implemented yet | Ctrl+Shift+S (UI thread) | `tray-icon` | Next test machine |
+| **Windows** | xcap (WGC) | per-monitor Win32 freeze-frame | Ctrl+Shift+S (UI thread) | `tray-icon` | Dual-monitor / mixed DPI: overlay per display |
 | **macOS** | xcap | not implemented yet | same as Windows | `tray-icon` | Compiles; no dedicated QA yet |
 | **Linux Wayland** | — | — | — | — | Not supported |
 
