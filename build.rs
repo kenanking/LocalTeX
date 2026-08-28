@@ -35,8 +35,7 @@ fn embed_windows_icon() {
     let description = rc_escape(
         &std::env::var("CARGO_PKG_DESCRIPTION")
             .unwrap_or_default()
-            .replace('\u{2014}', "-")
-            .replace('\u{2013}', "-"),
+            .replace(['\u{2014}', '\u{2013}'], "-"),
     );
 
     let resources = format!(

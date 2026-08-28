@@ -288,21 +288,33 @@ pub fn overlay_scrollbar(
     }
 }
 
+/// Plumbing shared by every h_scroll_pane call: the pane's scroll handle plus
+/// the window-level drag / hover / notify channels for its overlay scrollbar.
+pub struct ScrollChrome<'a> {
+    pub handle: &'a ScrollHandle,
+    pub drag: &'a Rc<RefCell<Option<ScrollThumbDrag>>>,
+    pub hover: &'a Rc<RefCell<HashSet<String>>>,
+    pub view: EntityId,
+}
+
 /// Parent-width horizontal scroller. The inner child must have an explicit
 /// `content_w` or GPUI will not create a scroll region. Uses `overflow_x_hidden`
 /// (not `overflow_x_scroll`) so a vertical wheel is not remapped onto X —
 /// GPUI's default `overflow_x_scroll` maps `delta.y → delta.x`.
 pub fn h_scroll_pane(
     id: impl Into<SharedString>,
-    handle: &ScrollHandle,
+    chrome: ScrollChrome<'_>,
     content_w: f32,
     content_h: f32,
     center: bool,
-    drag: &Rc<RefCell<Option<ScrollThumbDrag>>>,
-    hover: &Rc<RefCell<HashSet<String>>>,
-    view: EntityId,
     content: impl IntoElement,
 ) -> AnyElement {
+    let ScrollChrome {
+        handle,
+        drag,
+        hover,
+        view,
+    } = chrome;
     let id = id.into();
     let pane_key = id.to_string();
     let scroll_id = SharedString::from(format!("{id}-h"));

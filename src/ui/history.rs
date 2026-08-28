@@ -101,8 +101,7 @@ impl MainWindow {
                     let mut need_thumbs = Vec::new();
                     {
                         let state = state_ent.read(cx);
-                        for idx in keep_start..keep_end {
-                            let id = ids[idx];
+                        for &id in &ids[keep_start..keep_end] {
                             let Some(doc) = state.library.get(id) else {
                                 continue;
                             };
@@ -130,7 +129,7 @@ impl MainWindow {
                             history_row(
                                 id,
                                 selected == Some(id),
-                                &state,
+                                state,
                                 media.borrow().thumb(id),
                                 list_focus.clone(),
                                 state_ent.clone(),

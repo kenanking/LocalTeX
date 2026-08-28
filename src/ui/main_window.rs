@@ -80,10 +80,7 @@ impl PreviewPane {
     }
 
     pub(crate) fn hscroll_handle(&mut self, key: &str) -> ScrollHandle {
-        self.hscrolls
-            .entry(key.to_string())
-            .or_insert_with(ScrollHandle::new)
-            .clone()
+        self.hscrolls.entry(key.to_string()).or_default().clone()
     }
 
     pub(crate) fn hscroll_bounds_ready(&self) -> bool {

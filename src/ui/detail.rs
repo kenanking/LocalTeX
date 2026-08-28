@@ -7,7 +7,7 @@ use gpui::{
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
-use super::scroll::{h_scroll_pane, overlay_scrollbar, ScrollAxis};
+use super::scroll::{h_scroll_pane, overlay_scrollbar, ScrollAxis, ScrollChrome};
 use super::selectable::{selectable_run, selectable_text};
 use super::theme;
 use super::widgets::{
@@ -503,13 +503,15 @@ impl MainWindow {
                 let table_el = self.render_table_preview(i, layout, cx);
                 h_scroll_pane(
                     format!("tbl-{i}"),
-                    &handle,
+                    ScrollChrome {
+                        handle: &handle,
+                        drag: &self.preview.thumb,
+                        hover: &self.preview.hscroll_hover,
+                        view,
+                    },
                     layout.width,
                     layout.height,
                     false,
-                    &self.preview.thumb,
-                    &self.preview.hscroll_hover,
-                    view,
                     table_el,
                 )
                 .into_any()
@@ -567,13 +569,15 @@ impl MainWindow {
                 .py_3()
                 .child(h_scroll_pane(
                     format!("d-{i}"),
-                    &handle,
+                    ScrollChrome {
+                        handle: &handle,
+                        drag: &self.preview.thumb,
+                        hover: &self.preview.hscroll_hover,
+                        view,
+                    },
                     content_w,
                     content_h,
                     false,
-                    &self.preview.thumb,
-                    &self.preview.hscroll_hover,
-                    view,
                     row,
                 ))
                 .into_any();
@@ -583,13 +587,15 @@ impl MainWindow {
             let img = self.math_img(math, cx);
             h_scroll_pane(
                 format!("d-{i}"),
-                &handle,
+                ScrollChrome {
+                    handle: &handle,
+                    drag: &self.preview.thumb,
+                    hover: &self.preview.hscroll_hover,
+                    view,
+                },
                 math.width,
                 math.height,
                 true,
-                &self.preview.thumb,
-                &self.preview.hscroll_hover,
-                view,
                 img,
             )
         };
