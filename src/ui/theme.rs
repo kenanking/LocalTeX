@@ -14,6 +14,10 @@ pub const WARN: u32 = 0xd97706;
 pub const BORDER: u32 = 0xe6e6e6;
 pub const ACCENT_SOFT_FILL: u32 = 0xeff6ff;
 pub const ON_ACCENT: u32 = 0xffffff;
+/// Off-state track for toggle switches.
+pub const TRACK_OFF: u32 = 0xd5d5da;
+/// Neutral segment in composition bars (the part that is not ours).
+pub const SEG_NEUTRAL: u32 = 0x94a3b8;
 
 pub fn accent_soft() -> Rgba {
     rgb(ACCENT_SOFT_FILL)

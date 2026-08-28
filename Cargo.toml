@@ -41,6 +41,8 @@ image = { version = "0.25", default-features = false, features = ["png", "ico"] 
 # blocking = no extra tokio runtime (0.3 default is async).
 ksni = { version = "0.3", features = ["blocking"] }
 x11rb = { version = "0.13", features = ["image"] }
+# statvfs + sysconf for the settings System tab.
+libc = "0.2"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = "0.24"

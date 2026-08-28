@@ -126,51 +126,31 @@ pub fn icon_btn(
         )
 }
 
-pub fn checkbox(
+pub fn switch(
     id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
     checked: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let id = id.into();
     div()
-        .id(id)
+        .id(id.into())
+        .w(px(34.))
+        .h(px(20.))
+        .p(px(2.))
+        .rounded_full()
         .flex()
-        .items_start()
-        .gap_2()
-        .py_1()
-        .min_w_0()
+        .flex_shrink_0()
         .cursor_pointer()
+        .when(checked, |d| d.bg(rgb(theme::ACCENT)).justify_end())
+        .when(!checked, |d| d.bg(rgb(theme::TRACK_OFF)).justify_start())
+        .hover(|d| d.opacity(0.85))
         .on_click(move |_, window, cx| on_click(window, cx))
         .child(
             div()
                 .size(px(16.))
-                .mt(px(2.))
-                .flex_shrink_0()
-                .rounded_sm()
+                .rounded_full()
+                .bg(rgb(theme::BG_RAISED))
                 .border_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(checked, |d| {
-                    d.bg(rgb(theme::ACCENT))
-                        .border_color(rgb(theme::ACCENT))
-                        .text_color(rgb(theme::ON_ACCENT))
-                        .text_xs()
-                        .child("✓")
-                })
-                .when(!checked, |d| {
-                    d.bg(rgb(theme::BG_RAISED)).border_color(rgb(theme::BORDER))
-                }),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .text_color(rgb(theme::TEXT))
-                .whitespace_normal()
-                .child(label.into()),
+                .border_color(rgb(theme::BORDER)),
         )
 }
 
@@ -334,97 +314,112 @@ pub fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
-pub fn settings_nav_item(
+/// Pill tab for the settings header (reference-style segmented switcher).
+pub fn pill_tab(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    // Outer `flex_1` has no `.id()`: gpui 0.2 does not grow a stateful
-    // (id'd) node. Same wrapper as `seg_item`.
-    div().flex_1().min_w_0().h(px(32.)).child(
-        div()
-            .id(id.into())
-            .h(px(32.))
-            .w_full()
-            .px_3()
-            .rounded_md()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .text_sm()
-            .when(active, |d| {
-                d.bg(theme::accent_soft())
-                    .text_color(rgb(theme::ACCENT))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-            })
-            .when(!active, |d| {
-                d.text_color(rgb(theme::TEXT))
-                    .hover(|d| d.bg(theme::row_hover()))
-            })
-            .on_click(move |_, window, cx| on_click(window, cx))
-            .child(label.into()),
-    )
+) -> AnyElement {
+    div()
+        .id(id.into())
+        .h(px(26.))
+        .px_3()
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_xs()
+        .cursor_pointer()
+        .when(active, |d| {
+            d.bg(rgb(theme::BG_RAISED))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .text_color(rgb(theme::TEXT))
+                .font_weight(gpui::FontWeight::MEDIUM)
+        })
+        .when(!active, |d| {
+            d.text_color(rgb(theme::MUTED))
+                .hover(|d| d.text_color(rgb(theme::TEXT)))
+        })
+        .on_click(move |_, window, cx| on_click(window, cx))
+        .child(label.into())
+        .into_any()
 }
 
-pub fn settings_card(
-    title: impl Into<SharedString>,
-    children: impl IntoElement,
-) -> impl IntoElement {
-    div()
+/// Titled group of hairline-divided setting rows (reference card style).
+pub fn settings_group(title: impl Into<SharedString>, rows: Vec<AnyElement>) -> impl IntoElement {
+    let mut card = div()
         .flex()
         .flex_col()
-        .gap_3()
-        .p_4()
         .w_full()
         .min_w_0()
         .rounded_lg()
         .border_1()
         .border_color(rgb(theme::BORDER))
-        .bg(rgb(theme::BG))
-        .child(
+        .bg(rgb(theme::BG));
+    let n = rows.len();
+    for (i, row) in rows.into_iter().enumerate() {
+        card = card.child(
             div()
-                .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(theme::TEXT))
-                .child(title.into()),
-        )
-        .child(children)
-}
-
-pub fn setting_row(
-    title: impl Into<SharedString>,
-    hint: impl Into<SharedString>,
-    control: impl IntoElement,
-) -> impl IntoElement {
+                .px_4()
+                .py_3()
+                .w_full()
+                .min_w_0()
+                .when(i + 1 < n, |d| {
+                    d.border_b_1().border_color(rgb(theme::BORDER))
+                })
+                .child(row),
+        );
+    }
     div()
         .flex()
         .flex_col()
         .gap_2()
         .w_full()
         .min_w_0()
+        .child(div().px_1().child(section_label(title)))
+        .child(card)
+}
+
+/// Title + hint on the left, control pinned to the right.
+pub fn setting_row(
+    title: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
+    control: impl IntoElement,
+) -> impl IntoElement {
+    let hint = hint.into();
+    div()
+        .flex()
+        .items_center()
+        .gap_4()
+        .w_full()
+        .min_w_0()
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .min_w_0()
+                .gap(px(2.))
                 .child(
                     div()
                         .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(theme::TEXT))
                         .child(title.into()),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .whitespace_normal()
-                        .child(hint.into()),
-                ),
+                .when(!hint.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::MUTED))
+                            .whitespace_normal()
+                            .child(hint),
+                    )
+                }),
         )
-        .child(div().w_full().min_w_0().child(control))
+        .child(div().flex_shrink_0().child(control))
 }
 
 pub fn copy_row(

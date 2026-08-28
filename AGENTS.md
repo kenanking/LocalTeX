@@ -67,7 +67,7 @@ Waku icon traps (paid for here, do not cargo-cult):
 - Do not nest `entity.update` while that entity is already being updated (panic).
 - After mutating view state, call `cx.notify()`.
 - `cx.spawn` is the UI thread; OCR / capture go in `cx.background_spawn`. Store or `.detach()` tasks you intend to keep alive.
-- Never block `render` with I/O. Image/SVG caches on `MainWindow` are the allowed pattern.
+- Never block `render` with I/O. Image/SVG caches on `MainWindow` are the allowed pattern. Settings → System ticks cheap /proc reads on a 1.5 s `Timer` loop (`MainWindow::kick_sysmon`); the disk walk in `sysmon::disk_sample` stays off-thread and off the per-tick path.
 - Actions live in `src/actions.rs`.
 - Comments only for non-obvious *why*. Prefer extending an existing file over adding a tiny new one.
 - Prefer `?` over `unwrap()`. New modules: `foo.rs`, not `foo/mod.rs` (except `desktop/` and `ocr/`, which already split backends).

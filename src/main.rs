@@ -21,6 +21,7 @@ mod prefs;
 mod preview;
 mod state;
 mod store;
+mod sysmon;
 mod table;
 mod ui;
 

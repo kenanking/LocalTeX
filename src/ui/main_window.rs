@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
     div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, MouseButton, RenderImage, ScrollHandle, SharedString, Window,
+    Focusable, Image, MouseButton, RenderImage, ScrollHandle, SharedString, Timer, Window,
 };
 use uuid::Uuid;
 
@@ -116,6 +117,9 @@ pub struct MainWindow {
     pub(crate) preview: PreviewPane,
     /// (pointer x at drag start, sidebar width at drag start).
     pub(crate) sidebar_drag: Option<(f32, f32)>,
+    sysmon: crate::sysmon::SysMon,
+    pub(crate) sys_snap: crate::sysmon::SysSnapshot,
+    sysmon_on: bool,
 }
 
 impl MainWindow {
@@ -157,6 +161,9 @@ impl MainWindow {
             zoom_doc: None,
             preview: PreviewPane::new(),
             sidebar_drag: None,
+            sysmon: crate::sysmon::SysMon::new(),
+            sys_snap: crate::sysmon::SysSnapshot::default(),
+            sysmon_on: false,
         }
     }
 
@@ -306,6 +313,48 @@ impl MainWindow {
         self.media.borrow_mut().ensure_full(doc.id, pixels);
     }
 
+    /// Ticks the Settings → System sampler while that tab is on screen. Cheap
+    /// /proc reads every 1.5 s; the disk walk runs off-thread every 20 ticks.
+    fn kick_sysmon(&mut self, cx: &mut Context<Self>) {
+        if self.sysmon_on {
+            return;
+        }
+        self.sysmon_on = true;
+        cx.spawn(async move |this, cx| {
+            let mut ticks = 0u32;
+            loop {
+                let disk = if ticks.is_multiple_of(20) {
+                    Some(
+                        cx.background_spawn(async move { crate::sysmon::disk_sample() })
+                            .await,
+                    )
+                } else {
+                    None
+                };
+                let still = this
+                    .update(cx, |this, cx| {
+                        // sample() carries disk: None — keep the last walk.
+                        let mut snap = this.sysmon.sample();
+                        snap.disk = disk.or_else(|| this.sys_snap.disk.take());
+                        this.sys_snap = snap;
+                        cx.notify();
+                        matches!(this.view, View::Settings)
+                            && this.settings_tab == SettingsTab::System
+                    })
+                    .unwrap_or(false);
+                if !still {
+                    break;
+                }
+                ticks += 1;
+                Timer::after(Duration::from_millis(1500)).await;
+            }
+            let _ = this.update(cx, |this, _| {
+                this.sysmon_on = false;
+            });
+        })
+        .detach();
+    }
+
     fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {
         let dpr = raster_dpr(window.scale_factor());
         let selected = {
@@ -423,6 +472,9 @@ impl gpui::Render for MainWindow {
             let state = self.state.read(cx);
             state.selected().is_some()
         };
+        if matches!(view, View::Settings) && self.settings_tab == SettingsTab::System {
+            self.kick_sysmon(cx);
+        }
 
         div()
             .id("main")
@@ -496,6 +548,7 @@ impl gpui::Render for MainWindow {
                         d.flex_col().child(super::settings::page(
                             self.state.clone(),
                             tab,
+                            &self.sys_snap,
                             move |tab, cx| {
                                 entity.update(cx, |this, cx| {
                                     this.settings_tab = tab;
