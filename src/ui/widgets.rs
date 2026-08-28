@@ -1,6 +1,5 @@
 use gpui::{
-    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString,
-    Window,
+    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString, Window,
 };
 
 use super::theme;
@@ -60,6 +59,7 @@ pub enum IconKind {
     Settings,
     Check,
     Zoom,
+    Reset,
 }
 
 impl IconKind {
@@ -74,11 +74,12 @@ impl IconKind {
             Self::Settings => "icons/settings.svg",
             Self::Check => "icons/check.svg",
             Self::Zoom => "icons/zoom.svg",
+            Self::Reset => "icons/reset.svg",
         }
     }
 
     #[cfg(test)]
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
@@ -88,6 +89,7 @@ impl IconKind {
         Self::Settings,
         Self::Check,
         Self::Zoom,
+        Self::Reset,
     ];
 }
 

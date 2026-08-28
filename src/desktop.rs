@@ -1,8 +1,9 @@
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 
 use crate::identity::APP_SLUG;
@@ -32,7 +33,8 @@ pub enum DesktopCmd {
 /// Keeps OS handles alive on the GPUI UI thread (Windows needs a win32 loop
 /// on that thread; macOS needs the main thread).
 struct Services {
-    _hotkey: Option<GlobalHotKeyManager>,
+    hotkey: Option<GlobalHotKeyManager>,
+    current_capture: Option<HotKey>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     _tray: Option<tray_icon::TrayIcon>,
 }
@@ -41,17 +43,20 @@ thread_local! {
     static SERVICES: RefCell<Option<Services>> = const { RefCell::new(None) };
 }
 
+static CAPTURE_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
+
 /// Register hotkey + tray. Must be called from the GPUI UI thread.
 pub fn spawn() -> Receiver<DesktopCmd> {
     let (tx, rx) = mpsc::channel();
-    let hotkey = register_hotkey(tx.clone());
+    let hotkey = start_hotkey_manager(tx.clone());
     #[cfg(target_os = "linux")]
     linux::start_tray(tx);
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let tray = other::start_tray(tx);
     SERVICES.with(|slot| {
         *slot.borrow_mut() = Some(Services {
-            _hotkey: hotkey,
+            hotkey,
+            current_capture: None,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             _tray: tray,
         });
@@ -59,7 +64,40 @@ pub fn spawn() -> Receiver<DesktopCmd> {
     rx
 }
 
-fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
+/// Apply the Capture global hotkey. Call on the GPUI UI thread. `None` unregisters.
+pub fn rebind_capture(chord: Option<&str>) {
+    SERVICES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(svc) = slot.as_mut() else {
+            return;
+        };
+        let Some(manager) = svc.hotkey.as_ref() else {
+            return;
+        };
+        if let Some(old) = svc.current_capture.take() {
+            if let Err(err) = manager.unregister(old) {
+                eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
+            }
+        }
+        CAPTURE_HOTKEY_ID.store(0, Ordering::Relaxed);
+        let Some(chord) = chord else {
+            return;
+        };
+        let Some(hotkey) = crate::keymap::to_global_hotkey(chord) else {
+            eprintln!("{APP_SLUG}: capture chord {chord:?} is not a global hotkey");
+            return;
+        };
+        if let Err(err) = manager.register(hotkey) {
+            eprintln!("{APP_SLUG}: register global hotkey {chord}: {err}");
+            return;
+        }
+        CAPTURE_HOTKEY_ID.store(hotkey.id(), Ordering::Relaxed);
+        svc.current_capture = Some(hotkey);
+        eprintln!("{APP_SLUG}: global hotkey {chord} registered");
+    });
+}
+
+fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     let manager = match GlobalHotKeyManager::new() {
         Ok(m) => m,
         Err(err) => {
@@ -67,17 +105,11 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
             return None;
         }
     };
-    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
-    if let Err(err) = manager.register(hotkey) {
-        eprintln!("{APP_SLUG}: register Ctrl+Shift+S failed: {err}");
-        return None;
-    }
-    eprintln!("{APP_SLUG}: global hotkey Ctrl+Shift+S registered");
-    let id = hotkey.id();
     thread::spawn(move || {
         let receiver = GlobalHotKeyEvent::receiver();
         while let Ok(event) = receiver.recv() {
-            if event.id == id && event.state == HotKeyState::Pressed {
+            let id = CAPTURE_HOTKEY_ID.load(Ordering::Relaxed);
+            if id != 0 && event.id == id && event.state == HotKeyState::Pressed {
                 if let Err(err) = tx.send(DesktopCmd::Capture) {
                     eprintln!("{APP_SLUG}: hotkey send: {err}");
                     break;

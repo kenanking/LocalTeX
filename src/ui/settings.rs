@@ -1,10 +1,19 @@
-use gpui::{div, prelude::*, px, relative, rgb, AnyElement, App, Entity, SharedString};
+use std::cell::RefCell;
+use std::rc::Rc;
 
+use gpui::{
+    div, prelude::*, px, relative, rgb, AnyElement, App, Entity, EntityId, ScrollHandle,
+    SharedString,
+};
+
+use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag};
 use super::theme;
 use super::widgets::{
-    kbd_chip, pill_tab, seg_item, segmented, setting_row, settings_group, switch, Tooltip,
+    btn, icon_btn_sized, kbd_chip, pill_tab, seg_item, segmented, setting_row, settings_group,
+    switch, IconBtnSize, IconKind, Tooltip,
 };
 use crate::doc::ExportFmt;
+use crate::keymap::{self, Group, ShortcutId};
 use crate::prefs::{BlockDelim, InlineDelim, Prefs, WindowCloseAction};
 use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
@@ -24,11 +33,20 @@ const TABS: [(&str, &str, SettingsTab); 4] = [
     ("set-system", "System", SettingsTab::System),
 ];
 
+pub struct SettingsScroll<'a> {
+    pub handle: &'a ScrollHandle,
+    pub thumb: &'a Rc<RefCell<Option<ScrollThumbDrag>>>,
+    pub view: EntityId,
+}
+
 pub fn page(
     state: Entity<AppState>,
     tab: SettingsTab,
     snap: &SysSnapshot,
+    listen: Option<ShortcutId>,
     on_tab: impl Fn(SettingsTab, &mut App) + Clone + 'static,
+    on_listen: impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static,
+    scroll: SettingsScroll<'_>,
     cx: &App,
 ) -> impl IntoElement {
     let prefs = state.read(cx).prefs.clone();
@@ -68,36 +86,64 @@ pub fn page(
                 .bg(rgb(theme::BG))
                 .child(tabs_row),
         )
-        .child(
+        .child({
+            let view = scroll.view;
             div()
-                .id("settings-body")
+                .flex()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .items_center()
-                .p_4()
+                .w_full()
                 .child(
-                    // Content column caps out so meter bars stay scannable
-                    // instead of stretching across a wide window.
                     div()
-                        .w_full()
-                        .max_w(px(600.))
+                        .id("settings-body")
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .h_full()
+                        .overflow_y_scroll()
+                        .track_scroll(scroll.handle)
+                        .on_scroll_wheel(move |_, _, cx| cx.notify(view))
                         .flex()
                         .flex_col()
-                        .gap_4()
-                        .when(tab == SettingsTab::General, |d| {
-                            d.child(general_page(state.clone(), &prefs))
-                        })
-                        .when(tab == SettingsTab::Formatting, |d| {
-                            d.child(formatting_page(state.clone(), &prefs))
-                        })
-                        .when(tab == SettingsTab::Shortcuts, |d| d.child(shortcuts_page()))
-                        .when(tab == SettingsTab::System, |d| d.child(system_page(snap))),
-                ),
-        )
+                        .items_center()
+                        .p_4()
+                        .child(
+                            // Content column caps out so meter bars stay scannable
+                            // instead of stretching across a wide window.
+                            div()
+                                .w_full()
+                                .max_w(px(600.))
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .when(tab == SettingsTab::General, |d| {
+                                    d.child(general_page(state.clone(), &prefs))
+                                })
+                                .when(tab == SettingsTab::Formatting, |d| {
+                                    d.child(formatting_page(state.clone(), &prefs))
+                                })
+                                .when(tab == SettingsTab::Shortcuts, |d| {
+                                    d.child(shortcuts_page(
+                                        state.clone(),
+                                        &prefs,
+                                        listen,
+                                        on_listen.clone(),
+                                    ))
+                                })
+                                .when(tab == SettingsTab::System, |d| d.child(system_page(snap))),
+                        ),
+                )
+                .child(div().relative().w(px(12.)).h_full().flex_shrink_0().child(
+                    overlay_scrollbar(
+                        "settings-y-scroll",
+                        ScrollAxis::Vertical,
+                        scroll.handle,
+                        scroll.thumb,
+                        true,
+                    ),
+                ))
+        })
 }
 
 fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
@@ -295,39 +341,213 @@ fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
         ))
 }
 
-fn shortcuts_page() -> impl IntoElement {
-    settings_group(
-        "Keyboard",
-        vec![
-            shortcut_row("Create snip from screenshot", "Ctrl+Shift+S"),
-            shortcut_row("Upload snip", "Ctrl+O"),
-            shortcut_row("Paste image or path from clipboard", "Ctrl+V"),
-            shortcut_row("Create snip from drawing", "Ctrl+D"),
-            shortcut_row("Delete selected snip", "Delete"),
-            shortcut_row("Settings", "Ctrl+,"),
-            shortcut_row("Toggle Markdown / LaTeX", "Ctrl+L"),
-            shortcut_row("Copy primary format", "Ctrl+C"),
-        ],
-    )
+fn shortcuts_page(
+    state: Entity<AppState>,
+    prefs: &Prefs,
+    listen: Option<ShortcutId>,
+    on_listen: impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static,
+) -> impl IntoElement {
+    let over = &prefs.shortcuts;
+    let reset_state = state.clone();
+    div()
+        .flex()
+        .flex_col()
+        .gap_4()
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .px_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(theme::MUTED))
+                        .child("Click a shortcut to rebind it. Esc cancels."),
+                )
+                .child(btn(
+                    "sc-reset-all",
+                    "Reset all",
+                    false,
+                    true,
+                    move |_, cx| {
+                        reset_state.update(cx, |s, cx| s.reset_shortcuts(cx));
+                    },
+                )),
+        )
+        .child(shortcut_group(
+            "Capture",
+            Group::Capture,
+            over,
+            listen,
+            &state,
+            &on_listen,
+        ))
+        .child(shortcut_group(
+            "Document",
+            Group::Document,
+            over,
+            listen,
+            &state,
+            &on_listen,
+        ))
+        .child(shortcut_group(
+            "Window",
+            Group::Window,
+            over,
+            listen,
+            &state,
+            &on_listen,
+        ))
 }
 
-fn shortcut_row(label: &str, keys: &str) -> AnyElement {
+fn shortcut_group(
+    title: &'static str,
+    group: Group,
+    over: &keymap::Overrides,
+    listen: Option<ShortcutId>,
+    state: &Entity<AppState>,
+    on_listen: &(impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static),
+) -> impl IntoElement {
+    let rows = keymap::CATALOG
+        .iter()
+        .filter(|s| s.group == group)
+        .map(|s| {
+            shortcut_row(
+                s,
+                over,
+                listen == Some(s.id),
+                state.clone(),
+                on_listen.clone(),
+            )
+        })
+        .collect();
+    settings_group(title, rows)
+}
+
+fn shortcut_row(
+    spec: &keymap::Spec,
+    over: &keymap::Overrides,
+    listening: bool,
+    state: Entity<AppState>,
+    on_listen: impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static,
+) -> AnyElement {
+    let id = spec.id;
+    let chord = keymap::effective(over, id);
+    let customized = keymap::is_customized(over, id);
+    let mut keys = div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .px_2()
+        .py(px(3.))
+        .rounded_md()
+        .when(listening, |d| {
+            d.border_1()
+                .border_color(rgb(theme::ACCENT))
+                .bg(theme::accent_soft())
+        });
+    if listening {
+        keys = keys.child(
+            div()
+                .size(px(7.))
+                .rounded_full()
+                .bg(rgb(theme::ACCENT))
+                .flex_shrink_0(),
+        );
+    }
+    keys = match &chord {
+        Some(c) => {
+            let mut row = keys;
+            for chip in keymap::chips(c) {
+                row = row.child(kbd_chip(chip));
+            }
+            row
+        }
+        None => keys.child(
+            div()
+                .px_2()
+                .text_sm()
+                .italic()
+                .text_color(rgb(theme::MUTED))
+                .child("Unbound"),
+        ),
+    };
+
+    let mut right = div().flex().items_center().gap_1().child(keys);
+    if customized && !listening {
+        right = right.child(
+            div()
+                .id(SharedString::from(format!(
+                    "sc-reset-hit-{}",
+                    spec.id.as_str()
+                )))
+                .on_click(move |_, _, cx| cx.stop_propagation())
+                .child(icon_btn_sized(
+                    SharedString::from(format!("sc-reset-{}", spec.id.as_str())),
+                    IconKind::Reset,
+                    "Reset to default",
+                    false,
+                    true,
+                    IconBtnSize {
+                        hit: px(24.),
+                        glyph: px(14.),
+                    },
+                    move |_, cx| {
+                        cx.stop_propagation();
+                        state.update(cx, |s, cx| {
+                            let _ = s.restore_shortcut(id, cx);
+                        });
+                    },
+                )),
+        );
+    }
+
     div()
+        .id(SharedString::from(format!("sc-bind-{}", spec.id.as_str())))
         .flex()
         .items_center()
         .gap_2()
         .w_full()
         .min_w_0()
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            on_listen(if listening { None } else { Some(id) }, cx);
+            cx.stop_propagation();
+        })
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .text_sm()
-                .text_color(rgb(theme::TEXT))
-                .whitespace_normal()
-                .child(SharedString::from(label.to_string())),
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(theme::TEXT))
+                        .whitespace_normal()
+                        .child(SharedString::from(spec.label.to_string())),
+                )
+                .when(spec.global, |d| {
+                    d.child(
+                        div()
+                            .px_2()
+                            .h(px(18.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .bg(theme::accent_soft())
+                            .text_color(rgb(theme::ACCENT))
+                            .text_xs()
+                            .child("Global"),
+                    )
+                }),
         )
-        .child(kbd_chip(SharedString::from(keys.to_string())))
+        .child(right)
         .into_any_element()
 }
 

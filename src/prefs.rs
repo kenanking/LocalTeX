@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::doc::ExportFmt;
 use crate::identity::{self, APP_SLUG};
+use crate::keymap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +54,9 @@ pub struct Prefs {
     /// History sidebar width in px, user-draggable between SIDEBAR limits.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// Catalog overrides only. Missing key = default. `null` = unbound.
+    #[serde(default)]
+    pub shortcuts: keymap::Overrides,
 }
 
 fn default_true() -> bool {
@@ -74,6 +78,7 @@ impl Default for Prefs {
             inline_delim: InlineDelim::Dollar,
             block_delim: BlockDelim::Dollars,
             sidebar_width: default_sidebar_width(),
+            shortcuts: keymap::Overrides::new(),
         }
     }
 }

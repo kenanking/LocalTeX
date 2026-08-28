@@ -13,6 +13,7 @@ use crate::desktop::DesktopCmd;
 use crate::doc::{DocStatus, Document, ExportFmt, ImageSlot};
 use crate::identity::APP_SLUG;
 use crate::ingest::IngestSource;
+use crate::keymap::{self, AssignError, ShortcutId};
 use crate::library::Library;
 use crate::ocr::Engine;
 use crate::ocr_queue::OcrQueue;
@@ -99,6 +100,41 @@ impl AppState {
     pub fn update_prefs(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Prefs)) {
         f(&mut self.prefs);
         self.persist_prefs();
+        cx.notify();
+    }
+
+    pub fn bind_shortcut(
+        &mut self,
+        id: ShortcutId,
+        chord: String,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<ShortcutId>, AssignError> {
+        let stolen = keymap::assign(&mut self.prefs.shortcuts, id, chord)?;
+        self.commit_shortcuts(cx);
+        Ok(stolen)
+    }
+
+    pub fn restore_shortcut(
+        &mut self,
+        id: ShortcutId,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<ShortcutId>, AssignError> {
+        let stolen = keymap::restore(&mut self.prefs.shortcuts, id)?;
+        self.commit_shortcuts(cx);
+        Ok(stolen)
+    }
+
+    pub fn reset_shortcuts(&mut self, cx: &mut Context<Self>) {
+        keymap::reset(&mut self.prefs.shortcuts);
+        self.commit_shortcuts(cx);
+    }
+
+    fn commit_shortcuts(&mut self, cx: &mut Context<Self>) {
+        self.persist_prefs();
+        keymap::apply(cx, &self.prefs.shortcuts);
+        crate::desktop::rebind_capture(
+            keymap::effective(&self.prefs.shortcuts, ShortcutId::Capture).as_deref(),
+        );
         cx.notify();
     }
 
@@ -1021,32 +1057,6 @@ pub fn pump_desktop_events(state: gpui::Entity<AppState>, rx: Receiver<DesktopCm
     .detach();
 }
 
-pub fn bind_keys(cx: &mut App) {
-    use crate::actions::*;
-    use gpui::KeyBinding;
-    cx.bind_keys([
-        KeyBinding::new("ctrl-shift-s", Capture, None),
-        KeyBinding::new("ctrl-n", Capture, None),
-        KeyBinding::new("ctrl-o", UploadImage, None),
-        KeyBinding::new("ctrl-v", PasteSnip, None),
-        KeyBinding::new("ctrl-d", StartDraw, None),
-        KeyBinding::new("ctrl-,", OpenSettings, None),
-        KeyBinding::new("escape", CloseSheet, None),
-        KeyBinding::new("ctrl-shift-c", CopyExport, None),
-        KeyBinding::new("ctrl-c", CopyExport, None),
-        KeyBinding::new("down", SelectNext, None),
-        KeyBinding::new("j", SelectNext, Some("SnipList && !SearchField")),
-        KeyBinding::new("up", SelectPrev, None),
-        KeyBinding::new("k", SelectPrev, Some("SnipList && !SearchField")),
-        KeyBinding::new("delete", DeleteSelected, Some("SnipList && !SearchField")),
-        KeyBinding::new(
-            "backspace",
-            DeleteSelected,
-            Some("SnipList && !SearchField"),
-        ),
-        KeyBinding::new("ctrl-l", ToggleFormat, None),
-        KeyBinding::new("ctrl-r", RetryOcr, None),
-        KeyBinding::new("ctrl-q", QuitApp, None),
-    ]);
-    crate::ui::search_field::bind_keys(cx);
+pub fn bind_keys(cx: &mut App, over: &crate::keymap::Overrides) {
+    crate::keymap::apply(cx, over);
 }

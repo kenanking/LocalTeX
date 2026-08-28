@@ -13,6 +13,7 @@ mod icon;
 mod identity;
 mod imgutil;
 mod ingest;
+mod keymap;
 mod library;
 mod math;
 mod ocr;
@@ -45,7 +46,8 @@ fn main() {
     Application::new()
         .with_assets(crate::icon::Assets)
         .run(|cx: &mut App| {
-            crate::state::bind_keys(cx);
+            let prefs = crate::prefs::Prefs::load();
+            crate::state::bind_keys(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
             let state = cx.new(|_| AppState::new());
@@ -77,6 +79,10 @@ fn main() {
             // Hotkey manager must be created on this GPUI UI thread (Windows
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.
             let rx = desktop::spawn();
+            desktop::rebind_capture(
+                crate::keymap::effective(&prefs.shortcuts, crate::keymap::ShortcutId::Capture)
+                    .as_deref(),
+            );
             state::pump_desktop_events(state, rx, cx);
             cx.activate(true);
         });

@@ -15,7 +15,7 @@ use super::history::{SIDEBAR_MAX, SIDEBAR_MIN};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
-use super::settings::SettingsTab;
+use super::settings::{SettingsScroll, SettingsTab};
 use super::theme;
 use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::actions::{
@@ -24,6 +24,7 @@ use crate::actions::{
 };
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
+use crate::keymap::ShortcutId;
 use crate::ocr::EngineStatus;
 use crate::preview::{document_preview_with_dpr, raster_dpr, DocDerived};
 use crate::state::AppState;
@@ -107,6 +108,9 @@ pub struct MainWindow {
     pub(crate) view: View,
     pub(crate) board: DrawBoard,
     settings_tab: SettingsTab,
+    shortcut_listen: Option<ShortcutId>,
+    settings_scroll: ScrollHandle,
+    settings_thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
     pub(crate) copied: Option<(Uuid, CopyKind)>,
     copied_epoch: u64,
     pub(crate) orig_hover: bool,
@@ -139,6 +143,37 @@ impl MainWindow {
         })
         .detach();
         state.update(cx, |state, cx| state.boot_selected(cx));
+        let this = cx.entity();
+        cx.intercept_keystrokes(move |event, _, cx| {
+            let listening = this.read(cx).shortcut_listen;
+            let Some(id) = listening else {
+                return;
+            };
+            cx.stop_propagation();
+            let key = event.keystroke.key.as_str();
+            if key == "escape" {
+                this.update(cx, |this, cx| {
+                    this.shortcut_listen = None;
+                    cx.notify();
+                });
+                return;
+            }
+            if matches!(
+                key,
+                "control" | "shift" | "alt" | "platform" | "fn" | "function"
+            ) {
+                return;
+            }
+            let chord = event.keystroke.unparse();
+            this.update(cx, |this, cx| {
+                this.state.update(cx, |s, cx| {
+                    let _ = s.bind_shortcut(id, chord, cx);
+                });
+                this.shortcut_listen = None;
+                cx.notify();
+            });
+        })
+        .detach();
         Self {
             state,
             focus,
@@ -153,6 +188,9 @@ impl MainWindow {
             view: View::Library,
             board: DrawBoard::new(),
             settings_tab: SettingsTab::General,
+            shortcut_listen: None,
+            settings_scroll: ScrollHandle::new(),
+            settings_thumb: Rc::new(RefCell::new(None)),
             copied: None,
             copied_epoch: 0,
             orig_hover: false,
@@ -193,11 +231,18 @@ impl MainWindow {
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.unzoom();
         self.view = if matches!(self.view, View::Settings) {
+            self.shortcut_listen = None;
             View::Library
         } else {
+            self.reset_settings_scroll();
             View::Settings
         };
         cx.notify();
+    }
+
+    fn reset_settings_scroll(&mut self) {
+        self.settings_scroll.set_offset(point(px(0.), px(0.)));
+        self.settings_thumb.borrow_mut().take();
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, _: &mut Window, cx: &mut Context<Self>) {
@@ -218,6 +263,7 @@ impl MainWindow {
         let was_zoom = self.orig_zoomed;
         self.unzoom();
         if matches!(self.view, View::Draw | View::Settings) {
+            self.shortcut_listen = None;
             self.view = View::Library;
             cx.notify();
         } else if was_zoom {
@@ -509,9 +555,9 @@ impl gpui::Render for MainWindow {
         let (has_selected, can_open_docx) = {
             let state = self.state.read(cx);
             let has_selected = state.selected().is_some();
-            let can_open_docx = state.selected_doc().is_some_and(|doc| {
-                matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded
-            });
+            let can_open_docx = state
+                .selected_doc()
+                .is_some_and(|doc| matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded);
             (has_selected, can_open_docx)
         };
         if matches!(view, View::Settings) && self.settings_tab == SettingsTab::System {
@@ -569,6 +615,10 @@ impl gpui::Render for MainWindow {
                 self.preview.thumb.clone(),
                 cx.entity_id(),
             ))
+            .child(ThumbDragCatcher::new(
+                self.settings_thumb.clone(),
+                cx.entity_id(),
+            ))
             .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
             .child(
                 div()
@@ -587,16 +637,37 @@ impl gpui::Render for MainWindow {
                     })
                     .when(matches!(view, View::Settings), |d| {
                         let tab = self.settings_tab;
+                        let listen = self.shortcut_listen;
                         let entity = cx.entity();
                         d.flex_col().child(super::settings::page(
                             self.state.clone(),
                             tab,
                             &self.sys_snap,
-                            move |tab, cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.settings_tab = tab;
-                                    cx.notify();
-                                });
+                            listen,
+                            {
+                                let entity = entity.clone();
+                                move |tab, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.settings_tab = tab;
+                                        this.shortcut_listen = None;
+                                        this.reset_settings_scroll();
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            {
+                                let entity = entity.clone();
+                                move |id, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.shortcut_listen = id;
+                                        cx.notify();
+                                    });
+                                }
+                            },
+                            SettingsScroll {
+                                handle: &self.settings_scroll,
+                                thumb: &self.settings_thumb,
+                                view: entity.entity_id(),
                             },
                             cx,
                         ))
@@ -702,13 +773,7 @@ impl MainWindow {
                     }
                 },
             ))
-            .child(
-                div()
-                    .w(px(1.))
-                    .h(px(16.))
-                    .mx_1()
-                    .bg(rgb(theme::TRACK_OFF)),
-            )
+            .child(div().w(px(1.)).h(px(16.)).mx_1().bg(rgb(theme::TRACK_OFF)))
             .child(self.tool_btn(
                 "tool-word",
                 IconKind::Word,
@@ -748,8 +813,10 @@ impl MainWindow {
                         entity.update(cx, |this, cx| {
                             this.unzoom();
                             this.view = if matches!(this.view, View::Settings) {
+                                this.shortcut_listen = None;
                                 View::Library
                             } else {
+                                this.reset_settings_scroll();
                                 View::Settings
                             };
                             cx.notify();
