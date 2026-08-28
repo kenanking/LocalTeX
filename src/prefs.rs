@@ -50,10 +50,17 @@ pub struct Prefs {
     pub inline_delim: InlineDelim,
     #[serde(default)]
     pub block_delim: BlockDelim,
+    /// History sidebar width in px, user-draggable between SIDEBAR limits.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_sidebar_width() -> f32 {
+    232.0
 }
 
 impl Default for Prefs {
@@ -66,6 +73,7 @@ impl Default for Prefs {
             close_action: WindowCloseAction::Minimize,
             inline_delim: InlineDelim::Dollar,
             block_delim: BlockDelim::Dollars,
+            sidebar_width: default_sidebar_width(),
         }
     }
 }

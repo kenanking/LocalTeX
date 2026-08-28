@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use gpui::{
     div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, RenderImage, ScrollHandle, SharedString, Window,
+    Focusable, Image, MouseButton, RenderImage, ScrollHandle, SharedString, Window,
 };
 use uuid::Uuid;
 
 use super::draw::DrawBoard;
+use super::history::{SIDEBAR_MAX, SIDEBAR_MIN};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
@@ -113,6 +114,8 @@ pub struct MainWindow {
     orig_zoomed: bool,
     zoom_doc: Option<Uuid>,
     pub(crate) preview: PreviewPane,
+    /// (pointer x at drag start, sidebar width at drag start).
+    pub(crate) sidebar_drag: Option<(f32, f32)>,
 }
 
 impl MainWindow {
@@ -153,6 +156,7 @@ impl MainWindow {
             orig_zoomed: false,
             zoom_doc: None,
             preview: PreviewPane::new(),
+            sidebar_drag: None,
         }
     }
 
@@ -432,6 +436,29 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::retry))
             .on_action(cx.listener(Self::quit))
             .cursor(CursorStyle::Arrow)
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
+                // Sidebar resize drag: started by the "sidebar-resize" strip.
+                let Some((start_x, start_w)) = this.sidebar_drag else {
+                    return;
+                };
+                let win_w: f32 = window.bounds().size.width.into();
+                let max = (win_w - 360.).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+                let w = (start_w + f32::from(ev.position.x) - start_x).clamp(SIDEBAR_MIN, max);
+                this.state.update(cx, |s, cx| {
+                    if (s.prefs.sidebar_width - w).abs() > 0.5 {
+                        s.prefs.sidebar_width = w;
+                        cx.notify();
+                    }
+                });
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.sidebar_drag.take().is_some() {
+                        this.state.update(cx, |s, _| s.persist_prefs());
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .size_full()

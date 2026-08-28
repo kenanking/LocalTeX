@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, uniform_list, App, Context, MouseButton, SharedString, Window,
+    div, img, prelude::*, px, rgb, uniform_list, App, Context, CursorStyle, MouseButton,
+    MouseDownEvent, SharedString, Window,
 };
 use uuid::Uuid;
 
@@ -12,10 +13,15 @@ use crate::cache::{ROW_HEIGHT_PX, THUMB_VIEWPORT_MULT};
 use crate::doc::ImageSlot;
 use crate::library::DATE_PRESETS;
 
+/// History sidebar width limits (px). MIN keeps the four date tabs uncrowded.
+pub(crate) const SIDEBAR_MIN: f32 = 208.0;
+pub(crate) const SIDEBAR_MAX: f32 = 420.0;
+
 impl MainWindow {
     pub(crate) fn render_history(&self, n_docs: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.state.read(cx);
         let date_preset = state.date_preset();
+        let width = state.prefs.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
         let mut list = div()
             .id("history")
             .key_context("SnipList")
@@ -26,7 +32,8 @@ impl MainWindow {
                     window.focus(&this.snip_list_focus);
                 }),
             )
-            .w(px(168.))
+            .relative()
+            .w(px(width))
             .flex_shrink_0()
             .h_full()
             .flex()
@@ -148,6 +155,25 @@ impl MainWindow {
                 .pb_2()
                 .child(rows),
         )
+        // Drag handle on the border; moves land on the window root (main.rs
+        // render) so the drag survives leaving this 8px strip.
+        .child(
+            div()
+                .id("sidebar-resize")
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(px(-4.))
+                .w(px(8.))
+                .cursor(CursorStyle::ResizeLeftRight)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                        this.sidebar_drag = Some((f32::from(ev.position.x), width));
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
     }
 }
 
@@ -166,6 +192,7 @@ fn history_row(
 
     div()
         .id(SharedString::from(id.to_string()))
+        .w_full()
         .h(px(ROW_HEIGHT_PX))
         .flex()
         .items_center()

@@ -689,6 +689,17 @@ impl AppState {
                     return;
                 }
                 this.library.visible_ids = ids;
+                // Keep the detail pane on a visible row while filtering.
+                let sel_gone = this
+                    .library
+                    .selected
+                    .is_none_or(|s| !this.library.visible_ids.contains(&s));
+                if sel_gone {
+                    this.library.selected = this.library.visible_ids.first().copied();
+                    if let Some(id) = this.library.selected {
+                        this.ensure_detail(id, cx);
+                    }
+                }
                 cx.notify();
             }) {
                 eprintln!("{APP_SLUG}: filter task: {err}");

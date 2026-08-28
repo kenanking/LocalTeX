@@ -72,6 +72,7 @@ Waku icon traps (paid for here, do not cargo-cult):
 - Comments only for non-obvious *why*. Prefer extending an existing file over adding a tiny new one.
 - Prefer `?` over `unwrap()`. New modules: `foo.rs`, not `foo/mod.rs` (except `desktop/` and `ocr/`, which already split backends).
 - Accent color is for actions and selection, not chrome. Status is a dot **plus** a text label (never color alone).
+- Sidebar resize: width lives in `prefs.sidebar_width` (limits `SIDEBAR_MIN/MAX` in `ui/history.rs`); the 8 px border strip only starts the drag, moves/ups are handled on the window root so the drag survives leaving the strip. Any mouse-down target inside the history sidebar that needs keyboard focus (the search field) must `cx.stop_propagation()` — the sidebar's own `on_mouse_down` re-focuses the snip list and would steal every keystroke.
 
 UI / overlay traps (already paid for):
 

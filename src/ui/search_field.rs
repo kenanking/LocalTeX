@@ -126,6 +126,9 @@ impl SearchField {
         } else {
             self.move_to(self.index_for_mouse_position(event.position), cx);
         }
+        // The sidebar's own on_mouse_down would re-focus the snip list and
+        // steal every keystroke from the field.
+        cx.stop_propagation();
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
