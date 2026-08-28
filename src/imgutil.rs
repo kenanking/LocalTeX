@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use gpui::RenderImage;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
@@ -61,6 +62,73 @@ pub fn cap_megapixels_at(img: RgbaImage, max_px: u64) -> RgbaImage {
     let tw = ((w as f64) * scale).round().max(1.0) as u32;
     let th = ((h as f64) * scale).round().max(1.0) as u32;
     imageops::resize(&img, tw, th, imageops::FilterType::Triangle)
+}
+
+/// Windows CF_DIB / CF_DIBV5 payload: BITMAPINFO header + bits, no BITMAPFILEHEADER.
+/// 32-bit high byte is unused on BI_RGB clipboard dumps, so alpha is forced opaque.
+pub fn decode_dib(data: &[u8]) -> Result<RgbaImage> {
+    if data.len() < 40 {
+        return Err(anyhow!("DIB too small"));
+    }
+    let bi_size = u32::from_le_bytes(data[0..4].try_into()?);
+    if !(40..=data.len() as u32).contains(&bi_size) {
+        return Err(anyhow!("bad BITMAPINFOHEADER size {bi_size}"));
+    }
+    let width = i32::from_le_bytes(data[4..8].try_into()?);
+    let height_s = i32::from_le_bytes(data[8..12].try_into()?);
+    let bit_count = u16::from_le_bytes(data[14..16].try_into()?);
+    let compression = u32::from_le_bytes(data[16..20].try_into()?);
+    if width <= 0 || height_s == 0 {
+        return Err(anyhow!("bad DIB geometry {width}x{height_s}"));
+    }
+    let top_down = height_s < 0;
+    let height = height_s.unsigned_abs();
+    let width = width as u32;
+
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+    if compression != BI_RGB && compression != BI_BITFIELDS {
+        return Err(anyhow!("unsupported DIB compression {compression}"));
+    }
+
+    let mut pix_off = bi_size as usize;
+    // BITMAPINFO + BI_BITFIELDS stores three DWORD masks after a 40-byte header.
+    if compression == BI_BITFIELDS && bi_size == 40 {
+        pix_off = pix_off.saturating_add(12);
+    }
+    let pixels = data
+        .get(pix_off..)
+        .ok_or_else(|| anyhow!("DIB pixel offset past end"))?;
+
+    match bit_count {
+        32 => decode_dib_bgra(width, height, top_down, 4, pixels),
+        24 => decode_dib_bgra(width, height, top_down, 3, pixels),
+        other => Err(anyhow!("unsupported DIB bit count {other}")),
+    }
+}
+
+fn decode_dib_bgra(
+    width: u32,
+    height: u32,
+    top_down: bool,
+    bpp: usize,
+    pixels: &[u8],
+) -> Result<RgbaImage> {
+    let stride = (width as usize * bpp).div_ceil(4) * 4;
+    let need = stride.saturating_mul(height as usize);
+    if pixels.len() < need {
+        return Err(anyhow!("DIB pixel buffer short: {} < {need}", pixels.len()));
+    }
+    let mut img = RgbaImage::new(width, height);
+    for y in 0..height {
+        let src_y = if top_down { y } else { height - 1 - y };
+        let row = &pixels[(src_y as usize) * stride..];
+        for x in 0..width {
+            let o = x as usize * bpp;
+            img.put_pixel(x, y, Rgba([row[o + 2], row[o + 1], row[o], 255]));
+        }
+    }
+    Ok(img)
 }
 
 pub fn encode_png_fast(img: &RgbaImage) -> anyhow::Result<Vec<u8>> {
@@ -251,5 +319,54 @@ mod tests {
         let px = u64::from(out.width()) * u64::from(out.height());
         assert!(px <= 90_000);
         assert!(out.width() > 200 && out.height() > 200);
+    }
+
+    fn packed_dib32(width: i32, height: i32, compression: u32, extra: &[u8], pixels: &[u8]) -> Vec<u8> {
+        let mut h = vec![0u8; 40];
+        h[0..4].copy_from_slice(&40u32.to_le_bytes());
+        h[4..8].copy_from_slice(&width.to_le_bytes());
+        h[8..12].copy_from_slice(&height.to_le_bytes());
+        h[12..14].copy_from_slice(&1u16.to_le_bytes());
+        h[14..16].copy_from_slice(&32u16.to_le_bytes());
+        h[16..20].copy_from_slice(&compression.to_le_bytes());
+        let mut out = h;
+        out.extend_from_slice(extra);
+        out.extend_from_slice(pixels);
+        out
+    }
+
+    #[test]
+    fn decode_dib32_bottom_up_bgr() {
+        // One bottom-up row: blue then red (Windows clipboard CF_DIB).
+        let dib = packed_dib32(2, 1, 0, &[], &[255, 0, 0, 255, 0, 0, 255, 255]);
+        let img = decode_dib(&dib).unwrap();
+        assert_eq!(img.dimensions(), (2, 1));
+        assert_eq!(img.get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(img.get_pixel(1, 0).0, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn decode_dib32_bitfields_skips_masks() {
+        let masks = [0x00FF0000u32, 0x0000FF00, 0x000000FF]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let dib = packed_dib32(1, -1, 3, &masks, &[0, 255, 0, 255]);
+        let img = decode_dib(&dib).unwrap();
+        assert_eq!(img.dimensions(), (1, 1));
+        assert_eq!(img.get_pixel(0, 0).0, [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn decode_dib24_row_padding() {
+        let mut h = vec![0u8; 40];
+        h[0..4].copy_from_slice(&40u32.to_le_bytes());
+        h[4..8].copy_from_slice(&1i32.to_le_bytes());
+        h[8..12].copy_from_slice(&1i32.to_le_bytes());
+        h[12..14].copy_from_slice(&1u16.to_le_bytes());
+        h[14..16].copy_from_slice(&24u16.to_le_bytes());
+        h.extend_from_slice(&[0, 0, 255, 0]); // BGR + pad to 4
+        let img = decode_dib(&h).unwrap();
+        assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
     }
 }

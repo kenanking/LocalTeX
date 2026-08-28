@@ -63,8 +63,7 @@ impl MainWindow {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
-                                this.view = View::Library;
-                                cx.notify();
+                                this.dismiss_sheet(cx);
                             });
                         }
                     }))
@@ -82,6 +81,7 @@ impl MainWindow {
                                             .collect()
                                     })
                                     .collect();
+                                this.board = DrawBoard::new();
                                 this.view = View::Library;
                                 this.state.update(cx, |s, cx| {
                                     s.ingest(IngestSource::Strokes(pts), cx);

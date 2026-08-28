@@ -96,11 +96,24 @@ pub fn icon_btn(
     enabled: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    icon_btn_sized(id, kind, hint, active, enabled, px(32.), px(18.), on_click)
+}
+
+pub fn icon_btn_sized(
+    id: impl Into<SharedString>,
+    kind: IconKind,
+    hint: impl Into<SharedString>,
+    active: bool,
+    enabled: bool,
+    hit: Pixels,
+    glyph: Pixels,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let id = id.into();
     let hint = hint.into();
     div()
         .id(id)
-        .size(px(32.))
+        .size(hit)
         .rounded_md()
         .flex()
         .items_center()
@@ -120,7 +133,7 @@ pub fn icon_btn(
             // text_color skips paint entirely (gpui 0.2 `svg` element).
             svg()
                 .path(kind.asset_path())
-                .size(px(18.))
+                .size(glyph)
                 .flex_shrink_0()
                 .text_color(rgb(theme::TEXT)),
         )

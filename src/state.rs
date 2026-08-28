@@ -41,6 +41,9 @@ pub struct AppState {
     file_loading: bool,
     thumb_inflight: HashSet<Uuid>,
     capture: Capture,
+    /// Bumped on every capture-status change so a flash timer cannot clear a
+    /// newer error (or a later Idle/Grabbing).
+    capture_gen: u64,
     pub main_window: Option<WindowHandle<MainWindow>>,
     /// Nested hide count: one increment per capture request, one decrement
     /// on that capture's cancel/error or its OCR finish. Tray Show zeros it.
@@ -82,6 +85,7 @@ impl AppState {
             file_loading: false,
             thumb_inflight: HashSet::new(),
             capture: Capture::Idle,
+            capture_gen: 0,
             main_window: None,
             hide_depth: 0,
             reveal_on_main: false,
@@ -128,6 +132,29 @@ impl AppState {
         }
     }
 
+    fn set_capture(&mut self, next: Capture) {
+        self.capture = next;
+        self.capture_gen = self.capture_gen.wrapping_add(1);
+    }
+
+    /// Footer hint for a recoverable miss. Clears itself so it cannot stick
+    /// after the user has moved on (paste with a real image, snip, etc.).
+    fn flash_capture_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
+        self.set_capture(Capture::Failed(msg.into()));
+        let gen = self.capture_gen;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(4)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.capture_gen == gen && matches!(this.capture, Capture::Failed(_)) {
+                    this.set_capture(Capture::Idle);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn engine_status(&self) -> crate::ocr::EngineStatus {
         self.engine.status()
     }
@@ -160,9 +187,10 @@ impl AppState {
         if matches!(self.capture, Capture::Grabbing) {
             return;
         }
-        self.capture = Capture::Grabbing;
+        self.set_capture(Capture::Grabbing);
         cx.notify();
         self.dismiss_main_sheet(cx);
+        crate::desktop::prepare_snip_input();
 
         let hide = self.prefs.hide_on_capture;
         if hide {
@@ -189,15 +217,14 @@ impl AppState {
             if let Err(err) = this.update(cx, |this, cx| match picked {
                 Ok(Some(crop)) => this.finish_capture(crop, cx),
                 Ok(None) => {
-                    this.capture = Capture::Idle;
+                    this.set_capture(Capture::Idle);
                     this.reveal_on_main = false;
                     this.restore_after_hide(cx);
                     cx.notify();
                 }
                 Err(err) => {
-                    this.capture = Capture::Failed(err.to_string());
+                    this.flash_capture_error(err.to_string(), cx);
                     this.restore_after_hide(cx);
-                    cx.notify();
                 }
             }) {
                 eprintln!("{APP_SLUG}: capture task: {err}");
@@ -208,7 +235,7 @@ impl AppState {
 
     pub fn finish_capture(&mut self, crop: RgbaImage, cx: &mut Context<Self>) {
         self.reveal_on_main = true;
-        self.capture = Capture::Idle;
+        self.set_capture(Capture::Idle);
         self.ingest(IngestSource::Screen(crop), cx);
     }
 
@@ -228,8 +255,7 @@ impl AppState {
                         if let Some(img) = img {
                             this.ingest_pixels(img, cx);
                         } else {
-                            this.capture = Capture::Failed("empty drawing".into());
-                            cx.notify();
+                            this.flash_capture_error("That drawing is empty", cx);
                         }
                     }) {
                         eprintln!("{APP_SLUG}: stroke ingest: {err}");
@@ -238,13 +264,13 @@ impl AppState {
                 .detach();
             }
             IngestSource::PdfPages { .. } => {
-                self.capture = Capture::Failed("PDF ingest is not implemented yet".into());
-                cx.notify();
+                self.flash_capture_error("PDF ingest is not implemented yet", cx);
             }
         }
     }
 
     fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) {
+        self.set_capture(Capture::Idle);
         let (w0, h0) = image.dimensions();
         let image = crate::imgutil::cap_megapixels(image);
         if image.dimensions() != (w0, h0) {
@@ -288,9 +314,28 @@ impl AppState {
         if self.is_capturing() {
             return;
         }
+        // Windows: GPUI skips CF_DIB/CF_BITMAP and can return text when a
+        // bitmap is also present. Try every native candidate (PNG may be a
+        // stub; DIB/HBITMAP still work).
+        let candidates = crate::desktop::read_clipboard_image();
+        if !candidates.is_empty() {
+            self.spawn_paste_image(
+                move || {
+                    let mut last = None;
+                    for raw in candidates {
+                        match crate::desktop::decode_clipboard_image(raw) {
+                            Ok(img) => return Ok(img),
+                            Err(err) => last = Some(err),
+                        }
+                    }
+                    Err(last.unwrap_or_else(|| anyhow::anyhow!("no clipboard image")))
+                },
+                cx,
+            );
+            return;
+        }
         let Some(item) = cx.read_from_clipboard() else {
-            self.capture = Capture::Failed("Clipboard is empty".into());
-            cx.notify();
+            self.flash_capture_error("Clipboard is empty — copy an image first", cx);
             return;
         };
         let image_bytes = item.entries().iter().find_map(|entry| match entry {
@@ -298,23 +343,14 @@ impl AppState {
             _ => None,
         });
         if let Some(bytes) = image_bytes {
-            cx.spawn(async move |this, cx| {
-                let decoded = cx
-                    .background_spawn(async move {
-                        image::load_from_memory(&bytes).map(|d| d.to_rgba8())
-                    })
-                    .await;
-                if let Err(err) = this.update(cx, |this, cx| match decoded {
-                    Ok(img) => this.ingest_pixels(img, cx),
-                    Err(err) => {
-                        this.capture = Capture::Failed(format!("clipboard image: {err}"));
-                        cx.notify();
-                    }
-                }) {
-                    eprintln!("{APP_SLUG}: paste task: {err}");
-                }
-            })
-            .detach();
+            self.spawn_paste_image(
+                move || {
+                    image::load_from_memory(&bytes)
+                        .map(|d| d.to_rgba8())
+                        .map_err(|err| anyhow::anyhow!("{err}"))
+                },
+                cx,
+            );
             return;
         }
         let paths = item
@@ -325,8 +361,28 @@ impl AppState {
             self.ingest(IngestSource::Files(paths), cx);
             return;
         }
-        self.capture = Capture::Failed("No image or image path in clipboard".into());
+        self.flash_capture_error("Nothing to paste — copy an image first", cx);
+    }
+
+    fn spawn_paste_image<F>(&mut self, decode: F, cx: &mut Context<Self>)
+    where
+        F: FnOnce() -> anyhow::Result<image::RgbaImage> + Send + 'static,
+    {
+        self.set_capture(Capture::Idle);
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let decoded = cx.background_spawn(async move { decode() }).await;
+            if let Err(err) = this.update(cx, |this, cx| match decoded {
+                Ok(img) => this.ingest_pixels(img, cx),
+                Err(err) => {
+                    eprintln!("{APP_SLUG}: clipboard image: {err}");
+                    this.flash_capture_error("Couldn't read that clipboard image", cx);
+                }
+            }) {
+                eprintln!("{APP_SLUG}: paste task: {err}");
+            }
+        })
+        .detach();
     }
 
     fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
@@ -346,8 +402,8 @@ impl AppState {
                 match decoded {
                     Ok(img) => this.ingest_pixels(img, cx),
                     Err(err) => {
-                        this.capture = Capture::Failed(format!("open image: {err}"));
-                        cx.notify();
+                        eprintln!("{APP_SLUG}: open image: {err}");
+                        this.flash_capture_error("Couldn't open that image", cx);
                     }
                 }
                 this.pump_file_ingest(cx);

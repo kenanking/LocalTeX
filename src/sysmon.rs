@@ -1,5 +1,6 @@
 //! Local resource sampling for Settings → System. Linux reads /proc and
-//! statvfs; other targets compile to partial samples (compile-only paths).
+//! statvfs; Windows uses GetSystemTimes / GlobalMemoryStatusEx / GetDiskFreeSpaceEx.
+//! Other targets compile to partial samples (compile-only paths).
 
 use std::path::Path;
 
@@ -161,7 +162,34 @@ fn cpu_jiffies() -> Option<(u64, u64)> {
     Some((nums.iter().sum(), nums[3] + nums[4])) // idle + iowait
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn cpu_jiffies() -> Option<(u64, u64)> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::GetSystemTimes;
+    let mut idle = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetSystemTimes(
+            Some(&mut idle as *mut FILETIME),
+            Some(&mut kernel as *mut FILETIME),
+            Some(&mut user as *mut FILETIME),
+        )
+    }
+    .ok()?;
+    // Kernel time already includes idle.
+    let idle = filetime_u64(idle);
+    let kernel = filetime_u64(kernel);
+    let user = filetime_u64(user);
+    Some((kernel.saturating_add(user), idle))
+}
+
+#[cfg(target_os = "windows")]
+fn filetime_u64(ft: windows::Win32::Foundation::FILETIME) -> u64 {
+    (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn cpu_jiffies() -> Option<(u64, u64)> {
     None
 }
@@ -185,7 +213,22 @@ fn mem_info() -> (Option<u64>, Option<u64>) {
     (total, total.zip(avail).map(|(t, a)| t.saturating_sub(a)))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn mem_info() -> (Option<u64>, Option<u64>) {
+    use std::mem::size_of;
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut mem = MEMORYSTATUSEX {
+        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GlobalMemoryStatusEx(&mut mem) }.is_err() {
+        return (None, None);
+    }
+    let total = mem.ullTotalPhys;
+    (Some(total), Some(total.saturating_sub(mem.ullAvailPhys)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn mem_info() -> (Option<u64>, Option<u64>) {
     (None, None)
 }
@@ -198,7 +241,21 @@ fn self_rss() -> Option<u64> {
     Some(pages * page)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn self_rss() -> Option<u64> {
+    use std::mem::size_of;
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    let mut pmc = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) }
+        .ok()
+        .map(|()| pmc.WorkingSetSize as u64)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn self_rss() -> Option<u64> {
     None
 }
@@ -217,7 +274,28 @@ fn drive_stats(path: &Path) -> (Option<u64>, Option<u64>) {
     (Some(stat.f_blocks * frag), Some(stat.f_bavail * frag))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+fn drive_stats(path: &Path) -> (Option<u64>, Option<u64>) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut total = 0u64;
+    let mut free = 0u64;
+    unsafe {
+        GetDiskFreeSpaceExW(
+            PCWSTR(wide.as_ptr()),
+            None,
+            Some(&mut total as *mut u64),
+            Some(&mut free as *mut u64),
+        )
+    }
+    .ok()
+    .map(|()| (Some(total), Some(free)))
+    .unwrap_or((None, None))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn drive_stats(_path: &Path) -> (Option<u64>, Option<u64>) {
     (None, None)
 }
@@ -258,6 +336,22 @@ mod tests {
         assert!(second.cpu_pct.is_some());
         assert!(second.mem_total.unwrap_or(0) > 0);
         assert!(second.app_rss.unwrap_or(0) > 0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_samples_are_populated() {
+        let mut mon = SysMon::new();
+        let first = mon.sample();
+        assert!(first.cpu_pct.is_none());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = mon.sample();
+        assert!(second.cpu_pct.is_some());
+        assert!(second.mem_total.unwrap_or(0) > 0);
+        assert!(second.mem_used.unwrap_or(0) > 0);
+        assert!(second.app_rss.unwrap_or(0) > 0);
+        let disk = super::disk_sample();
+        assert!(disk.drive_total.unwrap_or(0) > 0);
     }
 
     #[test]

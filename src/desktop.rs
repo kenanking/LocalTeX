@@ -12,6 +12,12 @@ mod linux;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod other;
 #[cfg(target_os = "windows")]
+mod win;
+#[cfg(target_os = "windows")]
+mod win_clipboard;
+#[cfg(target_os = "windows")]
+mod win_cursor;
+#[cfg(target_os = "windows")]
 mod win_snip;
 #[cfg(target_os = "linux")]
 mod x11_snip;
@@ -82,6 +88,33 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
+/// Encoded bytes (PNG/JPEG/GIF) or a CF_DIB payload. Windows fills this;
+/// other targets fall through to GPUI's clipboard in `AppState`.
+pub enum ClipboardImage {
+    Encoded(Vec<u8>),
+    Dib(Vec<u8>),
+}
+
+/// Ordered candidates (PNG/JPEG, then DIB, then CF_BITMAP). Empty on
+/// non-Windows; `AppState` then uses GPUI's clipboard.
+pub fn read_clipboard_image() -> Vec<ClipboardImage> {
+    #[cfg(target_os = "windows")]
+    {
+        win_clipboard::read()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn decode_clipboard_image(raw: ClipboardImage) -> anyhow::Result<image::RgbaImage> {
+    match raw {
+        ClipboardImage::Encoded(bytes) => Ok(image::load_from_memory(&bytes)?.to_rgba8()),
+        ClipboardImage::Dib(bytes) => crate::imgutil::decode_dib(&bytes),
+    }
+}
+
 /// Native snip overlay. Returns `Ok(None)` if the user cancelled.
 /// Must run off the GPUI thread. Never opens a second GPUI/Vulkan window.
 pub fn select_region(
@@ -119,7 +152,13 @@ pub fn wait_until_iconified() {
     linux::wait_until_iconified();
     #[cfg(target_os = "windows")]
     {
-        // GPUI minimize is async; WGC would include the main window otherwise.
-        std::thread::sleep(std::time::Duration::from_millis(280));
+        win::wait_until_main_iconified();
     }
+}
+
+/// Call from the GPUI thread before a snip so the overlay can become
+/// foreground and any leftover mouse capture is dropped.
+pub fn prepare_snip_input() {
+    #[cfg(target_os = "windows")]
+    win::prepare_snip_input();
 }

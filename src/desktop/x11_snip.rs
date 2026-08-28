@@ -9,7 +9,7 @@ use image::RgbaImage;
 use x11rb::connection::Connection;
 use x11rb::image::{BitsPerPixel, ColorComponent, Image, ImageOrder, PixelLayout, ScanlinePad};
 use x11rb::protocol::xproto::{
-    ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, Gcontext, GrabMode, GrabStatus,
+    ConnectionExt, CreateGCAux, CreateWindowAux, Cursor, EventMask, Gcontext, GrabMode, GrabStatus,
     Rectangle, Screen, Window, WindowClass,
 };
 use x11rb::protocol::Event;
@@ -99,6 +99,7 @@ fn run<C: Connection>(conn: &C, screen: &Screen, shot: &DesktopShot) -> Result<O
             .background_pixmap(pix_dim),
     )?;
 
+    let cursor = load_crosshair_cursor(conn).unwrap_or(NONE);
     let mut session = Session {
         conn,
         win,
@@ -106,6 +107,7 @@ fn run<C: Connection>(conn: &C, screen: &Screen, shot: &DesktopShot) -> Result<O
         pix_dim,
         gc,
         gc_rect,
+        cursor,
         grabbed: false,
     };
     conn.map_window(win)?;
@@ -129,6 +131,7 @@ struct Session<'a, C: Connection> {
     pix_dim: u32,
     gc: Gcontext,
     gc_rect: Gcontext,
+    cursor: Cursor,
     grabbed: bool,
 }
 
@@ -145,6 +148,9 @@ impl<C: Connection> Drop for Session<'_, C> {
         let _ = self.conn.free_pixmap(self.pix_dim);
         let _ = self.conn.free_gc(self.gc);
         let _ = self.conn.free_gc(self.gc_rect);
+        if self.cursor != NONE {
+            let _ = self.conn.free_cursor(self.cursor);
+        }
         let _ = self.conn.flush();
     }
 }
@@ -163,7 +169,7 @@ impl<C: Connection> Session<'_, C> {
                     GrabMode::ASYNC,
                     GrabMode::ASYNC,
                     NONE,
-                    NONE,
+                    self.cursor,
                     CURRENT_TIME,
                 )?
                 .reply()?;
@@ -396,6 +402,37 @@ fn rgba_to_native(
         packed.put_pixel(x as u16, y as u16, value);
     }
     Ok(packed.reencode(rgb, visual, setup)?.into_owned())
+}
+
+/// XC_crosshair from the core cursor font. Native overlay cursor, not
+/// GPUI `CursorStyle::Crosshair` (that can leak after destroy on X11).
+const XC_CROSSHAIR: u16 = 34;
+
+fn load_crosshair_cursor<C: Connection>(conn: &C) -> Option<Cursor> {
+    let font = conn.generate_id().ok()?;
+    conn.open_font(font, b"cursor").ok()?;
+    let cursor = conn.generate_id().ok()?;
+    if conn
+        .create_glyph_cursor(
+            cursor,
+            font,
+            font,
+            XC_CROSSHAIR,
+            XC_CROSSHAIR + 1,
+            0,
+            0,
+            0,
+            0xffff,
+            0xffff,
+            0xffff,
+        )
+        .is_err()
+    {
+        let _ = conn.close_font(font);
+        return None;
+    }
+    let _ = conn.close_font(font);
+    Some(cursor)
 }
 
 fn escape_keycodes<C: Connection>(conn: &C) -> Result<Vec<u8>> {

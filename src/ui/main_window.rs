@@ -17,7 +17,7 @@ use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsTab;
 use super::theme;
-use super::widgets::{icon_btn, status_dot, IconKind};
+use super::widgets::{icon_btn_sized, status_dot, IconKind};
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr,
     SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
@@ -175,9 +175,16 @@ impl MainWindow {
     }
 
     fn start_draw(&mut self, _: &StartDraw, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_draw(cx);
+    }
+
+    fn toggle_draw(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.view, View::Draw) {
+            self.dismiss_sheet(cx);
+            return;
+        }
         self.unzoom();
         self.view = View::Draw;
-        self.board = DrawBoard::new();
         cx.notify();
     }
 
@@ -320,19 +327,14 @@ impl MainWindow {
         cx.spawn(async move |this, cx| {
             let mut ticks = 0u32;
             loop {
-                let disk = if ticks.is_multiple_of(20) {
-                    Some(
-                        cx.background_spawn(async move { crate::sysmon::disk_sample() })
-                            .await,
-                    )
-                } else {
-                    None
-                };
+                // CPU/memory are cheap Win32 /proc reads. Do not wait on the
+                // models/snips walk first — that walk can sit in Defender for
+                // a long time and left this tab showing "—" on Windows.
                 let still = this
                     .update(cx, |this, cx| {
-                        // sample() carries disk: None — keep the last walk.
+                        let disk = this.sys_snap.disk.clone();
                         let mut snap = this.sysmon.sample();
-                        snap.disk = disk.or_else(|| this.sys_snap.disk.take());
+                        snap.disk = disk;
                         this.sys_snap = snap;
                         cx.notify();
                         matches!(this.view, View::Settings)
@@ -341,6 +343,15 @@ impl MainWindow {
                     .unwrap_or(false);
                 if !still {
                     break;
+                }
+                if ticks.is_multiple_of(20) {
+                    let disk = cx
+                        .background_spawn(async move { crate::sysmon::disk_sample() })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.sys_snap.disk = Some(disk);
+                        cx.notify();
+                    });
                 }
                 ticks += 1;
                 Timer::after(Duration::from_millis(1500)).await;
@@ -580,6 +591,23 @@ impl MainWindow {
             .bg(rgb(theme::BG_RAISED))
             .border_b_1()
             .border_color(rgb(theme::BORDER))
+            .child({
+                let entity = cx.entity();
+                div()
+                    .id("topbar-home")
+                    .px_2()
+                    .mr_1()
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
+                    .text_sm()
+                    .text_color(rgb(theme::MUTED))
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |this, cx| this.dismiss_sheet(cx));
+                    })
+                    .child(crate::identity::APP_NAME)
+            })
             .child(self.tool_btn(
                 "tool-snip",
                 IconKind::Snip,
@@ -634,25 +662,11 @@ impl MainWindow {
                 {
                     let entity = cx.entity();
                     move |_, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.unzoom();
-                            this.view = View::Draw;
-                            this.board = DrawBoard::new();
-                            cx.notify();
-                        });
+                        entity.update(cx, |this, cx| this.toggle_draw(cx));
                     }
                 },
             ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .px_3()
-                    .text_sm()
-                    .text_ellipsis()
-                    .text_color(rgb(theme::MUTED))
-                    .child(crate::identity::APP_NAME),
-            )
+            .child(div().flex_1())
             .child(self.tool_btn(
                 "tool-delete",
                 IconKind::Delete,
@@ -698,7 +712,7 @@ impl MainWindow {
         enabled: bool,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        icon_btn(id, kind, hint, active, enabled, on_click)
+        icon_btn_sized(id, kind, hint, active, enabled, px(32.), px(24.), on_click)
     }
 
     fn render_footer(
@@ -742,6 +756,6 @@ fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     }
     match state.engine_status() {
         status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
-        EngineStatus::Ready => (theme::StatusKind::Ready, "Ready".into()),
+        EngineStatus::Ready => (theme::StatusKind::Ready, "Ready when you are".into()),
     }
 }

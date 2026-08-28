@@ -2,6 +2,7 @@
 //! Vulkan swapchain is forbidden). Recreated every snip, so plugging a
 //! display in or out does not need a process restart — Mathpix/Qt restarts
 //! because QScreen geometry is cached in device-independent pixels.
+//! Hide-before-WGC lives in `win.rs`; the reticle is `win_cursor.rs`.
 
 use std::mem::size_of;
 use std::time::{Duration, Instant};
@@ -20,18 +21,18 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, SetCapture, VK_ESCAPE,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
     GetWindowLongPtrW, LoadCursorW, PeekMessageW, RegisterClassW, SetCursor, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA, HWND_TOPMOST,
-    IDC_ARROW, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA, HCURSOR,
+    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SWP_SHOWWINDOW, SW_SHOW, WM_DESTROY, WM_DISPLAYCHANGE,
+    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
     WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
+use super::win;
+use super::win_cursor::OverlayCursor;
 use crate::capture::{self, DesktopShot};
 use crate::identity::APP_SLUG;
 
@@ -65,9 +66,23 @@ struct Session {
     anchor: Option<(i32, i32)>,
     last: Option<(i32, i32, i32, i32)>,
     done: Option<Option<RgbaImage>>,
+    cursor: HCURSOR,
 }
 
 pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
+    // Dedicated overlay thread: CreateWindow + PeekMessage + DestroyWindow +
+    // ReleaseCapture, then exit. Grab stays on the GPUI background pool.
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .name("localtex-snip".into())
+            .spawn_scoped(s, || run_overlay(shot))
+            .map_err(|err| anyhow!("snip overlay thread: {err}"))?
+            .join()
+            .unwrap_or_else(|_| Err(anyhow!("snip overlay thread panicked")))
+    })
+}
+
+fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
     eprintln!(
         "{APP_SLUG}: win snip {}x{} origin {},{}",
         shot.image.width(),
@@ -85,10 +100,12 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
     }
 
     unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    win::reset_pointer_state();
 
     register_class()?;
 
-    let dim_full = capture::dim_copy(&shot.image);
+    let instance = unsafe { GetModuleHandleW(None) }.map_err(|err| anyhow!(err))?;
+    let overlay_cursor = OverlayCursor::load(instance.into());
     let mut session = Session {
         image: &shot.image,
         shot_origin_x: shot.origin_x,
@@ -97,14 +114,12 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         anchor: None,
         last: None,
         done: None,
+        cursor: overlay_cursor.handle,
     };
-
-    let instance = unsafe { GetModuleHandleW(None) }.map_err(|err| anyhow!(err))?;
     for &(x, y, w, h) in &rects {
-        let slice = canvas_slice(&shot.image, shot.origin_x, shot.origin_y, x, y, w, h)?;
-        let dim_slice = canvas_slice(&dim_full, shot.origin_x, shot.origin_y, x, y, w, h)?;
-        let dim = rgba_to_dib(&dim_slice)?;
-        let bright = rgba_to_dib(&slice)?;
+        let dim = rgba_to_dib_region(&shot.image, shot.origin_x, shot.origin_y, x, y, w, h, true)?;
+        let bright =
+            rgba_to_dib_region(&shot.image, shot.origin_x, shot.origin_y, x, y, w, h, false)?;
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -146,16 +161,7 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
             back_old,
         });
         unsafe {
-            SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                x,
-                y,
-                w,
-                h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
-            .ok();
+            SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_SHOWWINDOW).ok();
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
     }
@@ -163,15 +169,16 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         return Err(anyhow!("no snip overlay window"));
     }
     unsafe {
-        let _ = SetForegroundWindow(session.overlays[0].hwnd);
-        SetCursor(LoadCursorW(None, IDC_ARROW).ok());
+        let hwnd = session.overlays[0].hwnd;
+        let _ = SetForegroundWindow(hwnd);
+        overlay_cursor.apply();
     }
 
     let deadline = Instant::now() + OVERLAY_TIMEOUT;
     while session.done.is_none() {
         if Instant::now() >= deadline {
             eprintln!("{APP_SLUG}: win snip timed out");
-            session.done = Some(None);
+            cancel_snip(&mut session);
             break;
         }
         let mut msg = MSG::default();
@@ -182,10 +189,6 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
                 DispatchMessageW(&msg);
             }
         } else {
-            if unsafe { GetAsyncKeyState(VK_ESCAPE.0 as i32) } < 0 {
-                session.done = Some(None);
-                break;
-            }
             std::thread::sleep(Duration::from_millis(8));
         }
     }
@@ -200,6 +203,7 @@ pub fn select_region(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
             let _ = DestroyWindow(overlay.hwnd);
         }
     }
+    win::reset_pointer_state();
     Ok(crop)
 }
 
@@ -240,33 +244,6 @@ fn clip_monitor_to_shot(
         shot.origin_y.saturating_add(shot_h),
     )?;
     Some((ix0, iy0, ix1 - ix0, iy1 - iy0))
-}
-
-fn canvas_slice(
-    img: &RgbaImage,
-    shot_ox: i32,
-    shot_oy: i32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> Result<RgbaImage> {
-    let src_x = u32::try_from(x - shot_ox).map_err(|_| anyhow!("slice x"))?;
-    let src_y = u32::try_from(y - shot_oy).map_err(|_| anyhow!("slice y"))?;
-    let width = u32::try_from(w).map_err(|_| anyhow!("slice w"))?;
-    let height = u32::try_from(h).map_err(|_| anyhow!("slice h"))?;
-    if src_x.saturating_add(width) > img.width() || src_y.saturating_add(height) > img.height() {
-        return Err(anyhow!("slice outside freeze-frame"));
-    }
-    Ok(crate::imgutil::crop(img, src_x, src_y, width, height))
-}
-
-/// StretchDIBits `nYSrc` is measured from the DIB's lower-left, even when we
-/// think in image-top coordinates. Passing a top-origin Y here is what made
-/// the lower monitor show the primary's pixels (and vice versa for selection).
-#[cfg(test)]
-fn gdi_src_y(src_top: i32, src_h: i32, dib_h: i32) -> i32 {
-    dib_h - src_top - src_h
 }
 
 fn intersect(
@@ -310,19 +287,51 @@ fn register_class() -> Result<()> {
     Ok(())
 }
 
-fn rgba_to_dib(img: &RgbaImage) -> Result<Dib> {
-    let width = i32::try_from(img.width()).context_width()?;
-    let height = i32::try_from(img.height()).context_width()?;
+fn rgba_to_dib_region(
+    img: &RgbaImage,
+    shot_ox: i32,
+    shot_oy: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    gray_dim: bool,
+) -> Result<Dib> {
+    let src_x = u32::try_from(x - shot_ox).map_err(|_| anyhow!("slice x"))?;
+    let src_y = u32::try_from(y - shot_oy).map_err(|_| anyhow!("slice y"))?;
+    if w <= 0 || h <= 0 {
+        return Err(anyhow!("empty overlay slice"));
+    }
+    let width = w;
+    let height = h;
+    let src_w = img.width();
+    let src_h = img.height();
+    if src_x.saturating_add(w as u32) > src_w || src_y.saturating_add(h as u32) > src_h {
+        return Err(anyhow!("slice outside freeze-frame"));
+    }
     let stride = (width as usize) * 4;
+    let src_stride = src_w as usize * 4;
+    let raw = img.as_raw();
     let mut bits = vec![0u8; stride * height as usize];
-    for y in 0..height as usize {
-        let dst_y = height as usize - 1 - y;
-        for x in 0..width as usize {
-            let p = img.get_pixel(x as u32, y as u32).0;
-            let o = dst_y * stride + x * 4;
-            bits[o] = p[2];
-            bits[o + 1] = p[1];
-            bits[o + 2] = p[0];
+    for row in 0..height as usize {
+        let src_row = (src_y as usize + row) * src_stride + src_x as usize * 4;
+        let dst_row = (height as usize - 1 - row) * stride;
+        for col in 0..width as usize {
+            let s = src_row + col * 4;
+            let o = dst_row + col * 4;
+            let r = raw[s];
+            let g = raw[s + 1];
+            let b = raw[s + 2];
+            if gray_dim {
+                let d = capture::dim_luma(r, g, b);
+                bits[o] = d;
+                bits[o + 1] = d;
+                bits[o + 2] = d;
+            } else {
+                bits[o] = b;
+                bits[o + 1] = g;
+                bits[o + 2] = r;
+            }
             bits[o + 3] = 255;
         }
     }
@@ -365,16 +374,6 @@ fn create_back_buffer(hwnd: HWND, width: i32, height: i32) -> Result<(HDC, HBITM
         }
         let old = SelectObject(hdc, bmp.into());
         Ok((hdc, bmp, old))
-    }
-}
-
-trait WidthConv<T> {
-    fn context_width(self) -> Result<T>;
-}
-
-impl WidthConv<i32> for std::result::Result<i32, std::num::TryFromIntError> {
-    fn context_width(self) -> Result<i32> {
-        self.map_err(|_| anyhow!("shot dimension does not fit GDI"))
     }
 }
 
@@ -466,6 +465,12 @@ fn finish_drag(session: &mut Session, bx: i32, by: i32) {
     session.done = Some(capture::crop_selection(image, ax, ay, bx, by));
 }
 
+fn cancel_snip(session: &mut Session) {
+    win::reset_pointer_state();
+    session.anchor = None;
+    session.done = Some(None);
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let session = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut Session;
     if session.is_null() {
@@ -475,13 +480,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_ERASEBKGND => LRESULT(1),
         WM_SETCURSOR => {
-            unsafe { SetCursor(LoadCursorW(None, IDC_ARROW).ok()) };
+            unsafe { SetCursor(Some(session.cursor)) };
             LRESULT(1)
         }
         WM_PAINT => {
             paint(hwnd, session);
             LRESULT(0)
         }
+        WM_MOUSEACTIVATE => LRESULT(1),
         WM_LBUTTONDOWN => {
             if let Some(pt) = to_canvas(session, hwnd, lparam_x(lparam), lparam_y(lparam)) {
                 session.anchor = Some(pt);
@@ -509,6 +515,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONUP => {
             let _ = unsafe { ReleaseCapture() };
+            // Snip-button mouse-up can land on the overlay. Without an
+            // overlay LBUTTONDOWN that must not cancel the snip.
+            if session.anchor.is_none() {
+                return LRESULT(0);
+            }
             let pt = cursor_canvas(session, hwnd)
                 .or_else(|| to_canvas(session, hwnd, lparam_x(lparam), lparam_y(lparam)));
             if let Some((bx, by)) = pt {
@@ -519,12 +530,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONUP | WM_DISPLAYCHANGE => {
-            session.done = Some(None);
+            cancel_snip(session);
             LRESULT(0)
         }
         WM_KEYDOWN => {
             if wparam.0 as u16 == VK_ESCAPE.0 {
-                session.done = Some(None);
+                cancel_snip(session);
             }
             LRESULT(0)
         }
@@ -693,17 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn gdi_src_y_uses_dib_lower_left() {
-        // Primary 1234px tall on top, secondary 900px below → canvas 2134.
-        // Passing the image-top Y (1234) into StretchDIBits nYSrc shows the
-        // primary on the secondary overlay; GDI wants 0 from the bottom.
-        assert_eq!(gdi_src_y(0, 1234, 2134), 900);
-        assert_eq!(gdi_src_y(1234, 900, 2134), 0);
-        assert_eq!(gdi_src_y(0, 2134, 2134), 0);
-    }
-
-    #[test]
-    fn canvas_slice_stacked_monitors_keeps_each_screen() {
+    fn overlay_rects_stacked_monitors_keep_each_screen() {
         let mut img = RgbaImage::from_pixel(20, 18, Rgba([0, 0, 0, 255]));
         for y in 0..10 {
             for x in 0..20 {
@@ -721,8 +722,8 @@ mod tests {
             origin_y: 0,
             monitors: vec![(0, 0, 20, 10), (2, 10, 10, 8)],
         };
-        let primary = canvas_slice(&shot.image, 0, 0, 0, 0, 20, 10).unwrap();
-        let secondary = canvas_slice(&shot.image, 0, 0, 2, 10, 10, 8).unwrap();
+        let primary = crate::imgutil::crop(&shot.image, 0, 0, 20, 10);
+        let secondary = crate::imgutil::crop(&shot.image, 2, 10, 10, 8);
         assert_eq!(primary.get_pixel(0, 0).0, [10, 0, 0, 255]);
         assert_eq!(secondary.get_pixel(0, 0).0, [20, 0, 0, 255]);
         assert_eq!(overlay_rects(&shot), vec![(0, 0, 20, 10), (2, 10, 10, 8)]);

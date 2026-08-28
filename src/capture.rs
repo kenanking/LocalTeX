@@ -95,18 +95,45 @@ pub fn crop_selection(image: &RgbaImage, ax: i32, ay: i32, bx: i32, by: i32) -> 
 }
 
 pub fn grab_desktop() -> Result<DesktopShot> {
-    stitch(&grab_all()?)
+    shot_from_grabs(grab_all()?)
 }
 
-/// Dim a copy of the freeze-frame for the unselected overlay (CPU, ~0.45).
-pub fn dim_copy(image: &RgbaImage) -> RgbaImage {
-    let mut dim = image.clone();
-    for pixel in dim.pixels_mut() {
-        pixel.0[0] = (u16::from(pixel.0[0]) * 115 / 255) as u8;
-        pixel.0[1] = (u16::from(pixel.0[1]) * 115 / 255) as u8;
-        pixel.0[2] = (u16::from(pixel.0[2]) * 115 / 255) as u8;
+fn shot_from_grabs(grabs: Vec<Grab>) -> Result<DesktopShot> {
+    match grabs.len() {
+        0 => stitch(&[]),
+        1 => {
+            let grab = grabs.into_iter().next().expect("len == 1");
+            let w = i32::try_from(grab.image.width()).unwrap_or(0);
+            let h = i32::try_from(grab.image.height()).unwrap_or(0);
+            Ok(DesktopShot {
+                origin_x: grab.origin_x,
+                origin_y: grab.origin_y,
+                monitors: vec![(grab.origin_x, grab.origin_y, w, h)],
+                image: grab.image,
+            })
+        }
+        _ => stitch(&grabs),
     }
-    dim
+}
+
+/// BT.601 luma scaled to ~55% (overlay dim).
+pub fn dim_luma(r: u8, g: u8, b: u8) -> u8 {
+    let y = (u32::from(r) * 77 + u32::from(g) * 150 + u32::from(b) * 29) >> 8;
+    (y * 140 / 255) as u8
+}
+
+/// Grayscale + dim for the unselected overlay (Mathpix-style). The
+/// selected region is painted from the original freeze-frame.
+#[cfg(any(target_os = "linux", test))]
+pub fn dim_copy(image: &RgbaImage) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    let src = image.as_raw();
+    let mut out = Vec::with_capacity(src.len());
+    for px in src.chunks_exact(4) {
+        let d = dim_luma(px[0], px[1], px[2]);
+        out.extend_from_slice(&[d, d, d, px[3]]);
+    }
+    RgbaImage::from_raw(w, h, out).expect("dim_copy preserves pixel count")
 }
 
 fn grab_monitor(monitor: &xcap::Monitor) -> Result<Grab> {
@@ -201,5 +228,27 @@ mod tests {
         let crop = crop_selection(&img, 12, 14, 3, 5).unwrap();
         assert_eq!(crop.dimensions(), (9, 9));
         assert_eq!(crop.get_pixel(0, 0).0, [7, 0, 0, 255]);
+    }
+
+    #[test]
+    fn dim_copy_is_gray_and_darker() {
+        let img = RgbaImage::from_pixel(1, 1, Rgba([255, 0, 0, 255]));
+        let dim = dim_copy(&img);
+        let p = dim.get_pixel(0, 0).0;
+        assert_eq!(p[0], p[1]);
+        assert_eq!(p[1], p[2]);
+        assert!(p[0] > 0 && p[0] < 80, "dimmed luma, got {}", p[0]);
+        assert_eq!(p[3], 255);
+        assert_ne!(p, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn single_grab_does_not_restitch() {
+        let g = grab(12, 34, 4, 2, 9);
+        let ptr = g.image.as_ptr();
+        let shot = shot_from_grabs(vec![g]).unwrap();
+        assert_eq!(shot.image.as_ptr(), ptr);
+        assert_eq!((shot.origin_x, shot.origin_y), (12, 34));
+        assert_eq!(shot.monitors, vec![(12, 34, 4, 2)]);
     }
 }
