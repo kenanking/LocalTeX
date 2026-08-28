@@ -1,7 +1,5 @@
 use gpui::{rgb, Rgba};
 
-// Light graphite surfaces. Accent is reserved for actions and selection,
-// not chrome (same rule as Waku's palette).
 pub const BG: u32 = 0xf6f5f6;
 pub const BG_RAISED: u32 = 0xffffff;
 pub const BG_SUNKEN: u32 = 0xefefef;
@@ -13,6 +11,7 @@ pub const OK: u32 = 0x16a34a;
 pub const WARN: u32 = 0xd97706;
 pub const BORDER: u32 = 0xe6e6e6;
 pub const ACCENT_SOFT_FILL: u32 = 0xeff6ff;
+pub const ACCENT_BORDER: u32 = 0xbfdbfe;
 pub const ON_ACCENT: u32 = 0xffffff;
 /// Off-state track for toggle switches.
 pub const TRACK_OFF: u32 = 0xd5d5da;

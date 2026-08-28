@@ -31,6 +31,9 @@ smallvec = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = "0.4"
 unicode-segmentation = "1"
+latex2mathml = "0.2.3"
+tex2word-math = "1.0.6"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 # Host-gated by CARGO_CFG_TARGET_OS in build.rs; no-op on Linux/macOS.

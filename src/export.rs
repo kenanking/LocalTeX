@@ -16,6 +16,7 @@ pub trait Exporter: Send + Sync {
     fn render(&self, blocks: &[Block], prefs: &Prefs) -> String;
 }
 
+struct MsWord;
 struct LatexPlain;
 struct MdInline;
 struct MdDisplay;
@@ -25,6 +26,24 @@ struct MdTable;
 struct TsvTable;
 struct MarkdownDoc;
 struct LatexDoc;
+
+impl Exporter for MsWord {
+    fn id(&self) -> &'static str {
+        "ms_word"
+    }
+    fn label(&self) -> &'static str {
+        CopyKind::MsWord.label()
+    }
+    fn applies_to(&self, kind: SnipKind) -> bool {
+        kind == SnipKind::Formula
+    }
+    fn copy_kind(&self) -> CopyKind {
+        CopyKind::MsWord
+    }
+    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
+        crate::office::formula_mathml(&formula_body(blocks))
+    }
+}
 
 impl Exporter for LatexPlain {
     fn id(&self) -> &'static str {
@@ -190,7 +209,8 @@ impl Exporter for LatexDoc {
     }
 }
 
-const EXPORTERS: [&dyn Exporter; 9] = [
+const EXPORTERS: [&dyn Exporter; 10] = [
+    &MsWord,
     &LatexPlain,
     &MdInline,
     &MdDisplay,

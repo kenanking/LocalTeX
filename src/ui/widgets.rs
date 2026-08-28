@@ -1,5 +1,5 @@
 use gpui::{
-    div, img, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString,
+    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString,
     Window,
 };
 
@@ -55,9 +55,10 @@ pub enum IconKind {
     Upload,
     Paste,
     Draw,
+    Word,
     Delete,
     Settings,
-    Copy,
+    Check,
     Zoom,
 }
 
@@ -68,22 +69,24 @@ impl IconKind {
             Self::Upload => "icons/upload.svg",
             Self::Paste => "icons/paste.svg",
             Self::Draw => "icons/draw.svg",
+            Self::Word => "icons/word.svg",
             Self::Delete => "icons/delete.svg",
             Self::Settings => "icons/settings.svg",
-            Self::Copy => "icons/copy.svg",
+            Self::Check => "icons/check.svg",
             Self::Zoom => "icons/zoom.svg",
         }
     }
 
     #[cfg(test)]
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
         Self::Draw,
+        Self::Word,
         Self::Delete,
         Self::Settings,
-        Self::Copy,
+        Self::Check,
         Self::Zoom,
     ];
 }
@@ -450,78 +453,92 @@ pub fn setting_row(
         .child(div().flex_shrink_0().child(control))
 }
 
-pub fn copy_row(
+pub fn copy_chip(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    preview: impl Into<SharedString>,
+    symbol: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
     copied: bool,
     enabled: bool,
     on_copy: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let id = id.into();
-    let btn_id = SharedString::from(format!("{id}-btn"));
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .min_w_0()
-        .h(px(36.))
-        .overflow_hidden()
-        .pl_3()
-        .pr_1()
-        .rounded_md()
-        .when(copied, |d| d.bg(theme::accent_soft()))
-        .when(!copied, |d| d.bg(rgb(theme::BG_SUNKEN)))
-        .child(
-            div()
-                .w(px(110.))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .child(label.into()),
-        )
-        .child(
-            // Outer `flex_1` has no `.id()`: gpui 0.2 does not shrink an
-            // id'd node, so the preview would wrap to two lines.
-            div().flex_1().min_w_0().overflow_hidden().child(
-                div()
-                    .id(id)
-                    .w_full()
-                    .overflow_hidden()
-                    .font_family("monospace")
-                    .text_sm()
-                    .line_height(px(20.))
-                    .truncate()
-                    .text_color(rgb(theme::TEXT))
-                    .child(preview.into()),
-            ),
-        )
-        .child(
-            div()
-                .id(btn_id)
-                .size(px(28.))
-                .rounded_sm()
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_shrink_0()
-                .when(enabled, |d| d.cursor_pointer())
-                .when(!enabled, |d| d.opacity(0.38))
-                .when(copied, |d| d.bg(theme::accent_soft()))
-                .when(enabled && !copied, |d| {
-                    d.hover(|d| d.bg(theme::row_hover()))
-                })
-                .when(enabled, |d| {
-                    d.on_click(move |_, window, cx| on_copy(window, cx))
-                })
-                .tooltip(Tooltip::text(if copied { "Copied" } else { "Copy" }))
-                .child(
-                    img(IconKind::Copy.asset_path())
-                        .size(px(14.))
+    let label = if copied {
+        SharedString::from("Copied")
+    } else {
+        label.into()
+    };
+    let symbol = symbol.into();
+    let hint = hint.into();
+    let mark_color = rgb(if copied { theme::ACCENT } else { theme::MUTED });
+    // Outer box has no `.id()`: gpui 0.2 will not stretch an interactive node.
+    div().flex_1().min_w(px(112.)).h(px(32.)).child(
+        div()
+            .id(id)
+            .size_full()
+            .px_2()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .border_1()
+            .border_color(rgb(if copied {
+                theme::ACCENT_BORDER
+            } else {
+                theme::BORDER
+            }))
+            .when(copied, |d| {
+                d.bg(theme::accent_soft()).text_color(rgb(theme::ACCENT))
+            })
+            .when(!copied, |d| {
+                d.bg(rgb(theme::BG_RAISED)).text_color(rgb(theme::TEXT))
+            })
+            .when(enabled, |d| d.cursor_pointer())
+            .when(!enabled, |d| d.opacity(0.38))
+            .when(enabled && !copied, |d| {
+                d.hover(|d| d.bg(rgb(theme::BG_SUNKEN)))
+            })
+            .when(enabled, |d| {
+                d.on_click(move |_, window, cx| on_copy(window, cx))
+            })
+            .tooltip(Tooltip::text(hint))
+            .when(copied, |d| {
+                d.child(
+                    svg()
+                        .path(IconKind::Check.asset_path())
+                        .size(px(13.))
                         .flex_shrink_0()
-                        .object_fit(gpui::ObjectFit::Contain),
-                ),
-        )
+                        .text_color(mark_color),
+                )
+            })
+            .when(!copied, |d| {
+                d.child(
+                    div()
+                        .h(px(16.))
+                        .px(px(4.))
+                        .rounded_sm()
+                        .bg(rgb(theme::BG_SUNKEN))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(mark_color)
+                                .child(symbol),
+                        ),
+                )
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(label),
+            ),
+    )
 }
 
 pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
@@ -547,8 +564,7 @@ pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
         .child(
             div()
                 .flex_1()
-                .h(px(12.))
-                .min_h(px(12.))
+                .h(px(4.))
                 .flex_shrink_0()
                 .rounded_full()
                 .bg(rgb(theme::BG_SUNKEN))

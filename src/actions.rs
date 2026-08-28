@@ -10,6 +10,7 @@ actions!(
         OpenSettings,
         CloseSheet,
         CopyExport,
+        OpenDocx,
         SelectNext,
         SelectPrev,
         DeleteSelected,

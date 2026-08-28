@@ -17,10 +17,10 @@ use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsTab;
 use super::theme;
-use super::widgets::{icon_btn_sized, status_dot, IconBtnSize, IconKind};
+use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::actions::{
-    Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr,
-    SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
+    Capture, CloseSheet, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp,
+    RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
 };
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
@@ -108,6 +108,7 @@ pub struct MainWindow {
     pub(crate) board: DrawBoard,
     settings_tab: SettingsTab,
     pub(crate) copied: Option<(Uuid, CopyKind)>,
+    copied_epoch: u64,
     pub(crate) orig_hover: bool,
     orig_zoomed: bool,
     zoom_doc: Option<Uuid>,
@@ -153,6 +154,7 @@ impl MainWindow {
             board: DrawBoard::new(),
             settings_tab: SettingsTab::General,
             copied: None,
+            copied_epoch: 0,
             orig_hover: false,
             orig_zoomed: false,
             zoom_doc: None,
@@ -242,6 +244,29 @@ impl MainWindow {
             return;
         }
         self.state.update(cx, |state, cx| state.copy_selected(cx));
+    }
+
+    pub(crate) fn flash_copied(&mut self, doc_id: Uuid, kind: CopyKind, cx: &mut Context<Self>) {
+        self.copied = Some((doc_id, kind));
+        self.copied_epoch = self.copied_epoch.wrapping_add(1);
+        let epoch = self.copied_epoch;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(1200)).await;
+            this.update(cx, |this, cx| {
+                if this.copied_epoch == epoch {
+                    this.copied = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn open_docx(&mut self, _: &OpenDocx, _: &mut Window, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, cx| state.open_docx_selected(cx));
     }
 
     fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
@@ -472,13 +497,22 @@ impl gpui::Render for MainWindow {
             )
         };
         let history = self.render_history(n_docs, cx);
-        let detail = self.render_detail(capturing, cx);
+        let copy_pane_w = {
+            let sidebar = self.state.read(cx).prefs.sidebar_width;
+            let win_w: f32 = window.bounds().size.width.into();
+            (win_w - sidebar - 32.).max(112.)
+        };
+        let detail = self.render_detail(capturing, copy_pane_w, cx);
         let zoom = self.render_orig_zoom(cx);
         let view = self.view.clone();
         let orig_zoomed = self.orig_zoomed;
-        let has_selected = {
+        let (has_selected, can_open_docx) = {
             let state = self.state.read(cx);
-            state.selected().is_some()
+            let has_selected = state.selected().is_some();
+            let can_open_docx = state.selected_doc().is_some_and(|doc| {
+                matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded
+            });
+            (has_selected, can_open_docx)
         };
         if matches!(view, View::Settings) && self.settings_tab == SettingsTab::System {
             self.kick_sysmon(cx);
@@ -495,6 +529,7 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::close_sheet))
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::open_docx))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_prev))
             .on_action(cx.listener(Self::delete_selected))
@@ -534,7 +569,7 @@ impl gpui::Render for MainWindow {
                 self.preview.thumb.clone(),
                 cx.entity_id(),
             ))
-            .child(self.render_topbar(capturing, has_selected, cx))
+            .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
             .child(
                 div()
                     .flex()
@@ -577,6 +612,7 @@ impl MainWindow {
         &self,
         capturing: bool,
         has_selected: bool,
+        can_open_docx: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let state = self.state.clone();
@@ -666,6 +702,26 @@ impl MainWindow {
                     }
                 },
             ))
+            .child(
+                div()
+                    .w(px(1.))
+                    .h(px(16.))
+                    .mx_1()
+                    .bg(rgb(theme::TRACK_OFF)),
+            )
+            .child(self.tool_btn(
+                "tool-word",
+                IconKind::Word,
+                "Open as Word document",
+                false,
+                can_open_docx,
+                {
+                    let state = state.clone();
+                    move |_, cx| {
+                        state.update(cx, |s, cx| s.open_docx_selected(cx));
+                    }
+                },
+            ))
             .child(div().flex_1())
             .child(self.tool_btn(
                 "tool-delete",
@@ -712,18 +768,7 @@ impl MainWindow {
         enabled: bool,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        icon_btn_sized(
-            id,
-            kind,
-            hint,
-            active,
-            enabled,
-            IconBtnSize {
-                hit: px(32.),
-                glyph: px(24.),
-            },
-            on_click,
-        )
+        icon_btn(id, kind, hint, active, enabled, on_click)
     }
 
     fn render_footer(

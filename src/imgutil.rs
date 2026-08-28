@@ -321,7 +321,13 @@ mod tests {
         assert!(out.width() > 200 && out.height() > 200);
     }
 
-    fn packed_dib32(width: i32, height: i32, compression: u32, extra: &[u8], pixels: &[u8]) -> Vec<u8> {
+    fn packed_dib32(
+        width: i32,
+        height: i32,
+        compression: u32,
+        extra: &[u8],
+        pixels: &[u8],
+    ) -> Vec<u8> {
         let mut h = vec![0u8; 40];
         h[0..4].copy_from_slice(&40u32.to_le_bytes());
         h[4..8].copy_from_slice(&width.to_le_bytes());

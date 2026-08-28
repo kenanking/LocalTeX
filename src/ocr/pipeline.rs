@@ -97,7 +97,9 @@ impl Pipeline {
             return Ok(out);
         }
 
-        let retry = self.unirec.recognize(&imgops::pad_to_unirec_height_128(&crop))?;
+        let retry = self
+            .unirec
+            .recognize(&imgops::pad_to_unirec_height_128(&crop))?;
         let timing = (
             out.encode_s + retry.encode_s,
             out.decode_s + retry.decode_s,

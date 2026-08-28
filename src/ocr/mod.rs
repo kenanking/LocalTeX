@@ -133,7 +133,7 @@ mod tests {
     use super::*;
     use crate::doc::{BlockKind, BlockRole};
     use crate::math::unwrap_formula;
-    use pipeline::{rec_kind, RecKind, to_doc_block};
+    use pipeline::{rec_kind, to_doc_block, RecKind};
 
     #[test]
     fn formula_label_excludes_formula_number() {

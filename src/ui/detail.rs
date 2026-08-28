@@ -11,7 +11,7 @@ use super::scroll::{h_scroll_pane, overlay_scrollbar, ScrollAxis, ScrollChrome};
 use super::selectable::{selectable_run, selectable_text};
 use super::theme;
 use super::widgets::{
-    btn, copy_row, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
+    btn, copy_chip, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
 };
 use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta};
 use crate::preview::{segs_lines, Eqno, InlineSeg, PreviewBlock, PreviewLayout, SvgMath};
@@ -21,6 +21,7 @@ impl MainWindow {
     pub(crate) fn render_detail(
         &mut self,
         capturing: bool,
+        copy_pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let snap = {
@@ -172,8 +173,8 @@ impl MainWindow {
                                 .is_some_and(|d| d.vertical),
                     )),
             )
-            .when(ready && (!copy_rows.is_empty() || ocr.is_some()), |d| {
-                d.child(self.render_copy_rows(doc_id, &copy_rows, copied, ocr, cx))
+            .when(ready, |d| {
+                d.child(self.render_copy_rows(doc_id, &copy_rows, copied, ocr, copy_pane_w, cx))
             })
     }
 
@@ -322,9 +323,11 @@ impl MainWindow {
         rows: &[crate::doc::CopyRow],
         copied: Option<(Uuid, CopyKind)>,
         ocr: Option<OcrMeta>,
+        pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut col = div()
+            .w_full()
             .px_4()
             .pb_3()
             .min_w_0()
@@ -333,27 +336,47 @@ impl MainWindow {
             .gap_1()
             .child(section_label("Copy"));
 
-        for row in rows.iter() {
-            let kind = row.kind;
-            let text = row.text.clone();
-            let preview = row.text.split_whitespace().collect::<Vec<_>>().join(" ");
-            let is_copied = copied.is_some_and(|(_, k)| k == kind);
-            let entity = cx.entity();
-            col = col.child(copy_row(
-                SharedString::from(format!("copy-{}", row.exporter_id)),
-                row.label,
-                SharedString::from(preview),
-                is_copied,
-                !text.is_empty(),
-                move |_, cx| {
-                    crate::state::AppState::copy_text(text.clone(), cx);
-                    entity.update(cx, |this, cx| {
-                        this.copied = Some((doc_id, kind));
-                        cx.notify();
-                    });
-                },
-            ));
+        // GPUI will not grow an `.id()` node, so each wrap-line is a `w_full` flex
+        // row and the chip *wrapper* is `flex_1` (fills the same inset as the preview).
+        const CHIP_MIN: f32 = 112.;
+        const CHIP_GAP: f32 = 6.;
+        let n = rows.len();
+        let cols = ((pane_w + CHIP_GAP) / (CHIP_MIN + CHIP_GAP))
+            .floor()
+            .clamp(1., n.max(1) as f32) as usize;
+        let mut lines = div().w_full().flex().flex_col().gap(px(CHIP_GAP));
+        for chunk in rows.chunks(cols.max(1)) {
+            let mut line = div().flex().w_full().gap(px(CHIP_GAP));
+            for row in chunk {
+                let kind = row.kind;
+                let text = row.text.clone();
+                let hint = if copied.is_some_and(|(_, k)| k == kind) {
+                    SharedString::from("Copied")
+                } else if kind == CopyKind::MsWord {
+                    SharedString::from("Paste as Word equation")
+                } else {
+                    SharedString::from(row.text.split_whitespace().collect::<Vec<_>>().join(" "))
+                };
+                let is_copied = copied.is_some_and(|(_, k)| k == kind);
+                let entity = cx.entity();
+                line = line.child(copy_chip(
+                    SharedString::from(format!("copy-{}", row.exporter_id)),
+                    row.label,
+                    kind.symbol(),
+                    hint,
+                    is_copied,
+                    !text.is_empty(),
+                    move |_, cx| {
+                        crate::state::AppState::copy_text(text.clone(), cx);
+                        entity.update(cx, |this, cx| {
+                            this.flash_copied(doc_id, kind, cx);
+                        });
+                    },
+                ));
+            }
+            lines = lines.child(line);
         }
+        col = col.child(lines);
         if let Some(meta) = ocr {
             col = col.child(ocr_meta_bar(meta));
         }

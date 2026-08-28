@@ -142,6 +142,7 @@ pub enum SnipKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyKind {
+    MsWord,
     Latex,
     MdInline,
     MdDisplay,
@@ -156,14 +157,27 @@ pub enum CopyKind {
 impl CopyKind {
     pub fn label(self) -> &'static str {
         match self {
+            CopyKind::MsWord => "MathML",
             CopyKind::Latex => "LaTeX",
-            CopyKind::MdInline => "Markdown inline",
-            CopyKind::MdDisplay => "Markdown display",
+            CopyKind::MdInline => "Inline",
+            CopyKind::MdDisplay => "Display",
             CopyKind::Equation => "Equation",
             CopyKind::Markdown => "Markdown",
             CopyKind::LatexDoc => "LaTeX",
             CopyKind::MdTable => "Markdown table",
             CopyKind::LatexTable => "LaTeX table",
+            CopyKind::Tsv => "TSV",
+        }
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            CopyKind::MsWord => "ml",
+            CopyKind::Latex | CopyKind::LatexDoc | CopyKind::LatexTable => "TeX",
+            CopyKind::MdInline => "$",
+            CopyKind::MdDisplay => "$$",
+            CopyKind::Equation => "eq",
+            CopyKind::Markdown | CopyKind::MdTable => "MD",
             CopyKind::Tsv => "TSV",
         }
     }
@@ -482,12 +496,28 @@ mod tests {
     fn formula_copy_rows_match_mathpix() {
         let blocks = vec![Block::new(BlockKind::Formula, rect(0), r"x^{2}")];
         let rows = copy_rows(&blocks, &crate::prefs::Prefs::default());
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0].text, r"x^{2}");
-        assert_eq!(rows[1].text, r"$x^{2}$");
-        assert_eq!(rows[2].text, r"$$ x^{2} $$");
-        assert!(rows[3].text.contains(r"\begin{equation}"));
-        assert!(rows[3].text.contains(r"x^{2}"));
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].kind, CopyKind::MsWord);
+        assert_eq!(rows[0].label, "MathML");
+        assert!(
+            rows[0]
+                .text
+                .contains(r#"xmlns="http://www.w3.org/1998/Math/MathML""#),
+            "{}",
+            rows[0].text
+        );
+        assert_eq!(rows[1].text, r"x^{2}");
+        assert_eq!(rows[2].label, "Inline");
+        assert_eq!(rows[2].text, r"$x^{2}$");
+        assert_eq!(rows[3].label, "Display");
+        assert_eq!(rows[3].text, r"$$ x^{2} $$");
+        assert!(rows[4].text.contains(r"\begin{equation}"));
+        assert_eq!(rows[0].kind.symbol(), "ml");
+        assert_eq!(rows[1].kind.symbol(), "TeX");
+        assert_eq!(rows[2].kind.symbol(), "$");
+        assert_eq!(rows[3].kind.symbol(), "$$");
+        assert_eq!(rows[4].kind.symbol(), "eq");
+        assert!(rows[4].text.contains(r"x^{2}"));
     }
 
     #[test]
@@ -503,6 +533,8 @@ mod tests {
         let rows = copy_rows(&blocks, &prefs);
         assert_eq!(rows[0].kind, CopyKind::LatexTable);
         assert_eq!(rows[1].kind, CopyKind::MdTable);
+        assert_eq!(rows[0].kind.symbol(), "TeX");
+        assert_eq!(rows[1].kind.symbol(), "MD");
     }
 
     #[test]

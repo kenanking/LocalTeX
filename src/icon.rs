@@ -53,9 +53,11 @@ const BUNDLED: &[(&str, &[u8])] = bundled![
     "icons/upload.svg",
     "icons/paste.svg",
     "icons/draw.svg",
+    "icons/word.svg",
     "icons/delete.svg",
     "icons/settings.svg",
     "icons/copy.svg",
+    "icons/check.svg",
     "icons/zoom.svg",
 ];
 
@@ -206,9 +208,11 @@ mod tests {
             "icons/upload.svg",
             "icons/paste.svg",
             "icons/draw.svg",
+            "icons/word.svg",
             "icons/delete.svg",
             "icons/settings.svg",
             "icons/copy.svg",
+            "icons/check.svg",
             "icons/zoom.svg",
         ] {
             let bytes = Assets

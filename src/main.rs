@@ -17,6 +17,7 @@ mod library;
 mod math;
 mod ocr;
 mod ocr_queue;
+mod office;
 mod prefs;
 mod preview;
 mod state;
@@ -31,8 +32,8 @@ use gpui::{
 };
 
 use crate::actions::{
-    Capture, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr, StartDraw,
-    ToggleFormat, UploadImage,
+    Capture, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp, RetryOcr,
+    StartDraw, ToggleFormat, UploadImage,
 };
 use crate::identity::{APP_ID, APP_NAME};
 use crate::state::AppState;
@@ -114,6 +115,7 @@ fn set_app_menus(cx: &mut App) {
                 MenuItem::action("Paste Image", PasteSnip),
                 MenuItem::action("Draw Snip", StartDraw),
                 MenuItem::action("Copy", CopyExport),
+                MenuItem::action("Open DOCX", OpenDocx),
                 MenuItem::separator(),
                 MenuItem::action("Settings", OpenSettings),
                 MenuItem::separator(),

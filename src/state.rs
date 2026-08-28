@@ -563,6 +563,41 @@ impl AppState {
         Self::write_clipboard(text, cx);
     }
 
+    pub fn open_docx_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(doc) = self.selected_doc() else {
+            return;
+        };
+        if !matches!(doc.status, DocStatus::Ready) || !doc.blocks_loaded {
+            return;
+        }
+        let blocks = doc.blocks.clone();
+        let id = doc.id;
+        cx.spawn(async move |this, cx| {
+            let built = cx
+                .background_spawn(async move {
+                    let bytes = crate::office::build_docx(&blocks)?;
+                    let path = std::env::temp_dir().join(format!("{APP_SLUG}-{id}.docx"));
+                    std::fs::write(&path, bytes)?;
+                    anyhow::Ok(path)
+                })
+                .await;
+            match built {
+                Ok(path) => {
+                    let _ = this.update(cx, |_, cx| {
+                        cx.open_with_system(&path);
+                    });
+                }
+                Err(err) => {
+                    eprintln!("{APP_SLUG}: open docx: {err:#}");
+                    let _ = this.update(cx, |this, cx| {
+                        this.flash_capture_error("Couldn't open a Word document", cx);
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
     fn write_clipboard(text: String, cx: &mut App) {
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
