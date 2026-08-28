@@ -88,16 +88,9 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
-/// Encoded bytes (PNG/JPEG/GIF) or a CF_DIB payload. Windows fills this;
-/// other targets fall through to GPUI's clipboard in `AppState`.
-pub enum ClipboardImage {
-    Encoded(Vec<u8>),
-    Dib(Vec<u8>),
-}
-
-/// Ordered candidates (PNG/JPEG, then DIB, then CF_BITMAP). Empty on
-/// non-Windows; `AppState` then uses GPUI's clipboard.
-pub fn read_clipboard_image() -> Vec<ClipboardImage> {
+/// Ordered clipboard payloads (PNG/JPEG/GIF, then DIB, then CF_BITMAP).
+/// Empty on non-Windows; `AppState` then uses GPUI's clipboard.
+pub fn read_clipboard_image() -> Vec<Vec<u8>> {
     #[cfg(target_os = "windows")]
     {
         win_clipboard::read()
@@ -108,10 +101,10 @@ pub fn read_clipboard_image() -> Vec<ClipboardImage> {
     }
 }
 
-pub fn decode_clipboard_image(raw: ClipboardImage) -> anyhow::Result<image::RgbaImage> {
-    match raw {
-        ClipboardImage::Encoded(bytes) => Ok(image::load_from_memory(&bytes)?.to_rgba8()),
-        ClipboardImage::Dib(bytes) => crate::imgutil::decode_dib(&bytes),
+pub fn decode_clipboard_image(bytes: Vec<u8>) -> anyhow::Result<image::RgbaImage> {
+    match image::load_from_memory(&bytes) {
+        Ok(img) => Ok(img.to_rgba8()),
+        Err(_) => crate::imgutil::decode_dib(&bytes),
     }
 }
 
@@ -161,4 +154,34 @@ pub fn wait_until_iconified() {
 pub fn prepare_snip_input() {
     #[cfg(target_os = "windows")]
     win::prepare_snip_input();
+}
+
+#[cfg(test)]
+mod clipboard_decode_tests {
+    use super::decode_clipboard_image;
+    use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn decode_prefers_png_magic() {
+        let src = RgbaImage::from_pixel(2, 1, Rgba([10, 20, 30, 255]));
+        let png = crate::imgutil::encode_png_fast(&src).unwrap();
+        let out = decode_clipboard_image(png).unwrap();
+        assert_eq!(out.dimensions(), (2, 1));
+        assert_eq!(out.get_pixel(0, 0).0, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn decode_falls_back_to_dib() {
+        let mut h = vec![0u8; 40];
+        h[0..4].copy_from_slice(&40u32.to_le_bytes());
+        h[4..8].copy_from_slice(&2i32.to_le_bytes());
+        h[8..12].copy_from_slice(&1i32.to_le_bytes());
+        h[12..14].copy_from_slice(&1u16.to_le_bytes());
+        h[14..16].copy_from_slice(&32u16.to_le_bytes());
+        h.extend_from_slice(&[255, 0, 0, 255, 0, 0, 255, 255]);
+        let out = decode_clipboard_image(h).unwrap();
+        assert_eq!(out.dimensions(), (2, 1));
+        assert_eq!(out.get_pixel(0, 0).0, [0, 0, 255, 255]);
+        assert_eq!(out.get_pixel(1, 0).0, [255, 0, 0, 255]);
+    }
 }

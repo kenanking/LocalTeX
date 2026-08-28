@@ -14,7 +14,7 @@ use ort::session::Session;
 use super::imgops::{self, RgbImg};
 use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
-use super::unirec::{Tokenizer, UniRec};
+use super::unirec::{RecognizeOut, Tokenizer, UniRec};
 use crate::doc::{Block, BlockKind, BlockRole, OcrMeta, Rect};
 use crate::identity::APP_SLUG;
 
@@ -88,6 +88,30 @@ impl Pipeline {
         Ok(Self { layout, unirec })
     }
 
+    fn recognize_region(&mut self, mut crop: RgbImg, kind: RecKind) -> Result<RecognizeOut> {
+        if kind == RecKind::Formula {
+            crop = imgops::crop_margin(&crop);
+        }
+        let mut out = self.unirec.recognize(&crop)?;
+        if kind != RecKind::Text || !looks_like_dropped_english_spaces(&crop, &out.text) {
+            return Ok(out);
+        }
+
+        let retry = self.unirec.recognize(&imgops::pad_wide_unirec_crop(&crop))?;
+        let timing = (
+            out.encode_s + retry.encode_s,
+            out.decode_s + retry.decode_s,
+            out.decode_steps + retry.decode_steps,
+        );
+        if only_adds_whitespace(&out.text, &retry.text) {
+            out = retry;
+        }
+        out.encode_s = timing.0;
+        out.decode_s = timing.1;
+        out.decode_steps = timing.2;
+        Ok(out)
+    }
+
     pub fn infer(&mut self, image: &mut RgbImg) -> Result<OcrResult> {
         let t0 = std::time::Instant::now();
         imgops::invert_if_dark(image);
@@ -106,19 +130,16 @@ impl Pipeline {
 
         for region in regions {
             let base = text::base_label(&region.label);
-            if IMAGE_LABELS.contains(&base) || IGNORE_LABELS.contains(&base) {
+            let kind = rec_kind(base);
+            if kind == RecKind::Skip {
                 pending.push(None);
                 continue;
             }
-            let Some(mut crop) = region.img else {
+            let Some(crop) = region.img else {
                 pending.push(None);
                 continue;
             };
-
-            if is_formula(base) {
-                crop = imgops::crop_margin(&crop);
-            }
-            let out = self.unirec.recognize(&crop)?;
+            let out = self.recognize_region(crop, kind)?;
             encode_s += out.encode_s;
             decode_s += out.decode_s;
             decode_steps += out.decode_steps;
@@ -126,7 +147,7 @@ impl Pipeline {
             pending.push(Some(PendingRec {
                 base: base.to_string(),
                 coord: region.coord,
-                text: postprocess(base, out.text),
+                text: postprocess(kind, out.text),
             }));
         }
 
@@ -188,20 +209,36 @@ impl Pipeline {
     }
 }
 
-fn postprocess(base: &str, mut text: String) -> String {
-    text = if base.contains("table") {
-        text::handle_table(&text)
-    } else if is_formula(base) {
-        text::handle_formula(&text)
-    } else {
-        text::handle_text(&text)
+fn looks_like_dropped_english_spaces(crop: &RgbImg, text: &str) -> bool {
+    if crop.w.saturating_mul(2) <= crop.h.saturating_mul(15)
+        || text.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    let latin = text.bytes().filter(u8::is_ascii_alphabetic).count();
+    latin >= 20 && latin * 5 >= text.chars().count() * 4
+}
+
+fn only_adds_whitespace(baseline: &str, candidate: &str) -> bool {
+    candidate.chars().any(char::is_whitespace)
+        && candidate
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .eq(baseline.chars())
+}
+
+fn postprocess(kind: RecKind, mut text: String) -> String {
+    text = match kind {
+        RecKind::Table => text::handle_table(&text),
+        RecKind::Formula => text::handle_formula(&text),
+        _ => text::handle_text(&text),
     };
     text = text::truncate_repetitive_content(&text);
     text = text::normalize_math_delimiters(&text);
-    if base == "formula_number" && (text.contains('$')) {
+    if kind == RecKind::FormulaNumber && text.contains('$') {
         text = text.replace('$', "");
     }
-    if base.contains("table") {
+    if kind == RecKind::Table {
         let html = text::convert_otsl_to_html(&text);
         if !html.is_empty() {
             text = html;
@@ -210,8 +247,30 @@ fn postprocess(base: &str, mut text: String) -> String {
     text
 }
 
-pub(super) fn is_formula(base: &str) -> bool {
-    base.contains("formula") && base != "formula_number"
+/// Effective per-block routing, computed once from the base label.
+/// Distinct from `doc::BlockKind`: `formula_number` stays chrome here
+/// (recognized, then folded or dropped), never a Formula block.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum RecKind {
+    Text,
+    Formula,
+    Table,
+    FormulaNumber,
+    Skip,
+}
+
+pub(super) fn rec_kind(base: &str) -> RecKind {
+    if IMAGE_LABELS.contains(&base) || IGNORE_LABELS.contains(&base) {
+        RecKind::Skip
+    } else if base.contains("table") {
+        RecKind::Table
+    } else if base == "formula_number" {
+        RecKind::FormulaNumber
+    } else if base.contains("formula") {
+        RecKind::Formula
+    } else {
+        RecKind::Text
+    }
 }
 
 fn role_for(base: &str) -> BlockRole {
@@ -228,12 +287,10 @@ pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Bl
     if text.is_empty() {
         return None;
     }
-    let kind = if is_formula(base) {
-        BlockKind::Formula
-    } else if base.contains("table") {
-        BlockKind::Table
-    } else {
-        BlockKind::Text
+    let kind = match rec_kind(base) {
+        RecKind::Formula => BlockKind::Formula,
+        RecKind::Table => BlockKind::Table,
+        _ => BlockKind::Text,
     };
     let mut block = Block::new(kind, bbox_to_rect(coord), text).with_role(role_for(base));
     if kind == BlockKind::Formula {
@@ -393,12 +450,47 @@ mod tests {
     }
 
     #[test]
+    fn rec_kind_classifies_labels() {
+        assert_eq!(rec_kind("text"), RecKind::Text);
+        assert_eq!(rec_kind("doc_title"), RecKind::Text);
+        assert_eq!(rec_kind("display_formula"), RecKind::Formula);
+        assert_eq!(rec_kind("inline_formula"), RecKind::Formula);
+        assert_eq!(rec_kind("formula_number"), RecKind::FormulaNumber);
+        assert_eq!(rec_kind("table"), RecKind::Table);
+        assert_eq!(rec_kind("image"), RecKind::Skip);
+        assert_eq!(rec_kind("header"), RecKind::Skip);
+    }
+
+    #[test]
     fn mix_confidence_weights() {
         assert_eq!(mix_confidence(Some(1.0), None), Some(1.0));
         assert_eq!(mix_confidence(None, Some(0.4)), Some(0.4));
         assert!((mix_confidence(Some(1.0), Some(0.0)).unwrap() - 0.8).abs() < 1e-6);
         assert_eq!(mix_confidence(Some(0.5), Some(0.5)), Some(0.5));
         assert_eq!(mix_confidence(None, None), None);
+    }
+
+    #[test]
+    fn space_retry_is_narrow_and_content_preserving() {
+        let crop = RgbImg::blank(1650, 91, 255);
+        let padded = imgops::pad_wide_unirec_crop(&crop);
+        assert_eq!((padded.w, padded.h), (1650, 220));
+        assert!(looks_like_dropped_english_spaces(
+            &crop,
+            "Itaddressesstructuralvariabilityandsemanticentanglement"
+        ));
+        assert!(!looks_like_dropped_english_spaces(
+            &crop,
+            "It addresses structural variability and semantic entanglement"
+        ));
+        assert!(only_adds_whitespace(
+            "Itaddressesstructuralvariability",
+            "It addresses structural variability"
+        ));
+        assert!(!only_adds_whitespace(
+            "Itaddressesstructuralvariability",
+            "It addresses structure variability"
+        ));
     }
 
     #[test]

@@ -133,14 +133,14 @@ mod tests {
     use super::*;
     use crate::doc::{BlockKind, BlockRole};
     use crate::math::unwrap_formula;
-    use pipeline::{is_formula, to_doc_block};
+    use pipeline::{rec_kind, RecKind, to_doc_block};
 
     #[test]
     fn formula_label_excludes_formula_number() {
-        assert!(is_formula("display_formula"));
-        assert!(is_formula("inline_formula"));
-        assert!(!is_formula("formula_number"));
-        assert!(!is_formula("text"));
+        assert_eq!(rec_kind("display_formula"), RecKind::Formula);
+        assert_eq!(rec_kind("inline_formula"), RecKind::Formula);
+        assert_eq!(rec_kind("formula_number"), RecKind::FormulaNumber);
+        assert_eq!(rec_kind("text"), RecKind::Text);
     }
 
     #[test]

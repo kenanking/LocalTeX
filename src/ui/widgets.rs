@@ -88,6 +88,11 @@ impl IconKind {
     ];
 }
 
+pub struct IconBtnSize {
+    pub hit: Pixels,
+    pub glyph: Pixels,
+}
+
 pub fn icon_btn(
     id: impl Into<SharedString>,
     kind: IconKind,
@@ -96,7 +101,18 @@ pub fn icon_btn(
     enabled: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    icon_btn_sized(id, kind, hint, active, enabled, px(32.), px(18.), on_click)
+    icon_btn_sized(
+        id,
+        kind,
+        hint,
+        active,
+        enabled,
+        IconBtnSize {
+            hit: px(32.),
+            glyph: px(18.),
+        },
+        on_click,
+    )
 }
 
 pub fn icon_btn_sized(
@@ -105,15 +121,14 @@ pub fn icon_btn_sized(
     hint: impl Into<SharedString>,
     active: bool,
     enabled: bool,
-    hit: Pixels,
-    glyph: Pixels,
+    size: IconBtnSize,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let id = id.into();
     let hint = hint.into();
     div()
         .id(id)
-        .size(hit)
+        .size(size.hit)
         .rounded_md()
         .flex()
         .items_center()
@@ -133,7 +148,7 @@ pub fn icon_btn_sized(
             // text_color skips paint entirely (gpui 0.2 `svg` element).
             svg()
                 .path(kind.asset_path())
-                .size(glyph)
+                .size(size.glyph)
                 .flex_shrink_0()
                 .text_color(rgb(theme::TEXT)),
         )

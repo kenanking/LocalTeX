@@ -19,26 +19,23 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
-use super::ClipboardImage;
 use crate::identity::APP_SLUG;
 
 const CF_BITMAP: u32 = 2;
 const CF_DIB: u32 = 8;
 const CF_DIBV5: u32 = 17;
 
-pub fn read() -> Vec<ClipboardImage> {
+pub fn read() -> Vec<Vec<u8>> {
     with_clipboard(|| {
         let mut out = Vec::new();
-        for bytes in registered_image_bytes() {
-            out.push(ClipboardImage::Encoded(bytes));
-        }
+        out.extend(registered_image_bytes());
         for format in [CF_DIB, CF_DIBV5] {
             if let Some(bytes) = clipboard_bytes(format) {
-                out.push(ClipboardImage::Dib(bytes));
+                out.push(bytes);
             }
         }
         if let Some(bytes) = dib_from_cf_bitmap() {
-            out.push(ClipboardImage::Dib(bytes));
+            out.push(bytes);
         }
         out
     })

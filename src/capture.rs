@@ -129,7 +129,7 @@ pub fn dim_copy(image: &RgbaImage) -> RgbaImage {
     let (w, h) = image.dimensions();
     let src = image.as_raw();
     let mut out = Vec::with_capacity(src.len());
-    for px in src.chunks_exact(4) {
+    for px in src.as_chunks::<4>().0 {
         let d = dim_luma(px[0], px[1], px[2]);
         out.extend_from_slice(&[d, d, d, px[3]]);
     }

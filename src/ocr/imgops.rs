@@ -112,6 +112,18 @@ fn paste(dst: &mut RgbImg, src: &RgbImg, x: u32, y: u32) {
     }
 }
 
+/// Center a crop wider than 7.5:1 on a white canvas. This moves a
+/// width-limited UniRec input from the 64 px height bucket to 128 px.
+pub fn pad_wide_unirec_crop(img: &RgbImg) -> RgbImg {
+    let target_h = img.w.saturating_mul(2).div_ceil(15);
+    if target_h <= img.h {
+        return img.clone();
+    }
+    let mut canvas = RgbImg::blank(img.w, target_h, 255);
+    paste(&mut canvas, img, 0, (target_h - img.h) / 2);
+    canvas
+}
+
 pub fn calc_merged_wh(imgs: &[&RgbImg]) -> (u32, u32) {
     let w = imgs.iter().map(|i| i.w).max().unwrap_or(0);
     let h = imgs.iter().map(|i| i.h).sum();

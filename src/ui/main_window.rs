@@ -17,7 +17,7 @@ use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsTab;
 use super::theme;
-use super::widgets::{icon_btn_sized, status_dot, IconKind};
+use super::widgets::{icon_btn_sized, status_dot, IconBtnSize, IconKind};
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr,
     SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
@@ -712,7 +712,18 @@ impl MainWindow {
         enabled: bool,
         on_click: impl Fn(&mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        icon_btn_sized(id, kind, hint, active, enabled, px(32.), px(24.), on_click)
+        icon_btn_sized(
+            id,
+            kind,
+            hint,
+            active,
+            enabled,
+            IconBtnSize {
+                hit: px(32.),
+                glyph: px(24.),
+            },
+            on_click,
+        )
     }
 
     fn render_footer(
