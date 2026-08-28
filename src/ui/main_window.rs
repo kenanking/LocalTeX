@@ -18,8 +18,8 @@ use super::settings::SettingsTab;
 use super::theme;
 use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::actions::{
-    Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, QuitApp, RetryOcr, SelectNext,
-    SelectPrev, StartDraw, ToggleFormat, UploadImage,
+    Capture, CloseSheet, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr,
+    SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
 };
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
@@ -163,6 +163,11 @@ impl MainWindow {
     fn upload(&mut self, _: &UploadImage, _: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_sheet(cx);
         self.state.update(cx, |state, cx| state.request_upload(cx));
+    }
+
+    fn paste_snip(&mut self, _: &PasteSnip, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_sheet(cx);
+        self.state.update(cx, |state, cx| state.request_paste(cx));
     }
 
     fn start_draw(&mut self, _: &StartDraw, _: &mut Window, cx: &mut Context<Self>) {
@@ -425,6 +430,7 @@ impl gpui::Render for MainWindow {
             .key_context(crate::identity::APP_SLUG)
             .on_action(cx.listener(Self::capture))
             .on_action(cx.listener(Self::upload))
+            .on_action(cx.listener(Self::paste_snip))
             .on_action(cx.listener(Self::start_draw))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::close_sheet))
@@ -550,6 +556,22 @@ impl MainWindow {
                     let state = state.clone();
                     move |_, cx| {
                         state.update(cx, |s, cx| s.request_upload(cx));
+                    }
+                },
+            ))
+            .child(self.tool_btn(
+                "tool-paste",
+                IconKind::Paste,
+                "Paste image or path from clipboard  Ctrl+V",
+                false,
+                !capturing,
+                {
+                    let entity = cx.entity();
+                    move |_, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.dismiss_sheet(cx);
+                            this.state.update(cx, |s, cx| s.request_paste(cx));
+                        });
                     }
                 },
             ))

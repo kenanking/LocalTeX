@@ -53,6 +53,7 @@ impl Render for Tooltip {
 pub enum IconKind {
     Snip,
     Upload,
+    Paste,
     Draw,
     Delete,
     Settings,
@@ -65,6 +66,7 @@ impl IconKind {
         match self {
             Self::Snip => "icons/snip.svg",
             Self::Upload => "icons/upload.svg",
+            Self::Paste => "icons/paste.svg",
             Self::Draw => "icons/draw.svg",
             Self::Delete => "icons/delete.svg",
             Self::Settings => "icons/settings.svg",
@@ -74,9 +76,10 @@ impl IconKind {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Snip,
         Self::Upload,
+        Self::Paste,
         Self::Draw,
         Self::Delete,
         Self::Settings,

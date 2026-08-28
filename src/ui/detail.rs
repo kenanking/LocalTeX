@@ -917,10 +917,29 @@ fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
                 .items_center()
                 .gap_2()
                 .mt_2()
-                .child(btn("empty-snip", "Snip", true, !capturing, move |_, cx| {
-                    state.update(cx, |s, cx| s.request_capture(cx));
+                .child(btn("empty-snip", "Snip", true, !capturing, {
+                    let state = state.clone();
+                    move |_, cx| {
+                        state.update(cx, |s, cx| s.request_capture(cx));
+                    }
                 }))
                 .child(kbd_chip("Ctrl+Shift+S")),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(btn(
+                    "empty-paste",
+                    "Paste",
+                    false,
+                    !capturing,
+                    move |_, cx| {
+                        state.update(cx, |s, cx| s.request_paste(cx));
+                    },
+                ))
+                .child(kbd_chip("Ctrl+V")),
         )
 }
 

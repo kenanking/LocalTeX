@@ -30,8 +30,8 @@ use gpui::{
 };
 
 use crate::actions::{
-    Capture, CopyExport, DeleteSelected, OpenSettings, QuitApp, RetryOcr, StartDraw, ToggleFormat,
-    UploadImage,
+    Capture, CopyExport, DeleteSelected, OpenSettings, PasteSnip, QuitApp, RetryOcr, StartDraw,
+    ToggleFormat, UploadImage,
 };
 use crate::identity::{APP_ID, APP_NAME};
 use crate::state::AppState;
@@ -110,6 +110,7 @@ fn set_app_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Snip", Capture),
                 MenuItem::action("Upload Image…", UploadImage),
+                MenuItem::action("Paste Image", PasteSnip),
                 MenuItem::action("Draw Snip", StartDraw),
                 MenuItem::action("Copy", CopyExport),
                 MenuItem::separator(),

@@ -5,6 +5,7 @@ actions!(
     [
         Capture,
         UploadImage,
+        PasteSnip,
         StartDraw,
         OpenSettings,
         CloseSheet,

@@ -49,6 +49,7 @@ const BUNDLED: &[(&str, &[u8])] = bundled![
     "icon.svg",
     "icons/snip.svg",
     "icons/upload.svg",
+    "icons/paste.svg",
     "icons/draw.svg",
     "icons/delete.svg",
     "icons/settings.svg",
@@ -188,6 +189,7 @@ mod tests {
         for path in [
             "icons/snip.svg",
             "icons/upload.svg",
+            "icons/paste.svg",
             "icons/draw.svg",
             "icons/delete.svg",
             "icons/settings.svg",

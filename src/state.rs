@@ -283,6 +283,52 @@ impl AppState {
         .detach();
     }
 
+    /// Home "Paste" entry: clipboard image → OCR; image file path(s) → open + OCR.
+    pub fn request_paste(&mut self, cx: &mut Context<Self>) {
+        if self.is_capturing() {
+            return;
+        }
+        let Some(item) = cx.read_from_clipboard() else {
+            self.capture = Capture::Failed("Clipboard is empty".into());
+            cx.notify();
+            return;
+        };
+        let image_bytes = item.entries().iter().find_map(|entry| match entry {
+            gpui::ClipboardEntry::Image(img) => Some(img.bytes.clone()),
+            _ => None,
+        });
+        if let Some(bytes) = image_bytes {
+            cx.spawn(async move |this, cx| {
+                let decoded = cx
+                    .background_spawn(async move {
+                        image::load_from_memory(&bytes).map(|d| d.to_rgba8())
+                    })
+                    .await;
+                if let Err(err) = this.update(cx, |this, cx| match decoded {
+                    Ok(img) => this.ingest_pixels(img, cx),
+                    Err(err) => {
+                        this.capture = Capture::Failed(format!("clipboard image: {err}"));
+                        cx.notify();
+                    }
+                }) {
+                    eprintln!("{APP_SLUG}: paste task: {err}");
+                }
+            })
+            .detach();
+            return;
+        }
+        let paths = item
+            .text()
+            .map(|text| clipboard_image_paths(&text))
+            .unwrap_or_default();
+        if !paths.is_empty() {
+            self.ingest(IngestSource::Files(paths), cx);
+            return;
+        }
+        self.capture = Capture::Failed("No image or image path in clipboard".into());
+        cx.notify();
+    }
+
     fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
         if self.file_loading || !self.ocr_queue.is_idle() {
             return;
@@ -838,6 +884,24 @@ fn text_matches(query: &str, blob: &str) -> bool {
     q.is_empty() || blob.to_lowercase().contains(&q.to_lowercase())
 }
 
+/// Clipboard text as image paths: one per line, `file://` tolerated.
+fn clipboard_image_paths(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| PathBuf::from(line.strip_prefix("file://").unwrap_or(line)))
+        .filter(|path| {
+            path.is_file()
+                && path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    matches!(
+                        e.to_ascii_lowercase().as_str(),
+                        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+                    )
+                })
+        })
+        .collect()
+}
+
 fn activate_window<V: 'static>(handle: WindowHandle<V>, cx: &mut App) {
     if let Err(err) = handle.update(cx, |_, window, _| {
         window.activate_window();
@@ -873,6 +937,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-s", Capture, None),
         KeyBinding::new("ctrl-n", Capture, None),
         KeyBinding::new("ctrl-o", UploadImage, None),
+        KeyBinding::new("ctrl-v", PasteSnip, None),
         KeyBinding::new("ctrl-d", StartDraw, None),
         KeyBinding::new("ctrl-,", OpenSettings, None),
         KeyBinding::new("escape", CloseSheet, None),
