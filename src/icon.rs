@@ -1,14 +1,16 @@
 use std::borrow::Cow;
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 use std::io::Cursor;
 use std::sync::{Arc, OnceLock};
 
 use gpui::{AssetSource, Image as GpuiImage, ImageFormat as GpuiImageFormat, SharedString};
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 use image::ImageFormat;
 
+#[cfg(any(test, target_os = "linux"))]
+use crate::identity::APP_ID;
 #[cfg(target_os = "linux")]
-use crate::identity::{APP_ID, APP_NAME, APP_SLUG};
+use crate::identity::{APP_NAME, APP_SLUG};
 
 #[path = "icon_mark.rs"]
 mod icon_mark;
@@ -74,6 +76,12 @@ impl AssetSource for Assets {
     }
 }
 
+/// Bitmap sizes dropped into hicolor. xfwm's theme fallback does not scale:
+/// a 128-only install is clipped into the ~22×29 titlebar slot (black fan).
+/// 22 and 24 are stock hicolor dirs; 16/32/48 match the Windows ICO ladder.
+#[cfg(any(test, target_os = "linux"))]
+const HICOLOR_PNG_SIZES: &[u32] = &[16, 22, 24, 32, 48, 128];
+
 pub fn rgba_bytes(size: u32) -> (u32, u32, Vec<u8>) {
     let img = raster(size);
     (img.width(), img.height(), img.into_raw())
@@ -89,7 +97,7 @@ pub fn argb_bytes(size: u32) -> (i32, i32, Vec<u8>) {
     (w as i32, h as i32, data)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(test, target_os = "linux"))]
 pub fn png_bytes(size: u32) -> Result<Vec<u8>, image::ImageError> {
     let img = raster(size);
     let mut out = Vec::new();
@@ -97,8 +105,8 @@ pub fn png_bytes(size: u32) -> Result<Vec<u8>, image::ImageError> {
     Ok(out)
 }
 
-/// Drop a `.desktop` + hicolor icons so GNOME can match `WM_CLASS` = `APP_ID`.
-/// GPUI 0.2 has no window-icon API; the desktop file is the Linux identity.
+/// Drop a `.desktop` + hicolor icons so the WM can match `WM_CLASS` = `APP_ID`.
+/// GPUI 0.2 has no window-icon API and does not set `_NET_WM_ICON`.
 #[cfg(target_os = "linux")]
 pub fn install_desktop_identity() {
     if let Err(err) = install_desktop_identity_inner() {
@@ -109,20 +117,27 @@ pub fn install_desktop_identity() {
 #[cfg(not(target_os = "linux"))]
 pub fn install_desktop_identity() {}
 
+#[cfg(any(test, target_os = "linux"))]
+fn write_hicolor_icons(hicolor: &std::path::Path) -> Result<(), String> {
+    let scalable = hicolor.join("scalable/apps");
+    std::fs::create_dir_all(&scalable).map_err(|e| e.to_string())?;
+    std::fs::write(scalable.join(format!("{APP_ID}.svg")), APP_ICON_SVG)
+        .map_err(|e| e.to_string())?;
+    for &size in HICOLOR_PNG_SIZES {
+        let dir = hicolor.join(format!("{size}x{size}/apps"));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let png = png_bytes(size).map_err(|e| e.to_string())?;
+        std::fs::write(dir.join(format!("{APP_ID}.png")), png).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn install_desktop_identity_inner() -> Result<(), String> {
     let data = dirs::data_dir().ok_or_else(|| "no XDG data dir".to_string())?;
-    let icon_dir = data.join("icons/hicolor/scalable/apps");
-    let png_dir = data.join("icons/hicolor/128x128/apps");
     let app_dir = data.join("applications");
-    std::fs::create_dir_all(&icon_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&png_dir).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
-
-    std::fs::write(icon_dir.join(format!("{APP_ID}.svg")), APP_ICON_SVG)
-        .map_err(|e| e.to_string())?;
-    let png = png_bytes(128).map_err(|e| e.to_string())?;
-    std::fs::write(png_dir.join(format!("{APP_ID}.png")), png).map_err(|e| e.to_string())?;
+    write_hicolor_icons(&data.join("icons/hicolor"))?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exec = exe.display().to_string().replace('"', "\\\"");
@@ -214,5 +229,39 @@ mod tests {
             Assets.load("icon.svg").expect("asset load").is_some(),
             "app tile svg must be on the asset map"
         );
+    }
+
+    #[test]
+    fn hicolor_png_sizes_cover_titlebar_slots() {
+        assert_eq!(HICOLOR_PNG_SIZES, &[16, 22, 24, 32, 48, 128]);
+        for &size in HICOLOR_PNG_SIZES {
+            let img = raster(size);
+            assert_eq!(img.dimensions(), (size, size), "{size}px tile");
+            let center = img.get_pixel(size / 2, size / 2).0;
+            assert_eq!(
+                center[3], 255,
+                "{size}px center must be opaque (full tile, not a corner crop): {center:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn writes_hicolor_png_ladder() {
+        let root = std::env::temp_dir().join(format!(
+            "localtex-hicolor-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp hicolor dir");
+        write_hicolor_icons(&root).expect("write hicolor");
+        assert!(root.join(format!("scalable/apps/{APP_ID}.svg")).is_file());
+        for &size in HICOLOR_PNG_SIZES {
+            let path = root.join(format!("{size}x{size}/apps/{APP_ID}.png"));
+            assert!(path.is_file(), "missing {path:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

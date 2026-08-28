@@ -61,7 +61,7 @@ Waku icon traps (paid for here, do not cargo-cult):
 - In-app chrome: `svg().path("icons/foo.svg")` + `AssetSource` so GPUI paints an **alpha mask at device DPI**, tinted with `text_color`. Polychrome marks use `img(path)` so authored colors survive. Lucide-style `viewBox="0 0 24 24"` is enough.
 - This NVIDIA/Vulkan host **does** paint `svg().path` when `text_color` is set (filled-rect probe, 2026-08-27). gpui 0.2 skips paint if `text_color` is missing. The empty-state app tile is polychrome: `img("icon.svg")` stays blank here — keep `Image::from_bytes(ImageFormat::Svg, APP_ICON_SVG)`.
 - Toolbar hints: GPUI already owns hover delay/placement via `.tooltip()`. Do not swap the topbar brand label for a hint string. The tooltip view lives in `widgets.rs` (gpui 0.2 has no `shadow_md`).
-- App/window icon: Waku embeds a PNG and passes `WindowOptions.icon` (Linux X11). gpui 0.2 has no that field. Linux identity stays `.desktop` + hicolor from `src/icon.rs`. Windows: PE `1 ICON` via `build.rs` (`embed-resource`); GPUI `load_icon` reads resource id 1. Do **not** add a second `RT_MANIFEST` (gpui already embeds PerMonitorV2).
+- App/window icon: Waku embeds a PNG and passes `WindowOptions.icon` (Linux X11). gpui 0.2 has no that field and does not set `_NET_WM_ICON`. Linux identity stays `.desktop` + hicolor from `src/icon.rs` (PNG ladder 16/22/24/32/48/128 — xfwm's theme fallback does not scale a 128-only tile into the titlebar slot). Windows: PE `1 ICON` via `build.rs` (`embed-resource`); GPUI `load_icon` reads resource id 1. Do **not** add a second `RT_MANIFEST` (gpui already embeds PerMonitorV2).
 
 - `cx` is last (after `window` when present). Callbacks come after `cx`.
 - Do not nest `entity.update` while that entity is already being updated (panic).
