@@ -88,8 +88,6 @@ fn register_hotkey(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
-/// Ordered clipboard payloads (PNG/JPEG/GIF, then DIB, then CF_BITMAP).
-/// Empty on non-Windows; `AppState` then uses GPUI's clipboard.
 pub fn read_clipboard_image() -> Vec<Vec<u8>> {
     #[cfg(target_os = "windows")]
     {

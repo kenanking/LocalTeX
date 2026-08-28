@@ -112,10 +112,10 @@ fn paste(dst: &mut RgbImg, src: &RgbImg, x: u32, y: u32) {
     }
 }
 
-/// Center a crop wider than 7.5:1 on a white canvas. This moves a
-/// width-limited UniRec input from the 64 px height bucket to 128 px.
-pub fn pad_wide_unirec_crop(img: &RgbImg) -> RgbImg {
-    let target_h = img.w.saturating_mul(2).div_ceil(15);
+pub fn pad_to_unirec_height_128(img: &RgbImg) -> RgbImg {
+    const UNIREC_MAX_W: u32 = 960;
+    const UNIREC_H128: u32 = 128;
+    let target_h = img.w.saturating_mul(UNIREC_H128).div_ceil(UNIREC_MAX_W);
     if target_h <= img.h {
         return img.clone();
     }

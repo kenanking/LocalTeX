@@ -97,7 +97,7 @@ impl Pipeline {
             return Ok(out);
         }
 
-        let retry = self.unirec.recognize(&imgops::pad_wide_unirec_crop(&crop))?;
+        let retry = self.unirec.recognize(&imgops::pad_to_unirec_height_128(&crop))?;
         let timing = (
             out.encode_s + retry.encode_s,
             out.decode_s + retry.decode_s,
@@ -247,9 +247,6 @@ fn postprocess(kind: RecKind, mut text: String) -> String {
     text
 }
 
-/// Effective per-block routing, computed once from the base label.
-/// Distinct from `doc::BlockKind`: `formula_number` stays chrome here
-/// (recognized, then folded or dropped), never a Formula block.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum RecKind {
     Text,
@@ -473,7 +470,7 @@ mod tests {
     #[test]
     fn space_retry_is_narrow_and_content_preserving() {
         let crop = RgbImg::blank(1650, 91, 255);
-        let padded = imgops::pad_wide_unirec_crop(&crop);
+        let padded = imgops::pad_to_unirec_height_128(&crop);
         assert_eq!((padded.w, padded.h), (1650, 220));
         assert!(looks_like_dropped_english_spaces(
             &crop,
