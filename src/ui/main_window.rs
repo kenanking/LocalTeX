@@ -15,7 +15,7 @@ use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
-use super::settings::{SettingsScroll, SettingsTab};
+use super::settings::SettingsPane;
 use super::theme;
 use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::actions::{
@@ -24,7 +24,6 @@ use crate::actions::{
 };
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
-use crate::keymap::ShortcutId;
 use crate::ocr::EngineStatus;
 use crate::preview::{document_preview_with_dpr, raster_dpr, DocDerived};
 use crate::state::AppState;
@@ -107,10 +106,7 @@ pub struct MainWindow {
     pub(crate) thumb_need: Rc<RefCell<Vec<Uuid>>>,
     pub(crate) view: View,
     pub(crate) board: DrawBoard,
-    settings_tab: SettingsTab,
-    shortcut_listen: Option<ShortcutId>,
-    settings_scroll: ScrollHandle,
-    settings_thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
+    pub(crate) settings: Entity<SettingsPane>,
     pub(crate) copied: Option<(Uuid, CopyKind)>,
     copied_epoch: u64,
     pub(crate) orig_hover: bool,
@@ -120,9 +116,6 @@ pub struct MainWindow {
     /// (pointer x at drag start, sidebar width at drag start).
     pub(crate) sidebar_drag: Option<(f32, f32)>,
     pub(crate) history: HistoryPane,
-    sysmon: crate::sysmon::SysMon,
-    pub(crate) sys_snap: crate::sysmon::SysSnapshot,
-    sysmon_on: bool,
 }
 
 impl MainWindow {
@@ -144,6 +137,8 @@ impl MainWindow {
         })
         .detach();
         state.update(cx, |state, cx| state.boot_selected(cx));
+        let settings = cx.new(|_| SettingsPane::new());
+        cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let win_w: f32 = window.bounds().size.width.into();
         let pinned = state.read(cx).prefs.sidebar_pinned_collapsed;
         let history = HistoryPane::new(win_w, pinned);
@@ -157,15 +152,15 @@ impl MainWindow {
         .detach();
         let this = cx.entity();
         cx.intercept_keystrokes(move |event, _, cx| {
-            let listening = this.read(cx).shortcut_listen;
-            let Some(id) = listening else {
+            let settings = this.read(cx).settings.clone();
+            let Some(id) = settings.read(cx).listening() else {
                 return;
             };
             cx.stop_propagation();
             let key = event.keystroke.key.as_str();
             if key == "escape" {
-                this.update(cx, |this, cx| {
-                    this.shortcut_listen = None;
+                settings.update(cx, |pane, cx| {
+                    pane.set_listen(None);
                     cx.notify();
                 });
                 return;
@@ -177,11 +172,12 @@ impl MainWindow {
                 return;
             }
             let chord = event.keystroke.unparse();
-            this.update(cx, |this, cx| {
-                this.state.update(cx, |s, cx| {
-                    let _ = s.bind_shortcut(id, chord, cx);
-                });
-                this.shortcut_listen = None;
+            let state = this.read(cx).state.clone();
+            state.update(cx, |s, cx| {
+                let _ = s.bind_shortcut(id, chord, cx);
+            });
+            settings.update(cx, |pane, cx| {
+                pane.set_listen(None);
                 cx.notify();
             });
         })
@@ -199,10 +195,7 @@ impl MainWindow {
             thumb_need: Rc::new(RefCell::new(Vec::new())),
             view: View::Library,
             board: DrawBoard::new(),
-            settings_tab: SettingsTab::General,
-            shortcut_listen: None,
-            settings_scroll: ScrollHandle::new(),
-            settings_thumb: Rc::new(RefCell::new(None)),
+            settings,
             copied: None,
             copied_epoch: 0,
             orig_hover: false,
@@ -211,9 +204,6 @@ impl MainWindow {
             preview: PreviewPane::new(),
             sidebar_drag: None,
             history,
-            sysmon: crate::sysmon::SysMon::new(),
-            sys_snap: crate::sysmon::SysSnapshot::default(),
-            sysmon_on: false,
         }
     }
 
@@ -244,18 +234,13 @@ impl MainWindow {
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.unzoom();
         self.view = if matches!(self.view, View::Settings) {
-            self.shortcut_listen = None;
+            self.settings.update(cx, |pane, _| pane.dismiss_listen());
             View::Library
         } else {
-            self.reset_settings_scroll();
+            self.settings.update(cx, |pane, _| pane.reset_scroll());
             View::Settings
         };
         cx.notify();
-    }
-
-    fn reset_settings_scroll(&mut self) {
-        self.settings_scroll.set_offset(point(px(0.), px(0.)));
-        self.settings_thumb.borrow_mut().take();
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, _: &mut Window, cx: &mut Context<Self>) {
@@ -276,7 +261,7 @@ impl MainWindow {
         let was_zoom = self.orig_zoomed;
         self.unzoom();
         if matches!(self.view, View::Draw | View::Settings) {
-            self.shortcut_listen = None;
+            self.settings.update(cx, |pane, _| pane.dismiss_listen());
             self.view = View::Library;
             cx.notify();
         } else if was_zoom {
@@ -415,52 +400,6 @@ impl MainWindow {
         self.media.borrow_mut().ensure_full(doc.id, pixels);
     }
 
-    /// Ticks the Settings → System sampler while that tab is on screen. Cheap
-    /// /proc reads every 1.5 s; the disk walk runs off-thread every 20 ticks.
-    fn kick_sysmon(&mut self, cx: &mut Context<Self>) {
-        if self.sysmon_on {
-            return;
-        }
-        self.sysmon_on = true;
-        cx.spawn(async move |this, cx| {
-            let mut ticks = 0u32;
-            loop {
-                // CPU/memory are cheap Win32 /proc reads. Do not wait on the
-                // models/snips walk first — that walk can sit in Defender for
-                // a long time and left this tab showing "—" on Windows.
-                let still = this
-                    .update(cx, |this, cx| {
-                        let disk = this.sys_snap.disk.clone();
-                        let mut snap = this.sysmon.sample();
-                        snap.disk = disk;
-                        this.sys_snap = snap;
-                        cx.notify();
-                        matches!(this.view, View::Settings)
-                            && this.settings_tab == SettingsTab::System
-                    })
-                    .unwrap_or(false);
-                if !still {
-                    break;
-                }
-                if ticks.is_multiple_of(20) {
-                    let disk = cx
-                        .background_spawn(async move { crate::sysmon::disk_sample() })
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.sys_snap.disk = Some(disk);
-                        cx.notify();
-                    });
-                }
-                ticks += 1;
-                Timer::after(Duration::from_millis(1500)).await;
-            }
-            let _ = this.update(cx, |this, _| {
-                this.sysmon_on = false;
-            });
-        })
-        .detach();
-    }
-
     fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {
         let dpr = raster_dpr(window.scale_factor());
         let selected = {
@@ -596,10 +535,6 @@ impl gpui::Render for MainWindow {
                 .is_some_and(|doc| matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded);
             (has_selected, can_open_docx)
         };
-        if matches!(view, View::Settings) && self.settings_tab == SettingsTab::System {
-            self.kick_sysmon(cx);
-        }
-
         div()
             .id("main")
             .track_focus(&self.focus)
@@ -650,7 +585,7 @@ impl gpui::Render for MainWindow {
             .child(ThumbDragCatcher::new(
                 [
                     self.preview.thumb.clone(),
-                    self.settings_thumb.clone(),
+                    self.settings.read(cx).scroll_thumb(),
                     self.history.thumb.clone(),
                 ],
                 cx.entity_id(),
@@ -672,41 +607,11 @@ impl gpui::Render for MainWindow {
                         d.child(self.render_draw(cx))
                     })
                     .when(matches!(view, View::Settings), |d| {
-                        let tab = self.settings_tab;
-                        let listen = self.shortcut_listen;
-                        let entity = cx.entity();
-                        d.flex_col().child(super::settings::page(
-                            self.state.clone(),
-                            tab,
-                            &self.sys_snap,
-                            listen,
-                            {
-                                let entity = entity.clone();
-                                move |tab, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.settings_tab = tab;
-                                        this.shortcut_listen = None;
-                                        this.reset_settings_scroll();
-                                        cx.notify();
-                                    });
-                                }
-                            },
-                            {
-                                let entity = entity.clone();
-                                move |id, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.shortcut_listen = id;
-                                        cx.notify();
-                                    });
-                                }
-                            },
-                            SettingsScroll {
-                                handle: &self.settings_scroll,
-                                thumb: &self.settings_thumb,
-                                view: entity.entity_id(),
-                            },
-                            cx,
-                        ))
+                        let state = self.state.clone();
+                        d.flex_col().child(
+                            self.settings
+                                .update(cx, |pane, cx| pane.view(state, window, cx)),
+                        )
                     }),
             )
             .child(self.render_footer(status_kind, status_label))
@@ -849,10 +754,10 @@ impl MainWindow {
                         entity.update(cx, |this, cx| {
                             this.unzoom();
                             this.view = if matches!(this.view, View::Settings) {
-                                this.shortcut_listen = None;
+                                this.settings.update(cx, |pane, _| pane.dismiss_listen());
                                 View::Library
                             } else {
-                                this.reset_settings_scroll();
+                                this.settings.update(cx, |pane, _| pane.reset_scroll());
                                 View::Settings
                             };
                             cx.notify();
