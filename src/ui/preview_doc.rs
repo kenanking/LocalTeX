@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::{
     div, img, prelude::*, px, rgb, AnyElement, App, Context, EntityId, MouseButton, SharedString,
 };
@@ -12,6 +15,15 @@ use crate::preview::{
     segs_lines, Eqno, InlineSeg, PreviewBlock, PreviewLayout, ScriptGlyph, SvgMath,
 };
 use uuid::Uuid;
+
+struct TextRunSpec {
+    run_id: String,
+    block_id: String,
+    tok: String,
+    para_text: String,
+    start: usize,
+    paragraph: bool,
+}
 
 impl MainWindow {
     pub(crate) fn preview_element(
@@ -400,12 +412,14 @@ impl MainWindow {
                             continue;
                         }
                         row = row.child(self.text_run_el(
-                            format!("{id}-t-{j}-{k}"),
-                            id.clone(),
-                            tok,
-                            para_text.clone(),
-                            ranges[j].start + off,
-                            paragraph,
+                            TextRunSpec {
+                                run_id: format!("{id}-t-{j}-{k}"),
+                                block_id: id.clone(),
+                                tok,
+                                para_text: para_text.clone(),
+                                start: ranges[j].start + off,
+                                paragraph,
+                            },
                             sel.clone(),
                         ));
                     }
@@ -431,12 +445,14 @@ impl MainWindow {
                             continue;
                         }
                         let run = self.text_run_el(
-                            format!("{id}-t-{j}-{k}"),
-                            id.clone(),
-                            tok,
-                            para_text.clone(),
-                            ranges[j].start + off,
-                            paragraph,
+                            TextRunSpec {
+                                run_id: format!("{id}-t-{j}-{k}"),
+                                block_id: id.clone(),
+                                tok,
+                                para_text: para_text.clone(),
+                                start: ranges[j].start + off,
+                                paragraph,
+                            },
                             sel.clone(),
                         );
                         if Some(k) == last {
@@ -487,24 +503,22 @@ impl MainWindow {
         row.into_any()
     }
 
-    fn text_run_el(
-        &self,
-        run_id: String,
-        block_id: String,
-        tok: String,
-        para_text: String,
-        start: usize,
-        paragraph: bool,
-        sel: std::rc::Rc<std::cell::RefCell<PreviewSel>>,
-    ) -> impl IntoElement {
+    fn text_run_el(&self, spec: TextRunSpec, sel: Rc<RefCell<PreviewSel>>) -> impl IntoElement {
         div()
-            .id(SharedString::from(run_id.clone()))
+            .id(SharedString::from(spec.run_id.clone()))
             .flex_shrink_0()
-            .when(paragraph, |d| {
+            .when(spec.paragraph, |d| {
                 d.text_sm().line_height(px(16.)).text_color(rgb(theme::INK))
             })
-            .when(!paragraph, |d| d.text_xs().text_color(rgb(theme::INK)))
-            .child(selectable_run(run_id, block_id, tok, para_text, start, sel))
+            .when(!spec.paragraph, |d| d.text_xs().text_color(rgb(theme::INK)))
+            .child(selectable_run(
+                spec.run_id,
+                spec.block_id,
+                spec.tok,
+                spec.para_text,
+                spec.start,
+                sel,
+            ))
     }
 
     fn script_el(&mut self, glyph: &ScriptGlyph, line_h: f32, cx: &mut App) -> AnyElement {
