@@ -92,7 +92,7 @@ fn document_xml(blocks: &[Block]) -> String {
         if block.text.trim().is_empty() {
             continue;
         }
-        match effective_kind(block) {
+        match block.kind {
             BlockKind::Table => body.push_str(&table_xml(&block.text)),
             BlockKind::Formula => body.push_str(&display_math_paragraph(&block.text)),
             BlockKind::Text => match block.role {
@@ -121,14 +121,6 @@ fn document_xml(blocks: &[Block]) -> String {
 </w:body>
 </w:document>"#
     )
-}
-
-fn effective_kind(block: &Block) -> BlockKind {
-    if block.kind == BlockKind::Table || table::looks_like_html_table(&block.text) {
-        BlockKind::Table
-    } else {
-        block.kind
-    }
 }
 
 fn styled_paragraph(style: &str, text: &str) -> String {

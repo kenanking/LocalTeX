@@ -109,17 +109,28 @@ impl Block {
         self.role = role;
         self
     }
+
+    /// If this is not already a table but the payload is HTML `<table`, set kind to Table.
+    pub fn promote_html_table(&mut self) {
+        if self.kind != BlockKind::Table && table::looks_like_html_table(&self.text) {
+            self.kind = BlockKind::Table;
+        }
+    }
 }
 
 pub fn decode_blocks_json(json: &str) -> Result<Vec<Block>, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(json)?;
-    if value.is_array() {
-        serde_json::from_value(value)
+    let mut blocks: Vec<Block> = if value.is_array() {
+        serde_json::from_value(value)?
     } else if let Some(blocks) = value.get("blocks") {
-        serde_json::from_value(blocks.clone())
+        serde_json::from_value(blocks.clone())?
     } else {
-        serde_json::from_value(value)
+        serde_json::from_value(value)?
+    };
+    for b in &mut blocks {
+        b.promote_html_table();
     }
+    Ok(blocks)
 }
 
 pub fn encode_blocks_json(blocks: &[Block]) -> Result<String, serde_json::Error> {
@@ -372,9 +383,7 @@ pub fn snip_kind(blocks: &[Block]) -> SnipKind {
             BlockKind::Formula => n_formula += 1,
             BlockKind::Table => n_table += 1,
             BlockKind::Text => {
-                if table::looks_like_html_table(&b.text) {
-                    n_table += 1;
-                } else if !b.role.interrupts_prose() {
+                if !b.role.interrupts_prose() {
                     n_text += 1;
                 }
             }
@@ -642,5 +651,24 @@ mod tests {
             .text;
         assert!(tex.contains("\\begin{table}"), "{tex}");
         assert!(tex.contains("\\caption{Table 1: Scores}"), "{tex}");
+    }
+
+    #[test]
+    fn html_payload_in_text_block_promotes_to_table() {
+        let mut b = Block::new(
+            BlockKind::Text,
+            rect(0),
+            "<table><tr><td>a</td></tr></table>",
+        );
+        b.promote_html_table();
+        assert_eq!(b.kind, BlockKind::Table);
+    }
+
+    #[test]
+    fn decode_promotes_legacy_html_text_rows() {
+        let json = r#"[{"kind":"Text","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"<table><tr><td>a</td></tr></table>"}]"#;
+        let blocks = decode_blocks_json(json).expect("json");
+        assert_eq!(blocks[0].kind, BlockKind::Table);
+        assert_eq!(snip_kind(&blocks), SnipKind::Table);
     }
 }

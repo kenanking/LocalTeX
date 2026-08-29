@@ -690,11 +690,6 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                 }
             }
             BlockKind::Text => {
-                if table::looks_like_html_table(&block.text) {
-                    flush_para(&mut para, &mut out);
-                    push_table_block(&block.text, &mut out, dpr);
-                    continue;
-                }
                 if block.role.interrupts_prose() {
                     flush_para(&mut para, &mut out);
                     let segs = segs_from_text(&block.text, MathStyle::Text, dpr);

@@ -307,6 +307,7 @@ pub(super) fn to_doc_block(base: &str, coord: [f32; 4], text: &str) -> Option<Bl
             return None;
         }
     }
+    block.promote_html_table();
     Some(block)
 }
 

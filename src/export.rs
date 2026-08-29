@@ -258,14 +258,13 @@ pub fn export_blocks(blocks: &[Block], fmt: ExportFmt, prefs: &Prefs) -> String 
 
 fn row_is_spaced(row: &[&Block]) -> bool {
     row.iter().any(|b| {
-        matches!(effective_kind(b), BlockKind::Table)
+        matches!(b.kind, BlockKind::Table)
             || (b.kind == BlockKind::Text && b.role.interrupts_prose())
     })
 }
 
 fn export_block(block: &Block, fmt: ExportFmt, prefs: &Prefs) -> String {
-    let kind = effective_kind(block);
-    match (fmt, kind) {
+    match (fmt, block.kind) {
         (ExportFmt::Markdown, BlockKind::Formula) => {
             let body = unwrap_formula(&block.text).0;
             if block.display || math::is_display_body(&body) {
@@ -297,14 +296,6 @@ fn export_block(block: &Block, fmt: ExportFmt, prefs: &Prefs) -> String {
     }
 }
 
-fn effective_kind(block: &Block) -> BlockKind {
-    if block.kind == BlockKind::Table || table::looks_like_html_table(&block.text) {
-        BlockKind::Table
-    } else {
-        block.kind
-    }
-}
-
 fn formula_body(blocks: &[Block]) -> String {
     blocks
         .iter()
@@ -318,7 +309,7 @@ fn formula_body(blocks: &[Block]) -> String {
 fn table_html(blocks: &[Block]) -> Option<String> {
     let mut parts = Vec::new();
     for b in blocks {
-        if b.kind == BlockKind::Table || table::looks_like_html_table(&b.text) {
+        if b.kind == BlockKind::Table {
             parts.push(b.text.as_str());
         }
     }
@@ -375,12 +366,6 @@ pub fn visible_copy_rows(rows: &[CopyRow]) -> Vec<CopyRow> {
 }
 
 fn emit_text_block(text: &str, fmt: ExportFmt, prefs: &Prefs) -> String {
-    if table::looks_like_html_table(text) {
-        return match fmt {
-            ExportFmt::Latex => table::html_to_latex(text),
-            ExportFmt::Markdown => table::html_to_markdown(text),
-        };
-    }
     let mut out = String::new();
     for run in crate::doc::split_math(text) {
         match run {
@@ -402,9 +387,8 @@ fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
             rows.push(vec![block]);
             continue;
         }
-        if matches!(effective_kind(block), BlockKind::Table | BlockKind::Formula)
+        if matches!(block.kind, BlockKind::Table | BlockKind::Formula)
             && (block.kind == BlockKind::Table
-                || table::looks_like_html_table(&block.text)
                 || block.text.contains('\n')
                 || block.text.len() > 48)
         {
@@ -441,7 +425,7 @@ fn render_latex_table_snip(blocks: &[Block]) -> String {
             } else {
                 caps_before.push(cap);
             }
-        } else if effective_kind(b) == BlockKind::Table {
+        } else if b.kind == BlockKind::Table {
             seen_table = true;
             bodies.push(table::html_to_latex(&b.text));
         }

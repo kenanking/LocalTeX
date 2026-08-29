@@ -183,6 +183,17 @@ mod tests {
     }
 
     #[test]
+    fn text_region_with_html_table_becomes_table_kind() {
+        let block = to_doc_block(
+            "text",
+            [0.0, 0.0, 10.0, 10.0],
+            "<table><tr><td>a</td></tr></table>",
+        )
+        .expect("block");
+        assert_eq!(block.kind, BlockKind::Table);
+    }
+
+    #[test]
     fn strip_display_wrappers() {
         assert_eq!(unwrap_formula("$$a+b$$\n\n").0, "a+b");
         assert_eq!(unwrap_formula("$x$").0, "x");
