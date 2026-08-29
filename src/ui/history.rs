@@ -182,6 +182,7 @@ impl MainWindow {
             let state_ent = self.state.clone();
             let list_focus = self.snip_list_focus.clone();
             let thumb_keep = self.thumb_keep.clone();
+            let window_ent = cx.entity();
             let scroll = self.history.scroll.clone();
             uniform_list(
                 "history-rows",
@@ -192,6 +193,10 @@ impl MainWindow {
                     let keep_start = range.start.saturating_sub(pad);
                     let keep_end = (range.end + pad).min(ids.len());
                     *thumb_keep.borrow_mut() = ids[keep_start..keep_end].to_vec();
+                    let entity = window_ent.clone();
+                    cx.defer(move |cx| {
+                        entity.update(cx, |this, cx| this.schedule_media_gc(cx));
+                    });
                     let mut need_thumbs = Vec::new();
                     {
                         let state = state_ent.read(cx);

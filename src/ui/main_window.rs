@@ -376,7 +376,7 @@ impl MainWindow {
         self.media.borrow_mut().math_image(svg, cx)
     }
 
-    fn schedule_media_gc(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_media_gc(&mut self, cx: &mut Context<Self>) {
         if self.gc_scheduled {
             return;
         }
