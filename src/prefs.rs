@@ -54,6 +54,9 @@ pub struct Prefs {
     /// History sidebar width in px, user-draggable between SIDEBAR limits.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// User clicked collapse. Stays collapsed until they click expand.
+    #[serde(default)]
+    pub sidebar_pinned_collapsed: bool,
     /// Catalog overrides only. Missing key = default. `null` = unbound.
     #[serde(default)]
     pub shortcuts: keymap::Overrides,
@@ -78,6 +81,7 @@ impl Default for Prefs {
             inline_delim: InlineDelim::Dollar,
             block_delim: BlockDelim::Dollars,
             sidebar_width: default_sidebar_width(),
+            sidebar_pinned_collapsed: false,
             shortcuts: keymap::Overrides::new(),
         }
     }
@@ -141,5 +145,22 @@ mod tests {
         assert_eq!(p.wrap_block("x^2"), "$$\nx^2\n$$");
         assert_eq!(p.close_action, WindowCloseAction::Minimize);
         assert!(p.hide_on_capture);
+    }
+
+    #[test]
+    fn sidebar_pinned_collapsed_defaults_false_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(!p.sidebar_pinned_collapsed);
+    }
+
+    #[test]
+    fn sidebar_pinned_collapsed_round_trips() {
+        let p = Prefs {
+            sidebar_pinned_collapsed: true,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert!(q.sidebar_pinned_collapsed);
     }
 }

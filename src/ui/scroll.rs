@@ -90,13 +90,19 @@ fn clamp_neg(offset: f32, max: f32) -> f32 {
 /// `view` is captured at render. Do not call `window.current_view()` from
 /// these mouse callbacks — the view stack can be empty (`panic = "abort"`).
 pub struct ThumbDragCatcher {
-    drag: Rc<RefCell<Option<ScrollThumbDrag>>>,
+    drags: Vec<Rc<RefCell<Option<ScrollThumbDrag>>>>,
     view: EntityId,
 }
 
 impl ThumbDragCatcher {
-    pub fn new(drag: Rc<RefCell<Option<ScrollThumbDrag>>>, view: EntityId) -> Self {
-        Self { drag, view }
+    pub fn new(
+        drags: impl IntoIterator<Item = Rc<RefCell<Option<ScrollThumbDrag>>>>,
+        view: EntityId,
+    ) -> Self {
+        Self {
+            drags: drags.into_iter().collect(),
+            view,
+        }
     }
 }
 
@@ -151,24 +157,32 @@ impl Element for ThumbDragCatcher {
         window: &mut Window,
         _cx: &mut App,
     ) {
-        let drag = self.drag.clone();
+        let drags = self.drags.clone();
         let view = self.view;
         window.on_mouse_event({
-            let drag = drag.clone();
+            let drags = drags.clone();
             move |event: &MouseMoveEvent, phase, _window, cx| {
                 if phase != DispatchPhase::Capture {
                     return;
                 }
-                if apply_thumb_drag(&drag, event.position) {
+                let mut any = false;
+                for drag in &drags {
+                    if apply_thumb_drag(drag, event.position) {
+                        any = true;
+                    }
+                }
+                if any {
                     cx.notify(view);
                 }
             }
         });
         window.on_mouse_event({
-            let drag = drag.clone();
+            let drags = drags.clone();
             move |event: &MouseUpEvent, phase, _, _| {
                 if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                    drag.borrow_mut().take();
+                    for drag in &drags {
+                        drag.borrow_mut().take();
+                    }
                 }
             }
         });

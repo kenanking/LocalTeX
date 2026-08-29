@@ -1,5 +1,6 @@
 use gpui::{
-    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, Pixels, SharedString, Window,
+    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, MouseButton, Pixels,
+    SharedString, Window,
 };
 
 use super::theme;
@@ -60,6 +61,8 @@ pub enum IconKind {
     Check,
     Zoom,
     Reset,
+    Collapse,
+    Expand,
 }
 
 impl IconKind {
@@ -75,11 +78,13 @@ impl IconKind {
             Self::Check => "icons/check.svg",
             Self::Zoom => "icons/zoom.svg",
             Self::Reset => "icons/reset.svg",
+            Self::Collapse => "icons/collapse.svg",
+            Self::Expand => "icons/expand.svg",
         }
     }
 
     #[cfg(test)]
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 12] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
@@ -90,6 +95,8 @@ impl IconKind {
         Self::Check,
         Self::Zoom,
         Self::Reset,
+        Self::Collapse,
+        Self::Expand,
     ];
 }
 
@@ -145,7 +152,8 @@ pub fn icon_btn_sized(
             d.hover(|d| d.bg(theme::row_hover()))
         })
         .when(enabled, |d| {
-            d.on_click(move |_, window, cx| on_click(window, cx))
+            d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, window, cx| on_click(window, cx))
         })
         .tooltip(Tooltip::text(hint))
         .child(

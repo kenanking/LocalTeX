@@ -11,7 +11,7 @@ use gpui::{
 use uuid::Uuid;
 
 use super::draw::DrawBoard;
-use super::history::{SIDEBAR_MAX, SIDEBAR_MIN};
+use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
@@ -119,6 +119,7 @@ pub struct MainWindow {
     pub(crate) preview: PreviewPane,
     /// (pointer x at drag start, sidebar width at drag start).
     pub(crate) sidebar_drag: Option<(f32, f32)>,
+    pub(crate) history: HistoryPane,
     sysmon: crate::sysmon::SysMon,
     pub(crate) sys_snap: crate::sysmon::SysSnapshot,
     sysmon_on: bool,
@@ -143,6 +144,17 @@ impl MainWindow {
         })
         .detach();
         state.update(cx, |state, cx| state.boot_selected(cx));
+        let win_w: f32 = window.bounds().size.width.into();
+        let pinned = state.read(cx).prefs.sidebar_pinned_collapsed;
+        let history = HistoryPane::new(win_w, pinned);
+        cx.observe_window_bounds(window, |this, window, cx| {
+            let now_w: f32 = window.bounds().size.width.into();
+            let pinned = this.state.read(cx).prefs.sidebar_pinned_collapsed;
+            if this.history.fold.on_resize(now_w, pinned) {
+                cx.notify();
+            }
+        })
+        .detach();
         let this = cx.entity();
         cx.intercept_keystrokes(move |event, _, cx| {
             let listening = this.read(cx).shortcut_listen;
@@ -198,6 +210,7 @@ impl MainWindow {
             zoom_doc: None,
             preview: PreviewPane::new(),
             sidebar_drag: None,
+            history,
             sysmon: crate::sysmon::SysMon::new(),
             sys_snap: crate::sysmon::SysSnapshot::default(),
             sysmon_on: false,
@@ -275,6 +288,20 @@ impl MainWindow {
         self.orig_zoomed = false;
         self.orig_hover = false;
         self.zoom_doc = None;
+    }
+
+    pub(crate) fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let pin = self.history.fold.toggle(window.bounds().size.width.into());
+        self.state.update(cx, |s, cx| {
+            s.update_prefs(cx, |p| p.sidebar_pinned_collapsed = pin);
+        });
+        cx.notify();
+    }
+
+    fn current_sidebar_width(&self, has_docs: bool, cx: &App) -> f32 {
+        self.history
+            .fold
+            .width(has_docs, self.state.read(cx).prefs.sidebar_width)
     }
 
     pub(crate) fn zoom_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -553,7 +580,7 @@ impl gpui::Render for MainWindow {
         };
         let history = self.render_history(n_docs, cx);
         let copy_pane_w = {
-            let sidebar = self.state.read(cx).prefs.sidebar_width;
+            let sidebar = self.current_sidebar_width(has_docs, cx);
             let win_w: f32 = window.bounds().size.width.into();
             (win_w - sidebar - 32.).max(112.)
         };
@@ -621,11 +648,11 @@ impl gpui::Render for MainWindow {
             .bg(rgb(theme::BG))
             .text_color(rgb(theme::TEXT))
             .child(ThumbDragCatcher::new(
-                self.preview.thumb.clone(),
-                cx.entity_id(),
-            ))
-            .child(ThumbDragCatcher::new(
-                self.settings_thumb.clone(),
+                [
+                    self.preview.thumb.clone(),
+                    self.settings_thumb.clone(),
+                    self.history.thumb.clone(),
+                ],
                 cx.entity_id(),
             ))
             .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
