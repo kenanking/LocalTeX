@@ -102,13 +102,11 @@ fn load_pipeline(dir: &Path) -> Result<Pipeline> {
 /// ORT binds thread pools at session commit. Default: at most half the
 /// cores, clamped to [2, 4] — decode is bandwidth-bound; 4 vs 8 costs ~5%
 /// latency and keeps the desktop responsive. Override with
-/// `LOCALTEX_INTRA_THREADS` (or `OPENDOC_INTRA_THREADS`).
+/// `LOCALTEX_INTRA_THREADS`.
 fn default_intra() -> usize {
-    for key in ["LOCALTEX_INTRA_THREADS", "OPENDOC_INTRA_THREADS"] {
-        if let Ok(v) = std::env::var(key) {
-            if let Ok(n) = v.parse::<usize>() {
-                return n.max(1);
-            }
+    if let Ok(v) = std::env::var("LOCALTEX_INTRA_THREADS") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n.max(1);
         }
     }
     let cores = std::thread::available_parallelism()

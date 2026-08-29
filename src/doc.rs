@@ -331,18 +331,13 @@ impl Document {
         snip_kind(&self.blocks)
     }
 
-    /// FTS blob: raw block text + Markdown with default delimiters.
+    /// FTS blob: raw block text. Does not index Markdown with default delimiters.
     pub fn search_text_for_blocks(blocks: &[Block]) -> String {
         let mut out = String::new();
         for b in blocks {
             out.push_str(&b.text);
             out.push('\n');
         }
-        out.push_str(&crate::export::export_blocks(
-            blocks,
-            ExportFmt::Markdown,
-            &crate::prefs::Prefs::default(),
-        ));
         out
     }
 
@@ -443,6 +438,17 @@ mod tests {
             w: 10,
             h: 10,
         }
+    }
+
+    #[test]
+    fn search_blob_is_raw_block_text() {
+        let blocks = vec![Block::new(BlockKind::Formula, rect(0), r"\frac{1}{2}")];
+        let blob = Document::search_text_for_blocks(&blocks);
+        assert!(blob.contains(r"\frac{1}{2}"));
+        assert!(
+            !blob.contains("$$"),
+            "must not depend on Prefs::default wrap"
+        );
     }
 
     #[test]

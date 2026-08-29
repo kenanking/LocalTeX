@@ -35,34 +35,14 @@ fn prepare_tex(latex: &str) -> String {
 fn unwrap_boxed(tex: &str) -> String {
     let mut t = tex.to_string();
     let needle = r"\boxed{";
-    loop {
-        let Some(at) = t.find(needle) else {
-            break;
-        };
+    while let Some(at) = t.find(needle) {
         let rest = &t[at + needle.len()..];
-        let Some((inner, after)) = split_braced(rest) else {
+        let Some((inner, after)) = crate::math::split_braced(rest) else {
             break;
         };
         t = format!("{}{}{}", &t[..at], inner, after);
     }
     t
-}
-
-fn split_braced(s: &str) -> Option<(String, &str)> {
-    let mut depth = 1i32;
-    for (i, c) in s.char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((s[..i].to_string(), &s[i + c.len_utf8()..]));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 pub fn build_docx(blocks: &[Block]) -> anyhow::Result<Vec<u8>> {

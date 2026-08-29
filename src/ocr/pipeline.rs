@@ -60,16 +60,14 @@ fn build_session(path: &Path, intra: usize, spinning: bool) -> Result<Session> {
         .with_context(|| format!("commit session {}", path.display()))
 }
 
-fn env_flag(localtex: &str, opendoc: &str) -> bool {
-    std::env::var(localtex)
-        .or_else(|_| std::env::var(opendoc))
-        .is_ok_and(|v| v != "0")
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| v != "0")
 }
 
 impl Pipeline {
     pub fn load(dir: &Path, intra: usize) -> Result<Self> {
         ort::init().with_name("localtex").commit();
-        let spinning = env_flag("LOCALTEX_SPINNING", "OPENDOC_SPINNING");
+        let spinning = env_flag("LOCALTEX_SPINNING");
         eprintln!(
             "{APP_SLUG}: intra_op_threads={intra} spinning={}",
             if spinning { "on" } else { "off" }

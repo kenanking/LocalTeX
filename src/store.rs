@@ -408,9 +408,7 @@ fn classify_snips(names: &[String]) -> SnipsShape {
         return SnipsShape::Current;
     }
     if has_all(names, &PRE_METRICS_COLUMNS)
-        && names
-            .iter()
-            .all(|n| SNIPS_COLUMNS.iter().any(|c| *c == n.as_str()))
+        && names.iter().all(|n| SNIPS_COLUMNS.contains(&n.as_str()))
     {
         return SnipsShape::PreMetrics;
     }
@@ -698,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn search_text_uses_default_delimiters() {
+    fn search_text_is_raw_without_dollar_wrap() {
         let blocks = vec![Block::new(
             BlockKind::Formula,
             Rect {
@@ -711,7 +709,10 @@ mod tests {
         )];
         let blob = Document::search_text_for_blocks(&blocks);
         assert!(blob.contains("x^2"));
-        assert!(blob.contains("$"));
+        assert!(
+            !blob.contains("$"),
+            "must not depend on Prefs::default wrap"
+        );
     }
 
     #[test]

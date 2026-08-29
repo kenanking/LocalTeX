@@ -192,7 +192,7 @@ pub fn format_eqno(tag: &str) -> String {
     }
 }
 
-fn split_braced(s: &str) -> Option<(String, &str)> {
+pub(crate) fn split_braced(s: &str) -> Option<(String, &str)> {
     let mut depth = 1i32;
     for (i, c) in s.char_indices() {
         match c {
@@ -229,6 +229,14 @@ fn find_closer(chars: &[char], start: usize, display: bool) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_braced_finds_matching_close() {
+        let (inner, rest) = super::split_braced("foo} bar").expect("close");
+        assert_eq!(inner, "foo");
+        assert_eq!(rest, " bar");
+        assert!(super::split_braced("no close").is_none());
+    }
 
     #[test]
     fn split_math_inline_and_display() {
