@@ -102,8 +102,8 @@ pub struct MainWindow {
     pub(crate) derived: Option<DocDerived>,
     derived_busy: bool,
     gc_scheduled: bool,
+    last_scale: f32,
     pub(crate) thumb_keep: Rc<RefCell<Vec<Uuid>>>,
-    pub(crate) thumb_need: Rc<RefCell<Vec<Uuid>>>,
     pub(crate) view: View,
     pub(crate) board: DrawBoard,
     pub(crate) settings: Entity<SettingsPane>,
@@ -128,7 +128,13 @@ impl MainWindow {
             let action = state_for_close.read(cx).prefs.close_action;
             AppState::handle_main_close(action, window, cx)
         });
-        cx.observe(&state, |_, _, cx| cx.notify()).detach();
+        cx.observe(&state, |this, _, cx| {
+            this.ensure_selected_full(cx);
+            this.schedule_derived_from_app(cx);
+            this.schedule_media_gc(cx);
+            cx.notify();
+        })
+        .detach();
         let search = cx.new(|cx| SearchField::new("Search text or LaTeX", cx));
         cx.observe(&search, |this, field, cx| {
             let query = field.read(cx).text();
@@ -143,6 +149,11 @@ impl MainWindow {
         let pinned = state.read(cx).prefs.sidebar_pinned_collapsed;
         let history = HistoryPane::new(win_w, pinned);
         cx.observe_window_bounds(window, |this, window, cx| {
+            let scale = window.scale_factor();
+            if (scale - this.last_scale).abs() > f32::EPSILON {
+                this.last_scale = scale;
+                this.schedule_derived(window, cx);
+            }
             let now_w: f32 = window.bounds().size.width.into();
             let pinned = this.state.read(cx).prefs.sidebar_pinned_collapsed;
             if this.history.fold.on_resize(now_w, pinned) {
@@ -182,7 +193,7 @@ impl MainWindow {
             });
         })
         .detach();
-        Self {
+        let mut this = Self {
             state,
             focus,
             snip_list_focus,
@@ -191,8 +202,8 @@ impl MainWindow {
             derived: None,
             derived_busy: false,
             gc_scheduled: false,
+            last_scale: window.scale_factor(),
             thumb_keep: Rc::new(RefCell::new(Vec::new())),
-            thumb_need: Rc::new(RefCell::new(Vec::new())),
             view: View::Library,
             board: DrawBoard::new(),
             settings,
@@ -204,7 +215,9 @@ impl MainWindow {
             preview: PreviewPane::new(),
             sidebar_drag: None,
             history,
-        }
+        };
+        this.schedule_derived(window, cx);
+        this
     }
 
     fn upload(&mut self, _: &UploadImage, _: &mut Window, cx: &mut Context<Self>) {
@@ -404,7 +417,12 @@ impl MainWindow {
     }
 
     fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let dpr = raster_dpr(window.scale_factor());
+        self.last_scale = window.scale_factor();
+        self.schedule_derived_from_app(cx);
+    }
+
+    fn schedule_derived_from_app(&mut self, cx: &mut Context<Self>) {
+        let dpr = raster_dpr(self.last_scale);
         let selected = {
             let state = self.state.read(cx);
             state.selected_doc().map(|doc| {
@@ -471,6 +489,7 @@ impl MainWindow {
             if let Err(err) = this.update(cx, |this, cx| {
                 this.derived_busy = false;
                 this.derived = Some(built);
+                this.schedule_derived_from_app(cx);
                 cx.notify();
             }) {
                 eprintln!("{}: derived preview: {err}", crate::identity::APP_SLUG);
@@ -488,14 +507,7 @@ impl Focusable for MainWindow {
 
 impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let need = std::mem::take(&mut *self.thumb_need.borrow_mut());
-        for id in need {
-            self.state.update(cx, |s, cx| s.request_thumb(id, cx));
-        }
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
-            self.ensure_selected_full(cx);
-            self.schedule_derived(window, cx);
-            self.schedule_media_gc(cx);
             let state = self.state.read(cx);
             if self.orig_zoomed && self.zoom_doc != state.selected() {
                 self.orig_zoomed = false;

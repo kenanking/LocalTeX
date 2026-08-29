@@ -182,7 +182,6 @@ impl MainWindow {
             let state_ent = self.state.clone();
             let list_focus = self.snip_list_focus.clone();
             let thumb_keep = self.thumb_keep.clone();
-            let thumb_need = self.thumb_need.clone();
             let scroll = self.history.scroll.clone();
             uniform_list(
                 "history-rows",
@@ -215,7 +214,12 @@ impl MainWindow {
                         }
                     }
                     if !need_thumbs.is_empty() {
-                        thumb_need.borrow_mut().extend(need_thumbs);
+                        let state = state_ent.clone();
+                        cx.defer(move |cx| {
+                            for id in need_thumbs {
+                                state.update(cx, |s, cx| s.request_thumb(id, cx));
+                            }
+                        });
                     }
                     let state = state_ent.read(cx);
                     range
