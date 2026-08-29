@@ -25,7 +25,8 @@ pub use crate::library::DatePreset;
 
 pub struct AppState {
     pub library: Library,
-    export_fmt: ExportFmt,
+    export_fmt: ExportFmt, // Session copy format. Initialized from prefs.default_fmt.
+    // toggle_format does not persist; Settings writes both fields.
     pub prefs: Prefs,
     engine: Arc<Engine>,
     store: Option<Arc<Store>>,
@@ -36,8 +37,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
-        let prefs = Prefs::load();
+    pub fn new(prefs: Prefs) -> Self {
         let store = match Store::open_default() {
             Ok(store) => Some(Arc::new(store)),
             Err(err) => {

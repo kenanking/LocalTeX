@@ -50,7 +50,7 @@ fn main() {
             crate::state::bind_keys(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
-            let state = cx.new(|_| AppState::new());
+            let state = cx.new(|_| AppState::new(prefs));
             let bounds = Bounds::centered(None, size(px(800.), px(560.)), cx);
             let handle = cx
                 .open_window(
@@ -79,10 +79,15 @@ fn main() {
             // Hotkey manager must be created on this GPUI UI thread (Windows
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.
             let rx = desktop::spawn();
-            desktop::rebind_capture(
-                crate::keymap::effective(&prefs.shortcuts, crate::keymap::ShortcutId::Capture)
+            state.update(cx, |state, _| {
+                desktop::rebind_capture(
+                    crate::keymap::effective(
+                        &state.prefs.shortcuts,
+                        crate::keymap::ShortcutId::Capture,
+                    )
                     .as_deref(),
-            );
+                );
+            });
             state::pump_desktop_events(state, rx, cx);
             cx.activate(true);
         });
