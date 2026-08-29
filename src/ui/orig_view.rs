@@ -11,7 +11,7 @@ use gpui::{
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
-use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
+use super::scroll::{clamp_neg, overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
 use super::theme;
 use super::widgets::IconKind;
 use crate::doc::ImageSlot;
@@ -32,6 +32,9 @@ pub(crate) fn zoom_factor_for_wheel(dy: f32) -> f32 {
     }
 }
 
+/// Must match `MainWindow` chrome; used only to seed the first overlay frame.
+const TOPBAR_H: f32 = 44.0;
+const FOOTER_H: f32 = 28.0;
 const FILM_H: f32 = 72.0;
 const FILM_THUMB_W: f32 = 88.0;
 const FILM_THUMB_H: f32 = 56.0;
@@ -50,16 +53,43 @@ pub(crate) fn film_content_w(n: usize) -> f32 {
 /// Grab-the-strip pan: content follows the pointer 1:1. `offset` is GPUI's
 /// negative scroll offset, clamped to `[-max, 0]`.
 pub(crate) fn film_pan_offset(start_off: f32, dx: f32, max: f32) -> f32 {
-    let max = if max.is_finite() && max > 0.0 {
-        max
-    } else {
-        0.0
-    };
-    let next = start_off + dx;
-    if !next.is_finite() {
-        return 0.0;
+    clamp_neg(start_off + dx, max)
+}
+
+pub(crate) fn film_cell_w() -> f32 {
+    FILM_THUMB_W + FILM_CELL_PAD
+}
+
+pub(crate) fn film_thumb_left(i: usize) -> f32 {
+    FILM_PAD_X + i as f32 * (film_cell_w() + FILM_GAP)
+}
+
+/// Keep `thumb` fully visible with the smallest scroll. Already inside the
+/// viewport: no-op. Off the left: pin to the left edge. Off the right: pin
+/// to the right edge. (`overflow: nearest`.)
+pub(crate) fn film_scroll_to_show(
+    offset: f32,
+    max: f32,
+    view_w: f32,
+    thumb_left: f32,
+    thumb_w: f32,
+) -> f32 {
+    if view_w <= 1.0 {
+        return clamp_neg(offset, max);
     }
-    next.clamp(-max, 0.0)
+    let vis_l = -offset;
+    let vis_r = vis_l + view_w;
+    let thumb_r = thumb_left + thumb_w;
+    if thumb_w >= view_w - 1.0 {
+        return clamp_neg(-thumb_left, max);
+    }
+    if thumb_left >= vis_l - 0.5 && thumb_r <= vis_r + 0.5 {
+        return clamp_neg(offset, max);
+    }
+    if thumb_left < vis_l {
+        return clamp_neg(-thumb_left, max);
+    }
+    clamp_neg(view_w - thumb_r, max)
 }
 
 pub(crate) fn fit_scale(img_w: f32, img_h: f32, stage_w: f32, stage_h: f32) -> f32 {
@@ -86,11 +116,11 @@ pub(crate) fn release_is_click(drag_dist: f32) -> bool {
 }
 
 pub(crate) struct OrigDrag {
-    pub origin_x: f32,
-    pub origin_y: f32,
-    pub start_tx: f32,
-    pub start_ty: f32,
-    pub dist: f32,
+    origin_x: f32,
+    origin_y: f32,
+    start_tx: f32,
+    start_ty: f32,
+    dist: f32,
 }
 
 struct FilmPan {
@@ -98,6 +128,12 @@ struct FilmPan {
     start_off: f32,
     dist: f32,
     pending_id: Option<Uuid>,
+}
+
+enum OrigPointer {
+    Idle,
+    Image(OrigDrag),
+    Film(FilmPan),
 }
 
 pub(crate) struct OrigView {
@@ -113,11 +149,11 @@ pub(crate) struct OrigView {
     pub stage_h: f32,
     pub stage_ox: f32,
     pub stage_oy: f32,
-    pub drag: Option<OrigDrag>,
+    pointer: OrigPointer,
     pub film: ScrollHandle,
     pub film_thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
-    film_pan: Option<FilmPan>,
     film_view_w: f32,
+    film_reveal: Option<usize>,
     shown_id: Option<Uuid>,
 }
 
@@ -136,11 +172,11 @@ impl OrigView {
             stage_h: 0.0,
             stage_ox: 0.0,
             stage_oy: 0.0,
-            drag: None,
+            pointer: OrigPointer::Idle,
             film: ScrollHandle::new(),
             film_thumb: Rc::new(RefCell::new(None)),
-            film_pan: None,
             film_view_w: 0.0,
+            film_reveal: None,
             shown_id: None,
         }
     }
@@ -148,9 +184,9 @@ impl OrigView {
     pub fn close(&mut self) {
         self.open = false;
         self.strip_hover = false;
-        self.drag = None;
-        self.film_pan = None;
+        self.pointer = OrigPointer::Idle;
         self.film_view_w = 0.0;
+        self.film_reveal = None;
         self.shown_id = None;
         self.fit = 0.0;
         let mut off = self.film.offset();
@@ -162,9 +198,9 @@ impl OrigView {
     pub fn open_view(&mut self) {
         self.open = true;
         self.strip_hover = false;
-        self.drag = None;
-        self.film_pan = None;
+        self.pointer = OrigPointer::Idle;
         self.film_view_w = 0.0;
+        self.film_reveal = None;
         self.shown_id = None;
         self.fit = 0.0;
     }
@@ -209,16 +245,19 @@ impl OrigView {
         true
     }
 
-    pub fn on_new_image(&mut self, id: Uuid) {
+    pub fn on_new_image(&mut self, id: Uuid) -> bool {
         if self.shown_id == Some(id) {
-            return;
+            return false;
         }
         self.shown_id = Some(id);
-        self.drag = None;
+        if !matches!(self.pointer, OrigPointer::Film(_)) {
+            self.pointer = OrigPointer::Idle;
+        }
         self.fit = 0.0;
         if self.stage_w > 0.0 && self.img_w > 0.0 {
             self.fit_in_stage();
         }
+        true
     }
 
     pub fn apply_image_size(&mut self, img_w: f32, img_h: f32) {
@@ -262,7 +301,7 @@ impl OrigView {
     }
 
     pub fn begin_drag(&mut self, x: f32, y: f32) {
-        self.drag = Some(OrigDrag {
+        self.pointer = OrigPointer::Image(OrigDrag {
             origin_x: x,
             origin_y: y,
             start_tx: self.tx,
@@ -272,7 +311,7 @@ impl OrigView {
     }
 
     pub fn drag_to(&mut self, x: f32, y: f32) {
-        let Some(drag) = self.drag.as_mut() else {
+        let OrigPointer::Image(drag) = &mut self.pointer else {
             return;
         };
         let dx = x - drag.origin_x;
@@ -284,17 +323,30 @@ impl OrigView {
 
     /// `true` if the pointer-up should close the overlay.
     pub fn end_drag(&mut self) -> bool {
-        let dist = self.drag.take().map(|d| d.dist).unwrap_or(0.0);
-        release_is_click(dist)
+        match std::mem::replace(&mut self.pointer, OrigPointer::Idle) {
+            OrigPointer::Image(drag) => release_is_click(drag.dist),
+            other => {
+                self.pointer = other;
+                false
+            }
+        }
+    }
+
+    pub fn has_pointer(&self) -> bool {
+        !matches!(self.pointer, OrigPointer::Idle)
     }
 
     pub fn is_film_panning(&self) -> bool {
-        self.film_pan.is_some()
+        matches!(self.pointer, OrigPointer::Film(_))
+    }
+
+    pub fn is_image_panning(&self) -> bool {
+        matches!(self.pointer, OrigPointer::Image(_))
     }
 
     pub fn begin_film_pan(&mut self, x: f32, pending_id: Option<Uuid>) {
         let start_off: f32 = self.film.offset().x.into();
-        self.film_pan = Some(FilmPan {
+        self.pointer = OrigPointer::Film(FilmPan {
             origin_x: x,
             start_off,
             dist: 0.0,
@@ -303,7 +355,7 @@ impl OrigView {
     }
 
     pub fn drag_film(&mut self, x: f32) {
-        let Some(pan) = self.film_pan.as_mut() else {
+        let OrigPointer::Film(pan) = &mut self.pointer else {
             return;
         };
         let dx = x - pan.origin_x;
@@ -317,26 +369,57 @@ impl OrigView {
 
     /// Clicked thumbnail id when the gesture stayed inside `CLICK_SLOP`.
     pub fn end_film_pan(&mut self) -> Option<Uuid> {
-        let pan = self.film_pan.take()?;
-        if release_is_click(pan.dist) {
-            pan.pending_id
-        } else {
-            None
+        match std::mem::replace(&mut self.pointer, OrigPointer::Idle) {
+            OrigPointer::Film(pan) if release_is_click(pan.dist) => pan.pending_id,
+            OrigPointer::Film(_) => None,
+            other => {
+                self.pointer = other;
+                None
+            }
         }
     }
 
-    /// Keep panning while the left button is held. If the button is up, drop
-    /// the gesture without treating it as a thumbnail click — GPUI does not
-    /// deliver `MouseUp` when the release happens outside the window.
-    pub fn continue_film_pan(&mut self, x: f32, left_down: bool) {
-        if self.film_pan.is_none() {
+    /// Continue an in-flight gesture, or drop it if the button is up (GPUI
+    /// does not deliver `MouseUp` when the release happens outside the window).
+    pub fn pointer_move(&mut self, x: f32, y: f32, left_down: bool) {
+        if matches!(self.pointer, OrigPointer::Idle) {
             return;
         }
         if !left_down {
-            self.film_pan = None;
+            self.pointer = OrigPointer::Idle;
             return;
         }
-        self.drag_film(x);
+        if matches!(self.pointer, OrigPointer::Film(_)) {
+            self.drag_film(x);
+        } else if matches!(self.pointer, OrigPointer::Image(_)) {
+            self.drag_to(x, y);
+        }
+    }
+
+    pub fn request_film_reveal(&mut self, index: usize) {
+        self.film_reveal = Some(index);
+    }
+
+    pub fn apply_film_reveal(&mut self) {
+        if matches!(self.pointer, OrigPointer::Film(_)) || self.film_thumb.borrow().is_some() {
+            return;
+        }
+        let Some(i) = self.film_reveal else {
+            return;
+        };
+        let view_w: f32 = self.film.bounds().size.width.into();
+        if view_w <= 1.0 {
+            return;
+        }
+        let max: f32 = self.film.max_offset().width.into();
+        let cur: f32 = self.film.offset().x.into();
+        let next = film_scroll_to_show(cur, max, view_w, film_thumb_left(i), film_cell_w());
+        if (next - cur).abs() > 0.5 {
+            let mut off = self.film.offset();
+            off.x = px(next);
+            self.film.set_offset(off);
+        }
+        self.film_reveal = None;
     }
 }
 
@@ -359,8 +442,13 @@ impl MainWindow {
             (ids, selected, age, idx)
         };
         if let Some(id) = selected {
-            self.orig.on_new_image(id);
+            if self.orig.on_new_image(id) {
+                if let Some(i) = idx {
+                    self.orig.request_film_reveal(i);
+                }
+            }
         }
+        self.orig.apply_film_reveal();
         let full = selected.and_then(|id| self.full(id));
         if let Some(ref im) = full {
             let s = im.size(0);
@@ -370,7 +458,7 @@ impl MainWindow {
         let win_w: f32 = window.bounds().size.width.into();
         let win_h: f32 = window.bounds().size.height.into();
         self.orig
-            .seed_stage_if_empty(win_w, (win_h - 44.0 - 28.0 - FILM_H).max(1.0));
+            .seed_stage_if_empty(win_w, (win_h - TOPBAR_H - FOOTER_H - FILM_H).max(1.0));
         let n = ids.len();
         let at_start = !idx.is_some_and(|i| i > 0);
         let at_end = !idx.is_some_and(|i| i + 1 < n);
@@ -383,12 +471,6 @@ impl MainWindow {
         } else {
             100
         };
-        let panning = self.orig.drag.is_some();
-        let img_w = self.orig.img_w;
-        let img_h = self.orig.img_h;
-        let scale = self.orig.scale;
-        let tx = self.orig.tx;
-        let ty = self.orig.ty;
 
         let thumbs = {
             let media = self.media.borrow();
@@ -410,46 +492,34 @@ impl MainWindow {
             .bg(theme::overlay_scrim())
             .text_color(rgb(0xececef))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
-                if this.orig.is_film_panning() {
-                    this.orig
-                        .continue_film_pan(f32::from(ev.position.x), ev.dragging());
-                    cx.notify();
+                if !this.orig.has_pointer() {
                     return;
                 }
-                if this.orig.drag.is_some() {
-                    if !ev.dragging() {
-                        this.orig.drag = None;
-                        cx.notify();
-                        return;
-                    }
-                    this.orig
-                        .drag_to(f32::from(ev.position.x), f32::from(ev.position.y));
-                    cx.notify();
-                }
+                this.orig.pointer_move(
+                    f32::from(ev.position.x),
+                    f32::from(ev.position.y),
+                    ev.dragging(),
+                );
+                cx.notify();
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| {
-                    if this.orig.film_pan.is_some() {
+                    if this.orig.is_film_panning() {
                         if let Some(id) = this.orig.end_film_pan() {
                             this.state.update(cx, |s, cx| s.select(id, cx));
                         }
                         cx.notify();
                         return;
                     }
-                    if this.orig.drag.is_none() {
-                        return;
-                    }
-                    if this.orig.end_drag() {
+                    if this.orig.is_image_panning() && this.orig.end_drag() {
                         this.unzoom();
                         window.focus(&this.snip_list_focus);
                     }
                     cx.notify();
                 }),
             )
-            .child(self.render_orig_stage(
-                full, img_w, img_h, scale, tx, ty, panning, at_start, at_end, cx,
-            ))
+            .child(self.render_orig_stage(full, at_start, at_end, cx))
             .child(self.render_orig_hud(&counter, pct, cx))
             .child(self.render_orig_film(&thumbs, selected, cx))
     }
@@ -523,18 +593,18 @@ impl MainWindow {
     fn render_orig_stage(
         &self,
         full: Option<std::sync::Arc<gpui::RenderImage>>,
-        img_w: f32,
-        img_h: f32,
-        scale: f32,
-        tx: f32,
-        ty: f32,
-        panning: bool,
         at_start: bool,
         at_end: bool,
         cx: &mut Context<Self>,
     ) -> impl gpui::IntoElement {
         let entity = cx.entity();
         let img_data = full.clone();
+        let img_w = self.orig.img_w;
+        let img_h = self.orig.img_h;
+        let scale = self.orig.scale;
+        let tx = self.orig.tx;
+        let ty = self.orig.ty;
+        let panning = self.orig.is_image_panning();
         div()
             .id("orig-stage")
             .relative()
@@ -736,7 +806,7 @@ impl MainWindow {
             .min_w_0()
             .flex_shrink_0()
             .bg(rgba(0x1010146b))
-            .cursor(if self.orig.film_pan.is_some() {
+            .cursor(if self.orig.is_film_panning() {
                 CursorStyle::ClosedHand
             } else {
                 CursorStyle::OpenHand
@@ -942,10 +1012,38 @@ mod tests {
         let mut v = OrigView::new();
         v.begin_film_pan(10.0, Some(Uuid::nil()));
         assert!(v.is_film_panning());
-        // Release happened outside the window: GPUI never delivers MouseUp.
-        v.continue_film_pan(12.0, false);
+        v.pointer_move(12.0, 0.0, false);
         assert!(!v.is_film_panning());
         assert_eq!(v.end_film_pan(), None);
+    }
+
+    #[test]
+    fn film_scroll_to_show_is_nearest_edge() {
+        let cell = 92.0;
+        // already fully visible
+        assert_eq!(film_scroll_to_show(0.0, 400.0, 200.0, 40.0, cell), 0.0);
+        // already fully visible in the middle of a scrolled viewport
+        assert_eq!(
+            film_scroll_to_show(-100.0, 400.0, 200.0, 150.0, cell),
+            -100.0
+        );
+        // off the left → pin left
+        assert!((film_scroll_to_show(-200.0, 400.0, 200.0, 0.0, cell) - 0.0).abs() < 1e-3);
+        // off the right → pin right: view 200, thumb 300..392 → offset -192
+        assert!((film_scroll_to_show(0.0, 400.0, 200.0, 300.0, cell) + 192.0).abs() < 1e-3);
+        // clipped on the right, still mostly visible → pin right
+        assert!((film_scroll_to_show(0.0, 400.0, 200.0, 150.0, cell) + 42.0).abs() < 1e-3);
+        // clipped on the left → pin left
+        assert!((film_scroll_to_show(-50.0, 400.0, 200.0, 10.0, cell) + 10.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn film_thumb_left_matches_content_width_gaps() {
+        assert!((film_thumb_left(0) - 16.0).abs() < 1e-3);
+        assert!((film_thumb_left(1) - (16.0 + 92.0 + 8.0)).abs() < 1e-3);
+        let n = 2;
+        let right = film_thumb_left(n - 1) + film_cell_w() + 16.0;
+        assert!((right - film_content_w(n)).abs() < 1e-3);
     }
 
     #[test]

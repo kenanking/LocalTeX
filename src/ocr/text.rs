@@ -201,9 +201,35 @@ pub(super) fn handle_formula(text: &str) -> String {
     processed = fix_latex_brackets(&processed);
     let mut processed = format!("{}\n\n", processed);
     if let Some(tag) = eqno {
-        processed = fold_tag(&processed, &tag);
+        processed = inject_tags(&processed, std::slice::from_ref(&tag));
     }
     processed
+}
+
+pub(super) fn eqno_payload(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    if !t.is_empty() && t.len() <= 12 && t.chars().any(|c| c.is_ascii_digit()) {
+        Some(t.to_string())
+    } else {
+        None
+    }
+}
+
+/// Fold tags into a handle_formula result: `$$...$$\n\n` → `$$... \tag{N}$$\n\n`.
+pub(super) fn inject_tags(text: &str, tags: &[String]) -> String {
+    let core = text.trim_end();
+    let trailing = &text[core.len()..];
+    let Some(body) = core.strip_suffix("$$") else {
+        return text.to_string();
+    };
+    let inner = body.strip_prefix("$$").unwrap_or(body);
+    let (_, have) = crate::math::split_display_tag(inner);
+    let ins: String = tags
+        .iter()
+        .filter(|t| !have.iter().any(|h| h == *t))
+        .map(|t| format!(" \\tag{{{t}}}"))
+        .collect();
+    format!("{body}{ins}$${trailing}")
 }
 
 /// `\] (11)\n\n` → drop the paren run, keep `"11"`.
@@ -213,14 +239,10 @@ fn take_bracket_eqno(text: &str) -> (String, Option<String>) {
     let Some(caps) = re.captures(text) else {
         return (text.to_string(), None);
     };
-    let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-    if !inner.chars().any(|c| c.is_ascii_digit()) {
+    let Some(tag) = caps.get(1).and_then(|m| eqno_payload(m.as_str())) else {
         return (text.to_string(), None);
-    }
-    (
-        re.replace(text, r"\]").into_owned(),
-        Some(inner.trim().to_string()),
-    )
+    };
+    (re.replace(text, r"\]").into_owned(), Some(tag))
 }
 
 /// After delimiter strip: `a+b (1)` → `a+b` + `"1"`. Requires a space so
@@ -231,25 +253,10 @@ fn take_trailing_paren_eqno(body: &str) -> (String, Option<String>) {
     let Some(caps) = re.captures(body) else {
         return (body.to_string(), None);
     };
-    let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-    if inner.is_empty() || !inner.chars().any(|c| c.is_ascii_digit()) {
+    let Some(tag) = caps.get(1).and_then(|m| eqno_payload(m.as_str())) else {
         return (body.to_string(), None);
-    }
-    (
-        re.replace(body, "").into_owned(),
-        Some(inner.trim().to_string()),
-    )
-}
-
-fn fold_tag(wrapped: &str, tag: &str) -> String {
-    let core = wrapped.trim_end();
-    let trailing = &wrapped[core.len()..];
-    match core.strip_suffix("$$") {
-        Some(body) if !body.contains(&format!(r"\tag{{{tag}}}")) => {
-            format!("{body} \\tag{{{tag}}}$${trailing}")
-        }
-        _ => wrapped.to_string(),
-    }
+    };
+    (re.replace(body, "").into_owned(), Some(tag))
 }
 
 /// to_markdown.py extract_table_from_html.

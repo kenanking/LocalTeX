@@ -75,7 +75,7 @@ pub fn apply_thumb_drag(drag: &RefCell<Option<ScrollThumbDrag>>, pos: Point<Pixe
     true
 }
 
-fn clamp_neg(offset: f32, max: f32) -> f32 {
+pub(crate) fn clamp_neg(offset: f32, max: f32) -> f32 {
     if !offset.is_finite() {
         return 0.0;
     }

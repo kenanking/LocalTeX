@@ -167,7 +167,7 @@ impl Pipeline {
         }
         for (fj, tags) in &tags_for {
             if let Some(Some(rec)) = pending.get_mut(*fj) {
-                rec.text = inject_tags(&rec.text, tags);
+                rec.text = text::inject_tags(&rec.text, tags);
             }
         }
 
@@ -409,31 +409,7 @@ fn clean_tag(text: &str) -> Option<String> {
         .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']')
         .trim()
         .to_string();
-    if !t.is_empty() && t.len() <= 12 && t.chars().any(|c| c.is_ascii_digit()) {
-        Some(t)
-    } else {
-        None
-    }
-}
-
-/// Fold tags into a handle_formula result: `$$...$$\n\n` → `$$... \tag{N}$$\n\n`.
-fn inject_tags(text: &str, tags: &[String]) -> String {
-    let core = text.trim_end();
-    let trailing = &text[core.len()..];
-    match core.strip_suffix("$$") {
-        Some(body) => {
-            let ins: String = tags
-                .iter()
-                .filter(|t| {
-                    let needle = format!(r"\tag{{{t}}}");
-                    !body.contains(&needle)
-                })
-                .map(|t| format!(" \\tag{{{t}}}"))
-                .collect();
-            format!("{body}{ins}$${trailing}")
-        }
-        None => text.to_string(),
-    }
+    text::eqno_payload(&t)
 }
 
 fn bbox_to_rect(coord: [f32; 4]) -> Rect {
@@ -526,7 +502,7 @@ mod tests {
     #[test]
     fn inject_tags_then_unwrap_yields_tag() {
         let wrapped = text::handle_formula("a+b");
-        let tagged = inject_tags(&wrapped, &["1".into()]);
+        let tagged = text::inject_tags(&wrapped, &["1".into()]);
         let block =
             to_doc_block("display_formula", [0.0, 0.0, 10.0, 10.0], &tagged).expect("formula");
         assert_eq!(block.text, r"a+b \tag{1}");
@@ -540,11 +516,22 @@ mod tests {
             wrapped.contains(r"\tag{1}"),
             "inline (1) should already be a tag, got {wrapped:?}"
         );
-        let tagged = inject_tags(&wrapped, &["1".into()]);
+        let tagged = text::inject_tags(&wrapped, &["1".into()]);
         assert_eq!(
             tagged.matches(r"\tag{1}").count(),
             1,
             "layout pairing must not double the same eqno, got {tagged:?}"
         );
+    }
+
+    #[test]
+    fn inject_tags_does_not_treat_tag11_as_tag1() {
+        let wrapped = "$$a \\tag{11}$$\n\n";
+        let tagged = text::inject_tags(wrapped, &["1".into()]);
+        let core = tagged.trim_end();
+        let body = core.strip_suffix("$$").expect("display wrap");
+        let inner = body.strip_prefix("$$").unwrap_or(body);
+        let (_, tags) = crate::math::split_display_tag(inner);
+        assert_eq!(tags, vec!["11".to_string(), "1".to_string()]);
     }
 }

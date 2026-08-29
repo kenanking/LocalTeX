@@ -569,8 +569,12 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::quit))
             .cursor(CursorStyle::Arrow)
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
-                if this.orig.is_film_panning() && !ev.dragging() {
-                    this.orig.continue_film_pan(f32::from(ev.position.x), false);
+                if this.orig.has_pointer() && !ev.dragging() {
+                    this.orig.pointer_move(
+                        f32::from(ev.position.x),
+                        f32::from(ev.position.y),
+                        false,
+                    );
                     cx.notify();
                     return;
                 }
@@ -590,11 +594,15 @@ impl gpui::Render for MainWindow {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     if this.orig.is_film_panning() {
                         if let Some(id) = this.orig.end_film_pan() {
                             this.state.update(cx, |s, cx| s.select(id, cx));
                         }
+                        cx.notify();
+                    } else if this.orig.is_image_panning() && this.orig.end_drag() {
+                        this.unzoom();
+                        window.focus(&this.snip_list_focus);
                         cx.notify();
                     }
                     if this.sidebar_drag.take().is_some() {
