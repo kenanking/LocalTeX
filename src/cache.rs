@@ -159,15 +159,6 @@ impl MediaCache {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn clear_math(&mut self, cx: &mut App) {
-        let keys: Vec<u64> = self.math.keys().copied().collect();
-        for k in keys {
-            self.evict_math(k, cx);
-        }
-        self.math_order.clear();
-    }
-
     fn drop_full(&mut self, id: Uuid, cx: &mut App) {
         self.full_order.retain(|x| *x != id);
         if let Some(img) = self.fulls.remove(&id) {

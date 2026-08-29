@@ -299,9 +299,6 @@ impl AppState {
                 })
                 .detach();
             }
-            IngestSource::PdfPages { .. } => {
-                self.flash_capture_error("PDF ingest is not implemented yet", cx);
-            }
         }
     }
 

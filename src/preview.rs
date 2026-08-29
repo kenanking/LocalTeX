@@ -17,8 +17,7 @@ const FONT_SIZE_DISPLAY: f64 = 18.0;
 const FONT_SIZE_SCRIPT: f64 = 11.5;
 const FONT_PAD: f64 = 3.0;
 const FONT_PAD_SCRIPT: f64 = 0.0;
-/// Extra device pixels in the SVG file. GPUI then rasters SVG at
-/// `SMOOTH_SVG_SCALE_FACTOR` (2×). Keep this modest so we don't stack to ~6×.
+/// Extra device pixels in the SVG file relative to the CSS display box.
 pub fn raster_dpr(scale: f32) -> f64 {
     (f64::from(scale) * 1.5).clamp(1.0, 2.0)
 }

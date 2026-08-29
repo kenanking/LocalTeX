@@ -1,5 +1,5 @@
 //! Image helpers: RGB in-memory images, luma/invert, SIMD resize, crops,
-//! vertical merging and formula margin cropping.
+//! and formula margin cropping.
 
 use anyhow::{anyhow, Result};
 use fast_image_resize::images::Image as FirImage;
@@ -122,46 +122,6 @@ pub fn pad_to_unirec_height_128(img: &RgbImg) -> RgbImg {
     let mut canvas = RgbImg::blank(img.w, target_h, 255);
     paste(&mut canvas, img, 0, (target_h - img.h) / 2);
     canvas
-}
-
-pub fn calc_merged_wh(imgs: &[&RgbImg]) -> (u32, u32) {
-    let w = imgs.iter().map(|i| i.w).max().unwrap_or(0);
-    let h = imgs.iter().map(|i| i.h).sum();
-    (w, h)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Align {
-    Center,
-    Right,
-    Left,
-}
-
-/// Merge images vertically with per-step alignment (utils.py merge_images).
-pub fn merge_images(imgs: &[&RgbImg], aligns: &[Align]) -> Option<RgbImg> {
-    if imgs.is_empty() {
-        return None;
-    }
-    if imgs.len() == 1 {
-        return Some(imgs[0].clone());
-    }
-    let mut merged = imgs[0].clone();
-    for (i, img2) in imgs.iter().enumerate().skip(1) {
-        let align = aligns.get(i - 1).copied().unwrap_or(Align::Center);
-        let w = merged.w.max(img2.w);
-        let h = merged.h + img2.h;
-        let (x1, x2) = match align {
-            Align::Center => ((w - merged.w) / 2, (w - img2.w) / 2),
-            Align::Right => (w - merged.w, w - img2.w),
-            Align::Left => (0, 0),
-        };
-        let mut canvas = RgbImg::blank(w, h, 255);
-        paste(&mut canvas, &merged, x1, 0);
-        let mh = merged.h;
-        paste(&mut canvas, img2, x2, mh);
-        merged = canvas;
-    }
-    Some(merged)
 }
 
 /// utils.py crop_margin: crop to bounding box of dark-ish pixels after
