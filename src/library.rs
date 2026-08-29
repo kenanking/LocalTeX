@@ -37,11 +37,11 @@ pub const DATE_PRESETS: [(&str, &str, DatePreset); 4] = [
 ];
 
 pub struct Library {
-    pub docs: HashMap<Uuid, Document>,
-    pub order: Vec<Uuid>,
-    pub visible_ids: Vec<Uuid>,
-    pub selected: Option<Uuid>,
-    pub date_preset: DatePreset,
+    docs: HashMap<Uuid, Document>,
+    order: Vec<Uuid>,
+    visible_ids: Vec<Uuid>,
+    selected: Option<Uuid>,
+    date_preset: DatePreset,
     loaded_lru: Vec<Uuid>,
 }
 
@@ -77,8 +77,20 @@ impl Library {
         self.docs.get_mut(&id)
     }
 
+    pub fn selected(&self) -> Option<Uuid> {
+        self.selected
+    }
+
     pub fn selected_doc(&self) -> Option<&Document> {
         self.selected.and_then(|id| self.docs.get(&id))
+    }
+
+    pub fn visible_ids(&self) -> &[Uuid] {
+        &self.visible_ids
+    }
+
+    pub fn date_preset(&self) -> DatePreset {
+        self.date_preset
     }
 
     pub fn is_empty(&self) -> bool {
@@ -172,6 +184,41 @@ impl Library {
     pub fn pixels(&self, id: Uuid) -> Option<Arc<RgbaImage>> {
         self.docs.get(&id).and_then(|d| d.image.pixels().cloned())
     }
+
+    pub fn select(&mut self, id: Uuid) {
+        if self.docs.contains_key(&id) {
+            self.selected = Some(id);
+            self.touch_lru(id);
+        }
+    }
+
+    /// Replace the filtered id list. If the current selection is not visible,
+    /// select the first visible id. Returns true when selection changed.
+    pub fn set_visible(&mut self, ids: Vec<Uuid>) -> bool {
+        self.visible_ids = ids;
+        let gone = self.selected.is_none_or(|s| !self.visible_ids.contains(&s));
+        if gone {
+            self.selected = self.visible_ids.first().copied();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_date_preset(&mut self, preset: DatePreset) -> bool {
+        if self.date_preset == preset {
+            return false;
+        }
+        self.date_preset = preset;
+        true
+    }
+}
+
+pub fn merge_visible(inflight_hits: Vec<Uuid>, mut persisted: Vec<Uuid>) -> Vec<Uuid> {
+    persisted.retain(|id| !inflight_hits.contains(id));
+    let mut out = inflight_hits;
+    out.append(&mut persisted);
+    out
 }
 
 impl Default for Library {
@@ -202,5 +249,29 @@ mod tests {
         assert_eq!(lib.order, vec![id_a]);
         assert!(lib.pixels(id_a).is_some());
         assert_eq!(lib.visible_ids.len(), 1);
+    }
+
+    #[test]
+    fn set_visible_moves_selection_when_filtered_out() {
+        let mut lib = Library::new();
+        let a = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let b = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let id_a = a.id;
+        let id_b = b.id;
+        lib.insert_newest(a);
+        lib.insert_newest(b); // selected = b
+        assert_eq!(lib.selected(), Some(id_b));
+        let changed = lib.set_visible(vec![id_a]);
+        assert!(changed);
+        assert_eq!(lib.selected(), Some(id_a));
+    }
+
+    #[test]
+    fn merge_visible_puts_inflight_first_without_dup() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let c = Uuid::new_v4();
+        let out = merge_visible(vec![a], vec![a, b, c]);
+        assert_eq!(out, vec![a, b, c]);
     }
 }

@@ -14,7 +14,7 @@ use crate::doc::{DocStatus, Document, ExportFmt, ImageSlot};
 use crate::identity::APP_SLUG;
 use crate::ingest::IngestSource;
 use crate::keymap::{self, AssignError, ShortcutId};
-use crate::library::Library;
+use crate::library::{merge_visible, Library};
 use crate::ocr::Engine;
 use crate::ocr_queue::OcrQueue;
 use crate::prefs::{Prefs, WindowCloseAction};
@@ -196,7 +196,7 @@ impl AppState {
     }
 
     pub fn selected(&self) -> Option<Uuid> {
-        self.library.selected
+        self.library.selected()
     }
 
     pub fn selected_doc(&self) -> Option<&Document> {
@@ -204,11 +204,11 @@ impl AppState {
     }
 
     pub fn visible_ids(&self) -> &[Uuid] {
-        &self.library.visible_ids
+        self.library.visible_ids()
     }
 
     pub fn date_preset(&self) -> DatePreset {
-        self.library.date_preset
+        self.library.date_preset()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -546,7 +546,7 @@ impl AppState {
                     .is_some_and(|d| matches!(d.status, DocStatus::Ready));
                 if ready {
                     this.persist_ready(id, cx);
-                    if this.prefs.autocopy && this.library.selected == Some(id) {
+                    if this.prefs.autocopy && this.library.selected() == Some(id) {
                         this.copy_selected(cx);
                     }
                 }
@@ -565,7 +565,7 @@ impl AppState {
     }
 
     pub fn retry_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.library.selected else {
+        let Some(id) = self.library.selected() else {
             return;
         };
         let slot = self.library.get(id).map(|d| d.image.clone());
@@ -638,20 +638,20 @@ impl AppState {
     }
 
     pub fn select_delta(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.library.visible_ids.is_empty() {
+        if self.visible_ids().is_empty() {
             return;
         }
         let idx = self
-            .library
-            .selected
-            .and_then(|id| self.library.visible_ids.iter().position(|x| *x == id))
+            .selected()
+            .and_then(|id| self.visible_ids().iter().position(|x| *x == id))
             .unwrap_or(0) as isize;
-        let next = (idx + delta).clamp(0, self.library.visible_ids.len() as isize - 1) as usize;
-        self.select(self.library.visible_ids[next], cx);
+        let next = (idx + delta).clamp(0, self.visible_ids().len() as isize - 1) as usize;
+        let id = self.visible_ids()[next];
+        self.select(id, cx);
     }
 
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.library.selected else {
+        let Some(id) = self.library.selected() else {
             return;
         };
         self.ocr_queue.remove(id);
@@ -668,7 +668,7 @@ impl AppState {
             })
             .detach();
         }
-        if let Some(id) = self.library.selected {
+        if let Some(id) = self.library.selected() {
             self.ensure_detail(id, cx);
         }
         self.pump_ocr(cx);
@@ -681,8 +681,7 @@ impl AppState {
     }
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.library.selected = Some(id);
-        self.library.touch_lru(id);
+        self.library.select(id);
         self.ensure_detail(id, cx);
         cx.notify();
     }
@@ -696,15 +695,14 @@ impl AppState {
     }
 
     pub fn set_date_preset(&mut self, preset: DatePreset, cx: &mut Context<Self>) {
-        if self.library.date_preset == preset {
+        if !self.library.set_date_preset(preset) {
             return;
         }
-        self.library.date_preset = preset;
         self.schedule_filter(cx);
     }
 
     pub fn boot_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.library.selected {
+        if let Some(id) = self.library.selected() {
             self.ensure_detail(id, cx);
         }
     }
@@ -791,7 +789,10 @@ impl AppState {
         self.search_gen = self.search_gen.wrapping_add(1);
         let gen = self.search_gen;
         let query = self.search_query.clone();
-        let range = self.library.date_preset.to_range(CivilDate::today_local());
+        let range = self
+            .library
+            .date_preset()
+            .to_range(CivilDate::today_local());
         let store = self.store.clone();
         let inflight: Vec<(Uuid, std::time::SystemTime, String)> = self
             .library
@@ -827,7 +828,7 @@ impl AppState {
             Timer::after(Duration::from_millis(120)).await;
             let ids = cx
                 .background_spawn(async move {
-                    let mut persisted = if let Some(store) = store {
+                    let persisted = if let Some(store) = store {
                         store.query_ids(&query, range).unwrap_or_else(|err| {
                             eprintln!("{APP_SLUG}: search: {err}");
                             Vec::new()
@@ -843,30 +844,22 @@ impl AppState {
                             .map(|(id, _, _)| id)
                             .collect()
                     };
-                    let mut out = Vec::new();
-                    for (id, created, blob) in inflight {
-                        if store::instant_in_range(created, range) && text_matches(&query, &blob) {
-                            out.push(id);
-                        }
-                    }
-                    persisted.retain(|id| !out.contains(id));
-                    out.append(&mut persisted);
-                    out
+                    let inflight_hits: Vec<Uuid> = inflight
+                        .into_iter()
+                        .filter(|(_, created, blob)| {
+                            store::instant_in_range(*created, range) && text_matches(&query, blob)
+                        })
+                        .map(|(id, _, _)| id)
+                        .collect();
+                    merge_visible(inflight_hits, persisted)
                 })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 if this.search_gen != gen {
                     return;
                 }
-                this.library.visible_ids = ids;
-                // Keep the detail pane on a visible row while filtering.
-                let sel_gone = this
-                    .library
-                    .selected
-                    .is_none_or(|s| !this.library.visible_ids.contains(&s));
-                if sel_gone {
-                    this.library.selected = this.library.visible_ids.first().copied();
-                    if let Some(id) = this.library.selected {
+                if this.library.set_visible(ids) {
+                    if let Some(id) = this.library.selected() {
                         this.ensure_detail(id, cx);
                     }
                 }
@@ -969,7 +962,7 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { store.load_png(id) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
-                if this.library.selected != Some(id) {
+                if this.library.selected() != Some(id) {
                     return;
                 }
                 match result {
