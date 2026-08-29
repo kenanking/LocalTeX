@@ -196,13 +196,14 @@ impl Library {
     /// select the first visible id. Returns true when selection changed.
     pub fn set_visible(&mut self, ids: Vec<Uuid>) -> bool {
         self.visible_ids = ids;
-        let gone = self.selected.is_none_or(|s| !self.visible_ids.contains(&s));
-        if gone {
-            self.selected = self.visible_ids.first().copied();
-            true
+        let next = if self.selected.is_some_and(|s| self.visible_ids.contains(&s)) {
+            self.selected
         } else {
-            false
-        }
+            self.visible_ids.first().copied()
+        };
+        let changed = next != self.selected;
+        self.selected = next;
+        changed
     }
 
     pub fn set_date_preset(&mut self, preset: DatePreset) -> bool {
@@ -264,6 +265,32 @@ mod tests {
         let changed = lib.set_visible(vec![id_a]);
         assert!(changed);
         assert_eq!(lib.selected(), Some(id_a));
+    }
+
+    #[test]
+    fn set_visible_reports_selection_change_only() {
+        let mut lib = Library::new();
+        assert!(
+            !lib.set_visible(Vec::new()),
+            "None → empty must not look like a selection change"
+        );
+        assert_eq!(lib.selected(), None);
+
+        let a = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let b = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let id_a = a.id;
+        let id_b = b.id;
+        lib.insert_newest(a);
+        lib.insert_newest(b);
+        assert_eq!(lib.selected(), Some(id_b));
+        assert!(
+            !lib.set_visible(vec![id_b, id_a]),
+            "keeping the current id is not a selection change"
+        );
+        assert_eq!(lib.selected(), Some(id_b));
+        assert!(lib.set_visible(Vec::new()));
+        assert_eq!(lib.selected(), None);
+        assert!(!lib.set_visible(Vec::new()));
     }
 
     #[test]

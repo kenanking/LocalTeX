@@ -25,8 +25,7 @@ pub use crate::library::DatePreset;
 
 pub struct AppState {
     pub library: Library,
-    export_fmt: ExportFmt, // Session copy format. Initialized from prefs.default_fmt.
-    // toggle_format does not persist; Settings writes both fields.
+    export_fmt: ExportFmt,
     pub prefs: Prefs,
     engine: Arc<Engine>,
     store: Option<Arc<Store>>,
@@ -113,7 +112,6 @@ impl AppState {
         cx.notify();
     }
 
-    /// Close-button policy. Ctrl+Q / tray Quit still call `cx.quit()` directly.
     pub fn handle_main_close(action: WindowCloseAction, window: &mut Window, cx: &mut App) -> bool {
         match action {
             WindowCloseAction::Minimize => {

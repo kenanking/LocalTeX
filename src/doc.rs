@@ -75,8 +75,6 @@ pub enum BlockRole {
 }
 
 impl BlockRole {
-    /// Titles and captions are not body prose: they flush paragraphs,
-    /// sit on their own export row, and do not count as snip-kind text.
     pub fn interrupts_prose(self) -> bool {
         !matches!(self, Self::Body)
     }
@@ -110,7 +108,6 @@ impl Block {
         self
     }
 
-    /// If this is not already a table but the payload is HTML `<table`, set kind to Table.
     pub fn promote_html_table(&mut self) {
         if self.kind != BlockKind::Table && table::looks_like_html_table(&self.text) {
             self.kind = BlockKind::Table;
@@ -240,11 +237,8 @@ pub struct CopyRow {
 
 #[derive(Clone)]
 pub enum ImageSlot {
-    /// File on disk; pixels not necessarily in RAM.
     OnDisk,
-    /// Decoded screenshot (capture session or after lazy load).
     Loaded(Arc<RgbaImage>),
-    /// DB row exists; PNG missing or unreadable. OCR blocks still valid.
     Missing,
 }
 
@@ -257,8 +251,6 @@ impl ImageSlot {
     }
 }
 
-/// Wall time and hybrid confidence from one finished recognize. Absent
-/// when OCR produced no token/layout evidence (or the row predates this).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OcrMeta {
     pub elapsed_s: f32,
@@ -272,13 +264,11 @@ pub struct Document {
     pub image: ImageSlot,
     pub blocks: Vec<Block>,
     pub status: DocStatus,
-    /// Sidebar title; set from OCR / DB so the list does not need `blocks`.
     pub first_line: String,
     pub thumb_jpeg: Vec<u8>,
     pub persisted: bool,
     pub blocks_loaded: bool,
     pub ocr: Option<OcrMeta>,
-    /// Bumped when OCR, retry, or loaded blocks change. Preview cache key.
     pub revision: u64,
 }
 
@@ -367,7 +357,6 @@ impl Document {
         snip_kind(&self.blocks)
     }
 
-    /// FTS blob: raw block text. Does not index Markdown with default delimiters.
     pub fn search_text_for_blocks(blocks: &[Block]) -> String {
         let mut out = String::new();
         for b in blocks {
@@ -482,8 +471,8 @@ mod tests {
         let blob = Document::search_text_for_blocks(&blocks);
         assert!(blob.contains(r"\frac{1}{2}"));
         assert!(
-            !blob.contains("$$"),
-            "must not depend on Prefs::default wrap"
+            !blob.contains('$'),
+            "must not wrap raw TeX in Markdown delimiters"
         );
     }
 
@@ -712,5 +701,17 @@ mod tests {
         let blocks = decode_blocks_json(json).expect("json");
         assert_eq!(blocks[0].kind, BlockKind::Table);
         assert_eq!(snip_kind(&blocks), SnipKind::Table);
+        let prefs = crate::prefs::Prefs::default();
+        let rows = copy_rows(&blocks, &prefs);
+        assert!(rows.iter().any(|r| r.kind == CopyKind::MdTable));
+        assert!(rows.iter().any(|r| r.kind == CopyKind::LatexTable));
+        assert!(rows.iter().any(|r| r.kind == CopyKind::Tsv));
+        let preview = crate::preview::document_preview(&blocks);
+        assert!(
+            preview
+                .iter()
+                .any(|b| matches!(b, crate::preview::PreviewBlock::Table(_))),
+            "promoted HTML must typeset as a table, got {preview:?}"
+        );
     }
 }

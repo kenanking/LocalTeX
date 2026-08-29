@@ -286,8 +286,23 @@ mod tests {
 
     #[test]
     fn copy_kinds_have_unique_ids_and_cover_all() {
+        fn visit(kind: CopyKind) {
+            match kind {
+                CopyKind::MsWord
+                | CopyKind::Latex
+                | CopyKind::MdInline
+                | CopyKind::MdDisplay
+                | CopyKind::Equation
+                | CopyKind::LatexTable
+                | CopyKind::MdTable
+                | CopyKind::Tsv
+                | CopyKind::Markdown
+                | CopyKind::LatexDoc => {}
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         for kind in CopyKind::ALL {
+            visit(kind);
             assert!(ids.insert(kind.id()), "duplicate {}", kind.id());
             assert!(!kind.label().is_empty());
             assert!(!kind.symbol().is_empty());

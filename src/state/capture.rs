@@ -10,6 +10,8 @@ use crate::ingest::IngestSource;
 use super::session::Capture;
 use super::AppState;
 
+const SHEET_DISMISS_SETTLE: Duration = Duration::from_millis(250);
+
 impl AppState {
     pub fn is_capturing(&self) -> bool {
         self.capture.is_grabbing()
@@ -19,8 +21,6 @@ impl AppState {
         self.capture.error()
     }
 
-    /// Footer hint for a recoverable miss. Clears itself so it cannot stick
-    /// after the user has moved on (paste with a real image, snip, etc.).
     pub(super) fn flash_capture_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
         self.capture.set(Capture::Failed(msg.into()));
         let gen = self.capture.gen();
@@ -56,9 +56,8 @@ impl AppState {
                 cx.background_spawn(async { crate::desktop::wait_until_iconified() })
                     .await;
             } else {
-                // Sheet dismiss is deferred; a short settle keeps it out of the freeze.
                 cx.background_spawn(async {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    std::thread::sleep(SHEET_DISMISS_SETTLE);
                 })
                 .await;
             }
@@ -115,7 +114,6 @@ impl AppState {
         .detach();
     }
 
-    /// Home "Paste" entry: clipboard image → OCR; image file path(s) → open + OCR.
     pub fn request_paste(&mut self, cx: &mut Context<Self>) {
         if self.is_capturing() {
             return;
@@ -239,7 +237,6 @@ impl AppState {
     }
 }
 
-/// Clipboard text as image paths: one per line, `file://` tolerated.
 fn clipboard_image_paths(text: &str) -> Vec<PathBuf> {
     text.lines()
         .map(str::trim)

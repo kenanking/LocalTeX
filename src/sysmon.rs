@@ -3,16 +3,14 @@
 //! Other targets compile to partial samples (compile-only paths).
 
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Clone, Default)]
 pub struct SysSnapshot {
-    /// System-wide CPU busy % since the previous sample (None on first tick).
     pub cpu_pct: Option<f32>,
-    /// Recent CPU % samples, oldest first (sparkline data, ~1.5 s cadence).
     pub cpu_hist: Vec<f32>,
     pub mem_used: Option<u64>,
     pub mem_total: Option<u64>,
-    /// This process' resident set.
     pub app_rss: Option<u64>,
     pub disk: Option<DiskSnapshot>,
 }
@@ -32,14 +30,13 @@ impl DiskSnapshot {
     }
 }
 
-/// Keeps the previous CPU counters so each tick is a delta, plus a short
-/// history for the settings sparkline.
 pub struct SysMon {
     prev_cpu: Option<(u64, u64)>,
     cpu_hist: std::collections::VecDeque<f32>,
 }
 
-/// Sparkline window: 40 samples at 1.5 s ≈ one minute.
+pub const SAMPLE_INTERVAL: Duration = Duration::from_millis(1500);
+pub const DISK_EVERY_TICKS: u32 = 20;
 pub const CPU_HIST_LEN: usize = 40;
 
 impl SysMon {
@@ -50,7 +47,6 @@ impl SysMon {
         }
     }
 
-    /// Cheap per-tick sample: a few tiny /proc reads, no directory walks.
     pub fn sample(&mut self) -> SysSnapshot {
         let cpu_pct = cpu_jiffies().and_then(|(total, idle)| {
             let prev = self.prev_cpu.replace((total, idle))?;

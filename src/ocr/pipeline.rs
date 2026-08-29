@@ -337,11 +337,16 @@ impl ConfAcc {
     }
 }
 
-/// Hybrid document confidence: 0.8 token softmax + 0.2 layout box score.
-/// Missing decode tokens fall back to layout only. No evidence → None.
+const TOKEN_CONF_WEIGHT: f32 = 0.8;
+const LAYOUT_CONF_WEIGHT: f32 = 0.2;
+const FORMULA_NUMBER_Y_BAND: f32 = 0.25;
+const FORMULA_NUMBER_X_SLOP: f32 = 10.0;
+
 pub(super) fn mix_confidence(token: Option<f32>, layout: Option<f32>) -> Option<f32> {
     match (token, layout) {
-        (Some(t), Some(l)) => Some((0.8 * t + 0.2 * l).clamp(0.0, 1.0)),
+        (Some(t), Some(l)) => {
+            Some((TOKEN_CONF_WEIGHT * t + LAYOUT_CONF_WEIGHT * l).clamp(0.0, 1.0))
+        }
         (Some(t), None) => Some(t.clamp(0.0, 1.0)),
         (None, Some(l)) => Some(l.clamp(0.0, 1.0)),
         (None, None) => None,
@@ -354,9 +359,6 @@ struct PendingRec {
     text: String,
 }
 
-/// Pair each formula_number with the nearest display_formula on the same
-/// line: number y-centre inside the formula y-band (±25%) and strictly
-/// left or right of the body. Returns number-block index → formula index.
 fn pair_formula_numbers(regions: &[Region]) -> HashMap<usize, usize> {
     let formulas: Vec<usize> = regions
         .iter()
@@ -373,13 +375,13 @@ fn pair_formula_numbers(regions: &[Region]) -> HashMap<usize, usize> {
         let mut best: Option<(usize, f32)> = None;
         for &j in &formulas {
             let f = &regions[j].coord;
-            let band = (f[3] - f[1]) * 0.25;
+            let band = (f[3] - f[1]) * FORMULA_NUMBER_Y_BAND;
             if yc < f[1] - band || yc > f[3] + band {
                 continue;
             }
-            let gap = if r.coord[0] >= f[2] - 10.0 {
+            let gap = if r.coord[0] >= f[2] - FORMULA_NUMBER_X_SLOP {
                 (r.coord[0] - f[2]).max(0.0)
-            } else if r.coord[2] <= f[0] + 10.0 {
+            } else if r.coord[2] <= f[0] + FORMULA_NUMBER_X_SLOP {
                 (f[0] - r.coord[2]).max(0.0)
             } else {
                 continue;
@@ -463,7 +465,7 @@ mod tests {
     fn mix_confidence_weights() {
         assert_eq!(mix_confidence(Some(1.0), None), Some(1.0));
         assert_eq!(mix_confidence(None, Some(0.4)), Some(0.4));
-        assert!((mix_confidence(Some(1.0), Some(0.0)).unwrap() - 0.8).abs() < 1e-6);
+        assert!((mix_confidence(Some(1.0), Some(0.0)).unwrap() - TOKEN_CONF_WEIGHT).abs() < 1e-6);
         assert_eq!(mix_confidence(Some(0.5), Some(0.5)), Some(0.5));
         assert_eq!(mix_confidence(None, None), None);
     }

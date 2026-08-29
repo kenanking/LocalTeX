@@ -18,20 +18,17 @@ use crate::cache::{ROW_HEIGHT_PX, THUMB_VIEWPORT_MULT};
 use crate::doc::ImageSlot;
 use crate::library::DATE_PRESETS;
 
-/// History sidebar width limits (px). MIN keeps the four date tabs uncrowded.
 pub(crate) const SIDEBAR_MIN: f32 = 208.0;
 pub(crate) const SIDEBAR_MAX: f32 = 420.0;
 pub(crate) const SIDEBAR_RAIL: f32 = 52.0;
-/// Default window is 800px (src/main.rs). Collapse below this so first paint stays expanded.
 pub(crate) const SIDEBAR_AUTO_COLLAPSE: f32 = 720.0;
-pub(crate) const SIDEBAR_AUTO_EXPAND: f32 = 744.0; // +24 hysteresis
+const SIDEBAR_HYSTERESIS: f32 = 24.0;
+pub(crate) const SIDEBAR_AUTO_EXPAND: f32 = SIDEBAR_AUTO_COLLAPSE + SIDEBAR_HYSTERESIS;
 
 const COLLAPSED_ROW_H: f32 = 48.0;
 const COLLAPSED_THUMB_W: f32 = 40.0;
 const COLLAPSED_THUMB_H: f32 = 28.0;
 
-/// Session fold: visual collapsed + last width for edge-crossing.
-/// Pin lives in prefs; auto-fold only runs when unpinned.
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarFold {
     pub collapsed: bool,
@@ -46,7 +43,6 @@ impl SidebarFold {
         }
     }
 
-    /// Returns true if the painted collapsed bit changed.
     pub fn on_resize(&mut self, now_w: f32, pinned: bool) -> bool {
         let next =
             if pinned || (self.last_w >= SIDEBAR_AUTO_COLLAPSE && now_w < SIDEBAR_AUTO_COLLAPSE) {
@@ -64,8 +60,7 @@ impl SidebarFold {
         true
     }
 
-    /// Flip visual. Returns the pin flag to persist (`true` = stay collapsed).
-    pub fn toggle(&mut self, win_w: f32) -> bool {
+    pub fn toggle_pin(&mut self, win_w: f32) -> bool {
         if self.collapsed {
             self.collapsed = false;
             self.last_w = win_w;
@@ -76,8 +71,6 @@ impl SidebarFold {
         }
     }
 
-    /// Width subtracted from the copy pane, and painted when history is shown.
-    /// Empty library still subtracts the expanded width (history is not painted).
     pub fn width(self, has_docs: bool, expanded: f32) -> f32 {
         if has_docs && self.collapsed {
             SIDEBAR_RAIL
@@ -520,7 +513,7 @@ mod tests {
     fn toggle_expand_while_narrow_does_not_snap_shut() {
         let mut f = SidebarFold::seed(700.0, false);
         assert!(f.collapsed);
-        assert!(!f.toggle(700.0));
+        assert!(!f.toggle_pin(700.0));
         assert!(!f.collapsed);
         assert!(!f.on_resize(700.0, false));
         assert!(!f.collapsed);

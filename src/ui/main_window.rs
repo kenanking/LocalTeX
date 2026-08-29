@@ -25,7 +25,7 @@ use crate::actions::{
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
 use crate::ocr::EngineStatus;
-use crate::preview::{document_preview_with_dpr, raster_dpr, DocDerived};
+use crate::preview::{document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived};
 use crate::state::AppState;
 
 #[derive(Clone)]
@@ -42,8 +42,6 @@ pub(crate) struct PreviewPane {
     pub(crate) thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
     pub(crate) hover: bool,
     pub(crate) hscroll_hover: Rc<RefCell<HashSet<String>>>,
-    /// Last measured preview-column width. Hover notify must not treat
-    /// a 0-width first layout as a different eqno mode.
     pub(crate) pane_w: f32,
     doc: Option<Uuid>,
     pub(crate) bar_pending: bool,
@@ -113,7 +111,6 @@ pub struct MainWindow {
     orig_zoomed: bool,
     zoom_doc: Option<Uuid>,
     pub(crate) preview: PreviewPane,
-    /// (pointer x at drag start, sidebar width at drag start).
     pub(crate) sidebar_drag: Option<(f32, f32)>,
     pub(crate) history: HistoryPane,
 }
@@ -292,7 +289,10 @@ impl MainWindow {
     }
 
     pub(crate) fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let pin = self.history.fold.toggle(window.bounds().size.width.into());
+        let pin = self
+            .history
+            .fold
+            .toggle_pin(window.bounds().size.width.into());
         self.state.update(cx, |s, cx| {
             s.update_prefs(cx, |p| p.sidebar_pinned_collapsed = pin);
         });
@@ -448,14 +448,13 @@ impl MainWindow {
         if !ready {
             return;
         }
-        if self
-            .derived
-            .as_ref()
-            .is_some_and(|d| d.matches(id, revision, dpr, &prefs))
-        {
-            return;
-        }
-        if self.derived_busy {
+        if !should_spawn_derived(
+            ready,
+            self.derived
+                .as_ref()
+                .is_some_and(|d| d.matches(id, revision, dpr, &prefs)),
+            self.derived_busy,
+        ) {
             return;
         }
         let Some(blocks) = self
@@ -488,7 +487,8 @@ impl MainWindow {
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 this.derived_busy = false;
-                this.derived = Some(built);
+                let selected = this.state.read(cx).selected();
+                this.derived = built.keep_if_selected(selected);
                 this.schedule_derived_from_app(cx);
                 cx.notify();
             }) {

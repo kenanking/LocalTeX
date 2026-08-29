@@ -2,8 +2,6 @@ use crate::table::{self, Slot, Table};
 
 use super::{segs_from_cell, PlacedCell, PreviewLayout};
 
-/// Pixel geometry for the preview pane: origin cells only, spans occupy
-/// one rectangle so headers like "Image to Text" line up with R@1/R@5/R@10.
 pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
     const PAD_X: f32 = 16.0;
     const PAD_Y: f32 = 8.0;

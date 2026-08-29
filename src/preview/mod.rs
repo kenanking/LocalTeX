@@ -13,13 +13,12 @@ use uuid::Uuid;
 
 mod table_layout;
 
-/// Inline math em size. Display blocks use `FONT_SIZE_DISPLAY`.
 const FONT_SIZE: f64 = 16.0;
 const FONT_SIZE_DISPLAY: f64 = 18.0;
 const FONT_SIZE_SCRIPT: f64 = 11.5;
 const FONT_PAD: f64 = 3.0;
 const FONT_PAD_SCRIPT: f64 = 0.0;
-/// Extra device pixels in the SVG file relative to the CSS display box.
+
 pub fn raster_dpr(scale: f32) -> f64 {
     (f64::from(scale) * 1.5).clamp(1.0, 2.0)
 }
@@ -41,15 +40,8 @@ pub struct ScriptGlyph {
 #[derive(Clone, Debug)]
 pub enum InlineSeg {
     Text(String),
-    /// Nucleus plus a lone `_{…}` / `^{…}` (or OCR orphan) kept as one wrap atom.
-    TextScript {
-        nucleus: String,
-        glyph: ScriptGlyph,
-    },
-    Math {
-        svg: SvgMath,
-        tex: String,
-    },
+    TextScript { nucleus: String, glyph: ScriptGlyph },
+    Math { svg: SvgMath, tex: String },
 }
 
 fn seg_is_visible(seg: &InlineSeg) -> bool {
@@ -61,9 +53,7 @@ fn seg_is_visible(seg: &InlineSeg) -> bool {
 
 #[derive(Clone, Debug)]
 pub struct Eqno {
-    /// `\tag` payload, e.g. `1`.
     pub raw: String,
-    /// Typeset `(n)`. None → GPUI paints `format_eqno(raw)` as text.
     pub math: Option<SvgMath>,
 }
 
@@ -121,7 +111,6 @@ pub struct PlacedCell {
     pub colspan: usize,
 }
 
-/// Preview + copy rows for one selected document (built off the UI thread).
 pub struct DocDerived {
     pub id: Uuid,
     pub revision: u64,
@@ -140,11 +129,16 @@ impl DocDerived {
             && self.inline_delim == prefs.inline_delim
             && self.block_delim == prefs.block_delim
     }
+
+    pub fn keep_if_selected(self, selected: Option<Uuid>) -> Option<Self> {
+        (selected == Some(self.id)).then_some(self)
+    }
 }
 
-/// Render a LaTeX snippet to SVG via RaTeX (parser → layout → SVG).
-///
-/// GPUI's usvg backend does not paint `rgba(...)` fills, so we emit `rgb(...)`.
+pub(crate) fn should_spawn_derived(ready: bool, cache_hit: bool, busy: bool) -> bool {
+    ready && !cache_hit && !busy
+}
+
 #[cfg(test)]
 pub fn latex_to_math(latex: &str, style: MathStyle) -> Result<SvgMath> {
     latex_to_math_with_dpr(latex, style, raster_dpr(1.0))
@@ -190,6 +184,7 @@ fn latex_to_math_sized(
     })
 }
 
+/// GPUI's usvg backend does not paint `rgba(...)` fills, so we emit `rgb(...)`.
 fn render_math(source: &str, style: MathStyle, dpr: f64, font: f64, pad: f64) -> Result<String> {
     let ast = parse(source).map_err(|e| anyhow!("ratex parse: {e}"))?;
     let opts = LayoutOptions {
@@ -373,7 +368,6 @@ fn segs_from_normalized(normalized: &str, math: MathStyle, dpr: f64) -> Vec<Inli
     segs
 }
 
-/// Split inline segs on `\n` so table list cells can stack as lines.
 pub(crate) fn segs_lines(segs: &[InlineSeg]) -> Vec<Vec<InlineSeg>> {
     let mut lines = vec![Vec::new()];
     for seg in segs {
@@ -407,8 +401,6 @@ pub(crate) fn segs_lines(segs: &[InlineSeg]) -> Vec<Vec<InlineSeg>> {
     lines
 }
 
-/// Collapse OCR newlines and split `$...$` into text + math for table cells
-/// and other mixed strings that are not already `BlockKind::Formula`.
 #[cfg(test)]
 pub fn inline_preview(text: &str) -> Vec<InlineSeg> {
     segs_from_text(text, MathStyle::Text, raster_dpr(1.0))
@@ -424,8 +416,6 @@ fn push_table_block(html: &str, out: &mut Vec<PreviewBlock>, dpr: f64) {
     }
 }
 
-/// Typeset display math with `\tag` stripped. The number is a GPUI sidecar;
-/// RaTeX only sees the body. Fallback keeps the original tagged source.
 fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>) {
     let canon = crate::math::canonicalize_tex(tex);
     let (body, tags) = crate::math::split_display_tag(&canon);
@@ -447,7 +437,6 @@ fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>
     }
 }
 
-/// Build a document-style preview: prose, inline/display math, tables.
 #[cfg(test)]
 pub fn document_preview(blocks: &[Block]) -> Vec<PreviewBlock> {
     document_preview_with_dpr(blocks, raster_dpr(1.0))
@@ -535,556 +524,4 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renders_simple_formula_svg() {
-        let math = latex_to_math("E=mc^2", MathStyle::Display).expect("ratex");
-        let svg = &math.svg;
-        assert!(
-            svg.contains("<svg"),
-            "expected svg, got: {}",
-            &svg[..svg.len().min(200)]
-        );
-        assert!(
-            !svg.contains("rgba("),
-            "usvg cannot paint rgba() fills: {}",
-            &svg[..svg.len().min(200)]
-        );
-        assert!(svg.contains("rgb("));
-        let math = latex_to_math("E=mc^2", MathStyle::Display).expect("size");
-        assert!(math.width > 0.0 && math.height > 0.0);
-        assert!(
-            math.height < 48.0,
-            "body-size math should not be huge, got h={}",
-            math.height
-        );
-    }
-
-    #[test]
-    fn renders_spaced_tokens_aligned() {
-        let compact = r"\begin{aligned} {\mathbf{z}}_{v}^{i}=f_{v}^{(0)}({\mathbf{I}}_{i}^{\mathsf{opt}}), \\ \end{aligned}";
-        let svg = latex_to_math(compact, MathStyle::Display)
-            .expect("compact aligned")
-            .svg;
-        assert!(svg.contains("<svg"));
-        assert!(!svg.contains("rgba("));
-        let spaced = r"\begin{aligned} {\mathbf { z } _ { v } ^ { i } } = f _ { v } ^ { ( 0 ) } ( \mathbf { I } _ { i } ^ { \mathsf { o p t } } ) , \\ \end{aligned}";
-        latex_to_math(spaced, MathStyle::Display).expect("spaced aligned");
-        assert_eq!(
-            compact_tex(r"\mathbf { z } _ { v } ^ { i }"),
-            r"\mathbf{z}_{v}^{i}"
-        );
-    }
-
-    #[test]
-    fn mixed_text_preview_has_paragraph() {
-        let blocks = vec![Block::new(
-            BlockKind::Text,
-            crate::doc::Rect {
-                x: 0,
-                y: 0,
-                w: 10,
-                h: 10,
-            },
-            "Because $c$ and $1-c$.",
-        )];
-        let preview = document_preview(&blocks);
-        assert!(
-            preview
-                .iter()
-                .any(|b| matches!(b, PreviewBlock::Paragraph(_))),
-            "expected a paragraph"
-        );
-    }
-
-    #[test]
-    fn title_and_body_are_separate_preview_blocks() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let blocks = vec![
-            Block::new(BlockKind::Text, r, "Introduction")
-                .with_role(crate::doc::BlockRole::DocTitle),
-            Block::new(BlockKind::Text, r, "The method works."),
-        ];
-        let preview = document_preview(&blocks);
-        assert!(
-            matches!(
-                preview.as_slice(),
-                [
-                    PreviewBlock::Heading {
-                        role: crate::doc::BlockRole::DocTitle,
-                        ..
-                    },
-                    PreviewBlock::Paragraph(_)
-                ]
-            ),
-            "title must not weld to body, got {preview:?}"
-        );
-    }
-
-    #[test]
-    fn short_formula_block_stays_inline_with_neighbors() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 16,
-        };
-        let blocks = vec![
-            Block::new(BlockKind::Text, r, "Let "),
-            Block::new(BlockKind::Formula, r, "E=mc^2"),
-            Block::new(BlockKind::Text, r, " denote energy."),
-        ];
-        let preview = document_preview(&blocks);
-        assert_eq!(
-            preview.len(),
-            1,
-            "expected a single paragraph, got {preview:?}"
-        );
-        match &preview[0] {
-            PreviewBlock::Paragraph(segs) => {
-                assert!(
-                    segs.iter().any(|s| matches!(s, InlineSeg::Math { .. })),
-                    "expected inline math"
-                );
-            }
-            other => panic!("expected paragraph, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn table_cell_newlines_still_render_inline_math() {
-        let segs = inline_preview("SARCLIP\n$\n\\dagger\n$");
-        assert!(
-            segs.iter().any(|s| matches!(s, InlineSeg::Math { .. })),
-            "expected $\\dagger$ to become math, got {segs:?}"
-        );
-        assert!(
-            segs.iter().any(|s| match s {
-                InlineSeg::Text(t) => t.contains("SARCLIP"),
-                _ => false,
-            }),
-            "expected SARCLIP text, got {segs:?}"
-        );
-    }
-
-    #[test]
-    fn subscript_formula_is_marked_and_smaller() {
-        let segs = inline_preview(r"H$_2$O");
-        let sub = segs.iter().find_map(|s| match s {
-            InlineSeg::TextScript { glyph, .. } if glyph.kind == ScriptKind::Sub => {
-                Some((glyph.svg.height, glyph.tex.as_str()))
-            }
-            _ => None,
-        });
-        let Some((sub_h, tex)) = sub else {
-            panic!("expected a TextScript subscript, got {segs:?}");
-        };
-        assert!(tex.contains('2'), "subscript tex {tex}");
-        let full = inline_preview("$x$");
-        let full_h = full
-            .iter()
-            .find_map(|s| match s {
-                InlineSeg::Math { svg, .. } => Some(svg.height),
-                _ => None,
-            })
-            .expect("inline x");
-        assert!(
-            sub_h < full_h,
-            "subscript {sub_h} should be shorter than inline {full_h}"
-        );
-    }
-
-    #[test]
-    fn orphan_digit_after_letter_is_subscript() {
-        let segs = inline_preview("H$2$O");
-        assert!(
-            segs.iter().any(|s| matches!(
-                s,
-                InlineSeg::TextScript {
-                    glyph: ScriptGlyph {
-                        kind: ScriptKind::Sub,
-                        ..
-                    },
-                    ..
-                }
-            )),
-            "expected orphan $2$ after H to be a TextScript subscript, got {segs:?}"
-        );
-    }
-
-    #[test]
-    fn empty_nucleus_script_from_ocr_is_subscript() {
-        let segs = inline_preview(r"AP${}_{50}$, and");
-        assert!(
-            segs.iter().any(|s| matches!(
-                s,
-                InlineSeg::TextScript {
-                    glyph: ScriptGlyph {
-                        kind: ScriptKind::Sub,
-                        ..
-                    },
-                    ..
-                }
-            )),
-            "expected {{}}_{{50}} after AP to be a TextScript subscript, got {segs:?}"
-        );
-    }
-
-    #[test]
-    fn document_preview_marks_empty_nucleus_subscripts() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let blocks = vec![Block::new(
-            BlockKind::Text,
-            r,
-            r"reaching 36.02 mAP, 69.60 AP${}_{50}$, and 33.80 AP${}_{75}$.",
-        )];
-        let preview = document_preview(&blocks);
-        let segs = match &preview[0] {
-            PreviewBlock::Paragraph(segs) => segs,
-            other => panic!("expected paragraph, got {other:?}"),
-        };
-        let subs: Vec<&str> = segs
-            .iter()
-            .filter_map(|s| match s {
-                InlineSeg::TextScript {
-                    glyph:
-                        ScriptGlyph {
-                            kind: ScriptKind::Sub,
-                            tex,
-                            ..
-                        },
-                    ..
-                } => Some(tex.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(subs, ["{}_{50}", "{}_{75}"]);
-        assert!(
-            segs.iter().any(|s| matches!(
-                s,
-                InlineSeg::TextScript { nucleus, .. } if nucleus.ends_with("AP")
-            )),
-            "script must attach to the AP text run, got {segs:?}"
-        );
-    }
-
-    #[test]
-    fn next_script_keeps_leading_space_on_its_nucleus() {
-        let segs = inline_preview(r"AP${}_{50}$ by 2.65%, and AP${}_{75}$");
-        let nuclei: Vec<&str> = segs
-            .iter()
-            .filter_map(|s| match s {
-                InlineSeg::TextScript { nucleus, .. } => Some(nucleus.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            nuclei.len(),
-            2,
-            "expected two TextScript atoms, got {segs:?}"
-        );
-        assert!(
-            nuclei[1].starts_with(' '),
-            "space after the first script stays on the next nucleus, got {nuclei:?}"
-        );
-    }
-
-    #[test]
-    fn script_glyph_for_orphans_after_letters() {
-        assert_eq!(
-            script_glyph_for(Some('H'), "2"),
-            Some((ScriptKind::Sub, "2".into()))
-        );
-        assert_eq!(
-            script_glyph_for(Some('H'), "_2"),
-            Some((ScriptKind::Sub, "2".into()))
-        );
-        assert_eq!(script_glyph_for(Some(' '), "x"), None);
-        assert_eq!(script_glyph_for(None, "2"), None);
-        assert_eq!(
-            script_glyph_for(Some('n'), "^2"),
-            Some((ScriptKind::Super, "2".into()))
-        );
-    }
-
-    #[test]
-    fn orphan_script_body_is_a_short_nucleus() {
-        assert!(is_orphan_script_body("2"));
-        assert!(is_orphan_script_body("ij"));
-        assert!(is_orphan_script_body(r"\mathrm{max}"));
-        assert!(!is_orphan_script_body("x+y"));
-        assert!(!is_orphan_script_body(r"\frac{1}{2}"));
-        assert!(!is_orphan_script_body("E=mc^2"));
-    }
-
-    #[test]
-    fn section_title_is_heading_not_paragraph() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let blocks = vec![
-            Block::new(BlockKind::Text, r, "Method").with_role(crate::doc::BlockRole::SectionTitle),
-            Block::new(BlockKind::Text, r, "Details."),
-        ];
-        let preview = document_preview(&blocks);
-        assert!(
-            matches!(
-                preview.as_slice(),
-                [
-                    PreviewBlock::Heading {
-                        role: crate::doc::BlockRole::SectionTitle,
-                        ..
-                    },
-                    PreviewBlock::Paragraph(_)
-                ]
-            ),
-            "section title must not weld to body, got {preview:?}"
-        );
-    }
-
-    #[test]
-    fn table_list_cell_keeps_item_breaks() {
-        let html = "<table><tr><td>- one\n- two</td></tr></table>";
-        let table = table::parse_html(html).unwrap();
-        let layout = table_layout::table_preview_layout(&table, raster_dpr(1.0));
-        assert_eq!(layout.cells.len(), 1);
-        let lines = segs_lines(&layout.cells[0].segs);
-        assert_eq!(lines.len(), 2, "got {lines:?}");
-    }
-
-    #[test]
-    fn raster_svg_is_larger_than_display_box() {
-        let math = latex_to_math("E=mc^2", MathStyle::Display).expect("ratex");
-        let file_w = super::attr_pt(&math.svg, "width").expect("svg width");
-        assert!(
-            file_w > math.width * raster_dpr(1.0) as f32 * 0.9,
-            "SVG file should be DPR-scaled, file={file_w} display={}",
-            math.width
-        );
-    }
-
-    #[test]
-    fn lone_formula_snip_is_display() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 16,
-        };
-        let preview = document_preview(&[Block::new(BlockKind::Formula, r, "E=mc^2")]);
-        assert!(
-            matches!(preview.as_slice(), [PreviewBlock::Display { .. }]),
-            "lone formula snip should be a centered display block, got {preview:?}"
-        );
-    }
-
-    #[test]
-    fn numbered_display_in_prose_stays_display() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 200,
-            h: 24,
-        };
-        let preview = document_preview(&[Block::new(
-            BlockKind::Text,
-            r,
-            r"Hence $$E=mc^2 \tag{1}$$ holds.",
-        )]);
-        let tagged = preview.iter().find_map(|b| match b {
-            PreviewBlock::Display { eqno, .. } => eqno.as_ref().map(|e| e.raw.as_str()),
-            _ => None,
-        });
-        assert_eq!(
-            tagged,
-            Some("1"),
-            "tagged display math should not collapse to inline, got {preview:?}"
-        );
-    }
-
-    #[test]
-    fn display_tag_is_sidecar_not_typeset() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 16,
-        };
-        let preview =
-            document_preview(&[Block::new(BlockKind::Formula, r, r"$$E=mc^2 \tag{11}$$")]);
-        match preview.as_slice() {
-            [PreviewBlock::Display {
-                eqno: Some(eqno), ..
-            }] => {
-                assert_eq!(eqno.raw, "11");
-                assert!(
-                    eqno.math.is_some(),
-                    "eqno should typeset as display math, not a muted UI label"
-                );
-            }
-            other => panic!("expected tagged display, got {other:?}"),
-        }
-        let (body, tags) = crate::math::split_display_tag(r"E=mc^2 \tag{11}");
-        assert_eq!(tags, vec!["11".to_string()]);
-        latex_to_math(&body, MathStyle::Display).expect("body without tag");
-        let (body, _) = crate::math::unwrap_formula(
-            r"{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right],\\tag{1}\\
-\\",
-        );
-        let (body, tags) = crate::math::split_display_tag(&body);
-        assert_eq!(tags, vec!["1".to_string()]);
-        latex_to_math(&body, MathStyle::Display).expect("repaired tag body");
-    }
-
-    #[test]
-    fn display_formula_block_stays_display_with_neighbors() {
-        let r = crate::doc::Rect {
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 16,
-        };
-        let blocks = vec![
-            Block::new(BlockKind::Text, r, "We have"),
-            Block {
-                kind: BlockKind::Formula,
-                bbox: r,
-                text: "E=mc^2".into(),
-                display: true,
-                role: crate::doc::BlockRole::Body,
-            },
-            Block::new(BlockKind::Text, r, "as usual."),
-        ];
-        let preview = document_preview(&blocks);
-        assert!(
-            preview
-                .iter()
-                .any(|b| matches!(b, PreviewBlock::Display { .. })),
-            "layout display_formula should stay display even when short, got {preview:?}"
-        );
-    }
-
-    #[test]
-    fn display_style_sum_is_taller_than_text_style() {
-        let tex = r"\sum_{i=1}^{n} i";
-        let display = latex_to_math(tex, MathStyle::Display).expect("display");
-        let inline = latex_to_math(tex, MathStyle::Text).expect("text");
-        assert!(
-            display.height > inline.height,
-            "display limits should sit above/below, h_d={} h_t={}",
-            display.height,
-            inline.height
-        );
-    }
-
-    #[test]
-    fn preview_layout_merges_header_spans() {
-        let html = r#"<table>
-<tr>
-<th rowspan="2">Method</th>
-<th rowspan="2">Image Backbone</th>
-<th colspan="3">Image to Text</th>
-</tr>
-<tr><th>R@1</th><th>R@5</th><th>R@10</th></tr>
-<tr><td>OpenCLIP</td><td>ViT-B/32</td><td>11.1</td><td>22.2</td><td>33.3</td></tr>
-</table>"#;
-        let t = table::parse_html(html).unwrap();
-        let lay = table_layout::table_preview_layout(&t, raster_dpr(1.0));
-        let method = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "Method")
-            .expect("Method");
-        let backbone = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "Image Backbone")
-            .expect("Backbone");
-        let group = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "Image to Text")
-            .expect("group");
-        let r1 = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "R@1")
-            .expect("R@1");
-        let r5 = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "R@5")
-            .expect("R@5");
-        let r10 = lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "R@10")
-            .expect("R@10");
-        assert!(
-            !lay.cells.iter().any(|c| c.col == 0 && c.row == 1),
-            "rowspan must not leave an empty cell under Method"
-        );
-        assert!(
-            (r1.x - group.x).abs() < 0.51,
-            "R@1 left {} vs group {}",
-            r1.x,
-            group.x
-        );
-        assert!(
-            (group.w - (r1.w + r5.w + r10.w)).abs() < 0.51,
-            "group width {} vs R@ sum {}",
-            group.w,
-            r1.w + r5.w + r10.w
-        );
-        assert!(
-            method.h > r1.h + 1.0,
-            "Method should span both header rows ({} vs {})",
-            method.h,
-            r1.h
-        );
-        assert!(
-            backbone.w > 88.0,
-            "content-sized columns, not a uniform 88px: {}",
-            backbone.w
-        );
-        assert!(
-            method.header
-                && r1.header
-                && !lay
-                    .cells
-                    .iter()
-                    .any(|c| cell_plain(c) == "OpenCLIP" && c.header)
-        );
-        assert!(lay
-            .cells
-            .iter()
-            .find(|c| cell_plain(c) == "11.1")
-            .is_some_and(|c| c.numeric));
-    }
-
-    fn cell_plain(c: &PlacedCell) -> String {
-        c.segs
-            .iter()
-            .map(|s| match s {
-                InlineSeg::Text(t) => t.as_str(),
-                InlineSeg::TextScript { nucleus, .. } => nucleus.as_str(),
-                InlineSeg::Math { .. } => "",
-            })
-            .collect()
-    }
-}
+mod tests;

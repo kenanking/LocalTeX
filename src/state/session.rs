@@ -56,7 +56,6 @@ impl CaptureSession {
         self.hide_depth = self.hide_depth.saturating_add(1);
     }
 
-    /// Decrement; true when the window should restore (depth reached 0).
     pub fn pop_hide(&mut self) -> bool {
         if self.hide_depth == 0 {
             return false;

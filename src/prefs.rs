@@ -148,6 +148,14 @@ mod tests {
     }
 
     #[test]
+    fn view_format_toggle_does_not_mutate_persisted_default() {
+        let prefs = Prefs::default();
+        let session = prefs.default_fmt.toggle();
+        assert_eq!(session, ExportFmt::Latex);
+        assert_eq!(prefs.default_fmt, ExportFmt::Markdown);
+    }
+
+    #[test]
     fn sidebar_pinned_collapsed_defaults_false_when_missing() {
         let p: Prefs = serde_json::from_str("{}").unwrap();
         assert!(!p.sidebar_pinned_collapsed);

@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
 
 use gpui::{
     div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, ScrollHandle, Timer, Window,
@@ -46,8 +45,6 @@ pub struct SettingsPane {
     sysmon: crate::sysmon::SysMon,
     sys_snap: crate::sysmon::SysSnapshot,
     sysmon_on: bool,
-    /// True while Settings is the active view. The System sampler loop
-    /// stops when this is false so Library does not keep resampling.
     visible: bool,
 }
 
@@ -78,7 +75,6 @@ impl SettingsPane {
         self.hide();
     }
 
-    /// Stop the System sampler without clearing shortcut capture.
     pub fn hide(&mut self) {
         self.visible = false;
     }
@@ -92,8 +88,6 @@ impl SettingsPane {
         Rc::clone(&self.thumb)
     }
 
-    /// Ticks the Settings → System sampler while that tab is on screen. Cheap
-    /// /proc reads every 1.5 s; the disk walk runs off-thread every 20 ticks.
     fn kick_sysmon(&mut self, cx: &mut Context<Self>) {
         if self.sysmon_on {
             return;
@@ -118,7 +112,7 @@ impl SettingsPane {
                 if !still {
                     break;
                 }
-                if ticks.is_multiple_of(20) {
+                if ticks.is_multiple_of(crate::sysmon::DISK_EVERY_TICKS) {
                     let disk = cx
                         .background_spawn(async move { crate::sysmon::disk_sample() })
                         .await;
@@ -128,7 +122,7 @@ impl SettingsPane {
                     });
                 }
                 ticks += 1;
-                Timer::after(Duration::from_millis(1500)).await;
+                Timer::after(crate::sysmon::SAMPLE_INTERVAL).await;
             }
             let _ = this.update(cx, |this, _| {
                 this.sysmon_on = false;
@@ -137,7 +131,6 @@ impl SettingsPane {
         .detach();
     }
 
-    /// Build the settings page. Uses self.tab / self.listen / self.sys_snap / self.scroll.
     pub fn view(
         &mut self,
         state: Entity<AppState>,
@@ -233,8 +226,6 @@ impl SettingsPane {
                             .items_center()
                             .p_4()
                             .child(
-                                // Content column caps out so meter bars stay scannable
-                                // instead of stretching across a wide window.
                                 div()
                                     .w_full()
                                     .max_w(px(600.))
@@ -274,7 +265,6 @@ impl SettingsPane {
     }
 }
 
-/// Segmented control pinned to a fixed width (row-right picker).
 fn picker(width: f32, items: impl IntoIterator<Item = AnyElement>) -> impl IntoElement {
     div().w(px(width)).flex_shrink_0().child(segmented(items))
 }

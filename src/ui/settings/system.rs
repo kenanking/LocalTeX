@@ -4,9 +4,6 @@ use super::super::theme;
 use super::super::widgets::{settings_group, Tooltip};
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
-/// One dense card. Form follows the metric: rate → sparkline (CPU),
-/// capacity → meter bar (drive), composition → stacked bar with a dot
-/// legend (memory split out into LocalTeX vs the rest; app data on disk).
 pub(super) fn system_page(snap: &SysSnapshot) -> impl IntoElement {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
@@ -81,7 +78,6 @@ const STAT_LABEL_W: f32 = 64.0;
 const STAT_VALUE_W: f32 = 128.0;
 const BAR_H: f32 = 6.0;
 
-/// label ── viz ── value on one 18px line; viz fills the middle column.
 fn stat_row_shell(label: &'static str, viz: AnyElement, value: String) -> AnyElement {
     div()
         .flex()
@@ -112,7 +108,6 @@ fn stat_row_shell(label: &'static str, viz: AnyElement, value: String) -> AnyEle
         .into_any_element()
 }
 
-/// Capacity meter, BAR_H tall like every other bar in the card.
 fn stat_line(label: &'static str, frac: Option<f32>, value: String) -> AnyElement {
     stat_row_shell(
         label,
@@ -134,8 +129,6 @@ fn stat_line(label: &'static str, frac: Option<f32>, value: String) -> AnyElemen
     )
 }
 
-/// Task-Manager mini graph: one histogram bar per 1.5 s sample, latest at
-/// the right edge, filling the whole viz column.
 fn cpu_line(snap: &SysSnapshot) -> AnyElement {
     let hist = &snap.cpu_hist;
     let mut graph = div()
@@ -146,7 +139,8 @@ fn cpu_line(snap: &SysSnapshot) -> AnyElement {
         .gap(px(1.))
         .tooltip(Tooltip::text(format!(
             "CPU history — last {} s",
-            crate::sysmon::CPU_HIST_LEN * 3 / 2
+            crate::sysmon::CPU_HIST_LEN as u64 * crate::sysmon::SAMPLE_INTERVAL.as_millis() as u64
+                / 1000
         )));
     // Each bar sits in a full-height slot pinned to the bottom: gpui 0.2
     // `items_end` does not bottom-align flex_1 children here, and without a
@@ -167,7 +161,6 @@ fn cpu_line(snap: &SysSnapshot) -> AnyElement {
     )
 }
 
-/// Full-height column slot with the bar glued to the bottom.
 fn spark_slot(h: f32, color: u32) -> AnyElement {
     div()
         .flex_1()
@@ -179,7 +172,6 @@ fn spark_slot(h: f32, color: u32) -> AnyElement {
         .into_any_element()
 }
 
-/// Utilization-adaptive color: calm blue, busy amber, saturated red.
 fn cpu_color(pct: f32) -> u32 {
     if pct >= 85.0 {
         theme::DANGER
@@ -198,9 +190,6 @@ fn hairline() -> AnyElement {
         .into_any_element()
 }
 
-/// Stacked composition bar (same BAR_H as the meters) + dot legend beneath.
-/// Segments share `denom`; if they sum to less, the remainder stays track
-/// (e.g. free RAM after the used split). Hover a segment for its size.
 fn composition_block(
     row_label: &'static str,
     value: String,
