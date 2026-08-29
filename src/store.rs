@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -82,7 +82,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&conn, &root)?;
+        migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             root,
@@ -354,26 +354,82 @@ fn local_midnight_ms<Tz: TimeZone>(d: NaiveDate, tz: &Tz) -> Option<i64> {
         .map(|t| t.timestamp_millis())
 }
 
-fn migrate(conn: &Connection, root: &Path) -> Result<()> {
-    if snips_schema_ok(conn)? {
+enum SnipsShape {
+    /// All columns the current binary reads. Extra columns from a newer writer are ok.
+    Current,
+    /// The pre-`ocr_s`/`confidence` table, including a crash after only one ADD COLUMN.
+    PreMetrics,
+    Unknown,
+}
+
+fn migrate(conn: &Connection) -> Result<()> {
+    if !snips_table_exists(conn)? {
+        conn.execute_batch(SNIPS_TABLE)?;
+        ensure_aux(conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         return Ok(());
     }
-    if snips_table_exists(conn)? {
-        eprintln!("{APP_SLUG}: snips.db schema mismatch; recreating");
-        conn.execute_batch(
-            "
-            DROP TRIGGER IF EXISTS snips_ai;
-            DROP TRIGGER IF EXISTS snips_ad;
-            DROP TRIGGER IF EXISTS snips_au;
-            DROP TABLE IF EXISTS snips_fts;
-            DROP TABLE IF EXISTS snips;
-            ",
-        )?;
-        wipe_snip_pngs(root);
+
+    let mut version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > SCHEMA_VERSION {
+        return Err(anyhow!(
+            "snips.db schema version {version} is newer than this app ({SCHEMA_VERSION})"
+        ));
     }
-    conn.execute_batch(SNIPS_SCHEMA)?;
+
+    let names = snips_column_names(conn)?;
+    match classify_snips(&names) {
+        SnipsShape::Current => {}
+        SnipsShape::PreMetrics => upgrade_pre_metrics(conn, &names)?,
+        SnipsShape::Unknown => {
+            return Err(anyhow!(
+                "unrecognized snips schema (columns: {})",
+                names.join(", ")
+            ));
+        }
+    }
+    ensure_aux(conn)?;
+
+    while version < SCHEMA_VERSION {
+        version = migrate_from(conn, version)?;
+        conn.pragma_update(None, "user_version", version)?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn migrate_from(_conn: &Connection, from: i32) -> Result<i32> {
+    match from {
+        0 => Ok(1),
+        other => Err(anyhow!("no migration from schema version {other}")),
+    }
+}
+
+fn classify_snips(names: &[String]) -> SnipsShape {
+    if has_all(names, &SNIPS_COLUMNS) {
+        return SnipsShape::Current;
+    }
+    if has_all(names, &PRE_METRICS_COLUMNS)
+        && names
+            .iter()
+            .all(|n| SNIPS_COLUMNS.iter().any(|c| *c == n.as_str()))
+    {
+        return SnipsShape::PreMetrics;
+    }
+    SnipsShape::Unknown
+}
+
+fn has_all(names: &[String], required: &[&str]) -> bool {
+    required.iter().all(|col| names.iter().any(|n| n == col))
+}
+
+fn upgrade_pre_metrics(conn: &Connection, names: &[String]) -> Result<()> {
+    if !names.iter().any(|n| n == "ocr_s") {
+        conn.execute("ALTER TABLE snips ADD COLUMN ocr_s REAL", [])?;
+    }
+    if !names.iter().any(|n| n == "confidence") {
+        conn.execute("ALTER TABLE snips ADD COLUMN confidence REAL", [])?;
+    }
     Ok(())
 }
 
@@ -389,7 +445,17 @@ const SNIPS_COLUMNS: [&str; 9] = [
     "confidence",
 ];
 
-const SNIPS_SCHEMA: &str = "
+const PRE_METRICS_COLUMNS: [&str; 7] = [
+    "id",
+    "created_at",
+    "first_line",
+    "blocks_json",
+    "search_text",
+    "thumb_jpeg",
+    "image_relpath",
+];
+
+const SNIPS_TABLE: &str = "
         CREATE TABLE snips (
           id TEXT PRIMARY KEY NOT NULL,
           created_at INTEGER NOT NULL,
@@ -401,60 +467,61 @@ const SNIPS_SCHEMA: &str = "
           ocr_s REAL,
           confidence REAL
         );
-        CREATE INDEX snips_created_at ON snips (created_at DESC);
+        ";
+
+fn snips_column_names(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(snips)")?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(names)
+}
+
+fn snips_table_exists(conn: &Connection) -> Result<bool> {
+    master_table_exists(conn, "snips")
+}
+
+fn master_table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![name],
+        |row| row.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+fn ensure_aux(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS snips_created_at ON snips (created_at DESC)",
+        [],
+    )?;
+    if master_table_exists(conn, "snips_fts")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "
         CREATE VIRTUAL TABLE snips_fts USING fts5(
           search_text,
           content='snips',
           content_rowid='rowid',
           tokenize='trigram'
         );
-        CREATE TRIGGER snips_ai AFTER INSERT ON snips BEGIN
+        CREATE TRIGGER IF NOT EXISTS snips_ai AFTER INSERT ON snips BEGIN
           INSERT INTO snips_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
         END;
-        CREATE TRIGGER snips_ad AFTER DELETE ON snips BEGIN
+        CREATE TRIGGER IF NOT EXISTS snips_ad AFTER DELETE ON snips BEGIN
           INSERT INTO snips_fts(snips_fts, rowid, search_text)
             VALUES('delete', old.rowid, old.search_text);
         END;
-        CREATE TRIGGER snips_au AFTER UPDATE ON snips BEGIN
+        CREATE TRIGGER IF NOT EXISTS snips_au AFTER UPDATE ON snips BEGIN
           INSERT INTO snips_fts(snips_fts, rowid, search_text)
             VALUES('delete', old.rowid, old.search_text);
           INSERT INTO snips_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
         END;
-        ";
-
-fn snips_schema_ok(conn: &Connection) -> Result<bool> {
-    let mut stmt = conn.prepare("PRAGMA table_info(snips)")?;
-    let names: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<rusqlite::Result<_>>()?;
-    if names.len() != SNIPS_COLUMNS.len() {
-        return Ok(false);
-    }
-    Ok(SNIPS_COLUMNS
-        .iter()
-        .all(|col| names.iter().any(|n| n == col)))
-}
-
-fn snips_table_exists(conn: &Connection) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'snips'",
-        [],
-        |row| row.get(0),
+        INSERT INTO snips_fts(snips_fts) VALUES('rebuild');
+        ",
     )?;
-    Ok(n > 0)
-}
-
-fn wipe_snip_pngs(root: &Path) {
-    let dir = root.join("snips");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "png") {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -462,6 +529,7 @@ mod tests {
     use super::*;
     use crate::doc::{Block, BlockKind, DocStatus, ImageSlot, OcrMeta, Rect};
     use image::{Rgba, RgbaImage};
+    use std::path::Path;
     use std::sync::Arc;
 
     fn sample_doc(text: &str, created: SystemTime) -> Document {
@@ -665,49 +733,138 @@ mod tests {
         assert_eq!(from.ocr, item.ocr);
     }
 
+    const PRE_METRICS_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+    fn write_pre_metrics_db(root: &Path, user_version: i32) {
+        std::fs::create_dir_all(root.join("snips")).unwrap();
+        let conn = Connection::open(root.join("snips.db")).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE snips (
+              id TEXT PRIMARY KEY NOT NULL,
+              created_at INTEGER NOT NULL,
+              first_line TEXT NOT NULL,
+              blocks_json TEXT NOT NULL,
+              search_text TEXT NOT NULL,
+              thumb_jpeg BLOB NOT NULL,
+              image_relpath TEXT NOT NULL
+            );
+            ",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath)
+             VALUES (?1, 0, 'old', '[]', 'old', x'00', 'snips/none.png')",
+            params![PRE_METRICS_ID],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", user_version)
+            .unwrap();
+        std::fs::write(root.join("snips/none.png"), b"x").unwrap();
+    }
+
+    fn snips_user_version(root: &Path) -> i32 {
+        let conn = Connection::open(root.join("snips.db")).unwrap();
+        conn.pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    }
+
     #[test]
-    fn incompatible_schema_is_recreated() {
+    fn pre_metrics_schema_is_upgraded_in_place() {
         let root = std::env::temp_dir().join(format!("localtex-store-old-{}", Uuid::new_v4()));
+        write_pre_metrics_db(&root, 1);
+        let png = root.join("snips/none.png");
+        let store = Store::open(root.clone()).unwrap();
+        let list = store.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id.to_string(), PRE_METRICS_ID);
+        assert!(list[0].ocr.is_none());
+        assert!(png.exists());
+        assert_eq!(snips_user_version(&root), SCHEMA_VERSION);
+        store.load_blocks(list[0].id).unwrap();
+        assert_eq!(
+            store.query_ids("old", DateRange::default()).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn newer_schema_version_refuses_open() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("keep-me", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        drop(store);
+        {
+            let conn = Connection::open(root.join("snips.db")).unwrap();
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+                .unwrap();
+        }
+        let png = root.join(format!("snips/{id}.png"));
+        assert!(png.exists());
+        let err = match Store::open(root.clone()) {
+            Ok(_) => panic!("expected open to fail"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("newer"));
+        assert!(png.exists());
+        let conn = Connection::open(root.join("snips.db")).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM snips", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn extra_column_on_current_version_still_opens() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("keep-me", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        drop(store);
+        {
+            let conn = Connection::open(root.join("snips.db")).unwrap();
+            conn.execute("ALTER TABLE snips ADD COLUMN extra INTEGER", [])
+                .unwrap();
+        }
+        let store = Store::open(root).unwrap();
+        assert_eq!(store.list().unwrap()[0].id, id);
+    }
+
+    #[test]
+    fn partial_pre_metrics_upgrade_converges() {
+        let root = std::env::temp_dir().join(format!("localtex-store-partial-{}", Uuid::new_v4()));
+        write_pre_metrics_db(&root, 0);
+        {
+            let conn = Connection::open(root.join("snips.db")).unwrap();
+            conn.execute("ALTER TABLE snips ADD COLUMN ocr_s REAL", [])
+                .unwrap();
+            conn.execute("ALTER TABLE snips ADD COLUMN confidence REAL", [])
+                .unwrap();
+        }
+        let store = Store::open(root.clone()).unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert!(root.join("snips/none.png").exists());
+        assert_eq!(snips_user_version(&root), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn unknown_snips_shape_refuses_open() {
+        let root = std::env::temp_dir().join(format!("localtex-store-unknown-{}", Uuid::new_v4()));
         std::fs::create_dir_all(root.join("snips")).unwrap();
         {
             let conn = Connection::open(root.join("snips.db")).unwrap();
-            conn.execute_batch(
-                "
-                CREATE TABLE snips (
-                  id TEXT PRIMARY KEY NOT NULL,
-                  created_at INTEGER NOT NULL,
-                  first_line TEXT NOT NULL,
-                  blocks_json TEXT NOT NULL,
-                  search_text TEXT NOT NULL,
-                  thumb_jpeg BLOB NOT NULL,
-                  image_relpath TEXT NOT NULL
-                );
-                ",
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath)
-                 VALUES (?1, 0, 'old', '[]', 'old', x'00', 'snips/none.png')",
-                params!["00000000-0000-0000-0000-000000000001"],
-            )
-            .unwrap();
-            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute_batch("CREATE TABLE snips (id TEXT PRIMARY KEY NOT NULL);")
+                .unwrap();
+            conn.execute("INSERT INTO snips (id) VALUES ('x')", [])
+                .unwrap();
+            std::fs::write(root.join("snips/keep.png"), b"x").unwrap();
         }
-        let orphan = root.join("snips/none.png");
-        std::fs::write(&orphan, b"x").unwrap();
-        let store = Store::open(root).unwrap();
-        assert!(store.list().unwrap().is_empty());
-        assert!(!orphan.exists());
-        let mut doc = sample_doc("fresh", SystemTime::now());
-        doc.ocr = Some(OcrMeta {
-            elapsed_s: 0.85,
-            confidence: 0.92,
-        });
-        store.insert_ready(&doc).unwrap();
-        let item = &store.list().unwrap()[0];
-        assert_eq!(item.id, doc.id);
-        let meta = item.ocr.expect("ocr meta");
-        assert!((meta.elapsed_s - 0.85).abs() < 1e-5);
-        assert!((meta.confidence - 0.92).abs() < 1e-5);
+        let err = match Store::open(root.clone()) {
+            Ok(_) => panic!("expected open to fail"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("unrecognized"));
+        assert!(root.join("snips/keep.png").exists());
     }
 }
