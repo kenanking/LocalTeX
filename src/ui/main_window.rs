@@ -227,6 +227,9 @@ impl MainWindow {
             return;
         }
         self.unzoom();
+        if matches!(self.view, View::Settings) {
+            self.settings.update(cx, |pane, _| pane.hide());
+        }
         self.view = View::Draw;
         cx.notify();
     }

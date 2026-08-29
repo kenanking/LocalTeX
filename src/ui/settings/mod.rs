@@ -75,6 +75,11 @@ impl SettingsPane {
 
     pub fn dismiss_listen(&mut self) {
         self.listen = None;
+        self.hide();
+    }
+
+    /// Stop the System sampler without clearing shortcut capture.
+    pub fn hide(&mut self) {
         self.visible = false;
     }
 
