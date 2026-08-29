@@ -166,6 +166,44 @@ pub enum CopyKind {
 }
 
 impl CopyKind {
+    pub const ALL: [Self; 10] = [
+        Self::MsWord,
+        Self::Latex,
+        Self::MdInline,
+        Self::MdDisplay,
+        Self::Equation,
+        Self::LatexTable,
+        Self::MdTable,
+        Self::Tsv,
+        Self::Markdown,
+        Self::LatexDoc,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::MsWord => "ms_word",
+            Self::Latex => "latex",
+            Self::MdInline => "md_inline",
+            Self::MdDisplay => "md_display",
+            Self::Equation => "equation",
+            Self::LatexTable => "latex_table",
+            Self::MdTable => "md_table",
+            Self::Tsv => "tsv",
+            Self::Markdown => "markdown",
+            Self::LatexDoc => "latex_doc",
+        }
+    }
+
+    pub fn applies_to(self, kind: SnipKind) -> bool {
+        match self {
+            Self::MsWord | Self::Latex | Self::MdInline | Self::MdDisplay | Self::Equation => {
+                kind == SnipKind::Formula
+            }
+            Self::LatexTable | Self::MdTable | Self::Tsv => kind == SnipKind::Table,
+            Self::Markdown | Self::LatexDoc => kind == SnipKind::Mixed,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             CopyKind::MsWord => "MathML",
@@ -198,8 +236,6 @@ impl CopyKind {
 pub struct CopyRow {
     pub kind: CopyKind,
     pub text: String,
-    pub exporter_id: &'static str,
-    pub label: &'static str,
 }
 
 #[derive(Clone)]
@@ -513,7 +549,7 @@ mod tests {
         let rows = copy_rows(&blocks, &crate::prefs::Prefs::default());
         assert_eq!(rows.len(), 5);
         assert_eq!(rows[0].kind, CopyKind::MsWord);
-        assert_eq!(rows[0].label, "MathML");
+        assert_eq!(rows[0].kind.label(), "MathML");
         assert!(
             rows[0]
                 .text
@@ -522,9 +558,9 @@ mod tests {
             rows[0].text
         );
         assert_eq!(rows[1].text, r"x^{2}");
-        assert_eq!(rows[2].label, "Inline");
+        assert_eq!(rows[2].kind.label(), "Inline");
         assert_eq!(rows[2].text, r"$x^{2}$");
-        assert_eq!(rows[3].label, "Display");
+        assert_eq!(rows[3].kind.label(), "Display");
         assert_eq!(rows[3].text, r"$$ x^{2} $$");
         assert!(rows[4].text.contains(r"\begin{equation}"));
         assert_eq!(rows[0].kind.symbol(), "ml");

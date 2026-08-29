@@ -358,8 +358,8 @@ impl MainWindow {
                 let is_copied = copied.is_some_and(|(_, k)| k == kind);
                 let entity = cx.entity();
                 line = line.child(copy_chip(
-                    SharedString::from(format!("copy-{}", row.exporter_id)),
-                    row.label,
+                    SharedString::from(format!("copy-{}", kind.id())),
+                    kind.label(),
                     kind.symbol(),
                     hint,
                     is_copied,

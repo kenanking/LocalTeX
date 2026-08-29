@@ -1,4 +1,4 @@
-//! Copy / document export. New formats implement [`Exporter`].
+//! Copy / document export keyed by CopyKind.
 
 use crate::doc::{
     unwrap_formula, Block, BlockKind, BlockRole, CopyKind, CopyRow, ExportFmt, MathRun, Rect,
@@ -8,222 +8,27 @@ use crate::math;
 use crate::prefs::Prefs;
 use crate::table;
 
-pub trait Exporter: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn label(&self) -> &'static str;
-    fn applies_to(&self, kind: SnipKind) -> bool;
-    fn copy_kind(&self) -> CopyKind;
-    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String;
-}
-
-struct MsWord;
-struct LatexPlain;
-struct MdInline;
-struct MdDisplay;
-struct EquationEnv;
-struct LatexTable;
-struct MdTable;
-struct TsvTable;
-struct MarkdownDoc;
-struct LatexDoc;
-
-impl Exporter for MsWord {
-    fn id(&self) -> &'static str {
-        "ms_word"
+impl CopyKind {
+    pub fn render(self, blocks: &[Block], prefs: &Prefs) -> String {
+        match self {
+            CopyKind::MsWord => crate::office::formula_mathml(&formula_body(blocks)),
+            CopyKind::Latex => formula_body(blocks),
+            CopyKind::MdInline => prefs.wrap_inline(&formula_body(blocks)),
+            CopyKind::MdDisplay => {
+                let body = formula_body(blocks);
+                format!("$$ {body} $$")
+            }
+            CopyKind::Equation => {
+                let body = formula_body(blocks);
+                format!("\\begin{{equation}}\n{body}\n\\end{{equation}}")
+            }
+            CopyKind::LatexTable => render_latex_table_snip(blocks),
+            CopyKind::MdTable => export_blocks(blocks, ExportFmt::Markdown, prefs),
+            CopyKind::Tsv => table_tsv(blocks).unwrap_or_default(),
+            CopyKind::Markdown => export_blocks(blocks, ExportFmt::Markdown, prefs),
+            CopyKind::LatexDoc => export_blocks(blocks, ExportFmt::Latex, prefs),
+        }
     }
-    fn label(&self) -> &'static str {
-        CopyKind::MsWord.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Formula
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::MsWord
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        crate::office::formula_mathml(&formula_body(blocks))
-    }
-}
-
-impl Exporter for LatexPlain {
-    fn id(&self) -> &'static str {
-        "latex"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::Latex.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Formula
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::Latex
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        formula_body(blocks)
-    }
-}
-
-impl Exporter for MdInline {
-    fn id(&self) -> &'static str {
-        "md_inline"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::MdInline.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Formula
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::MdInline
-    }
-    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String {
-        prefs.wrap_inline(&formula_body(blocks))
-    }
-}
-
-impl Exporter for MdDisplay {
-    fn id(&self) -> &'static str {
-        "md_display"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::MdDisplay.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Formula
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::MdDisplay
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        let body = formula_body(blocks);
-        format!("$$ {body} $$")
-    }
-}
-
-impl Exporter for EquationEnv {
-    fn id(&self) -> &'static str {
-        "equation"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::Equation.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Formula
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::Equation
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        let body = formula_body(blocks);
-        format!("\\begin{{equation}}\n{body}\n\\end{{equation}}")
-    }
-}
-
-impl Exporter for LatexTable {
-    fn id(&self) -> &'static str {
-        "latex_table"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::LatexTable.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Table
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::LatexTable
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        render_latex_table_snip(blocks)
-    }
-}
-
-impl Exporter for MdTable {
-    fn id(&self) -> &'static str {
-        "md_table"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::MdTable.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Table
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::MdTable
-    }
-    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String {
-        export_blocks(blocks, ExportFmt::Markdown, prefs)
-    }
-}
-
-impl Exporter for TsvTable {
-    fn id(&self) -> &'static str {
-        "tsv"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::Tsv.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Table
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::Tsv
-    }
-    fn render(&self, blocks: &[Block], _: &Prefs) -> String {
-        table_tsv(blocks).unwrap_or_default()
-    }
-}
-
-impl Exporter for MarkdownDoc {
-    fn id(&self) -> &'static str {
-        "markdown"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::Markdown.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Mixed
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::Markdown
-    }
-    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String {
-        export_blocks(blocks, ExportFmt::Markdown, prefs)
-    }
-}
-
-impl Exporter for LatexDoc {
-    fn id(&self) -> &'static str {
-        "latex_doc"
-    }
-    fn label(&self) -> &'static str {
-        CopyKind::LatexDoc.label()
-    }
-    fn applies_to(&self, kind: SnipKind) -> bool {
-        kind == SnipKind::Mixed
-    }
-    fn copy_kind(&self) -> CopyKind {
-        CopyKind::LatexDoc
-    }
-    fn render(&self, blocks: &[Block], prefs: &Prefs) -> String {
-        export_blocks(blocks, ExportFmt::Latex, prefs)
-    }
-}
-
-const EXPORTERS: [&dyn Exporter; 10] = [
-    &MsWord,
-    &LatexPlain,
-    &MdInline,
-    &MdDisplay,
-    &EquationEnv,
-    &LatexTable,
-    &MdTable,
-    &TsvTable,
-    &MarkdownDoc,
-    &LatexDoc,
-];
-
-pub fn exporters() -> &'static [&'static dyn Exporter] {
-    &EXPORTERS
 }
 
 fn table_tsv(blocks: &[Block]) -> Option<String> {
@@ -327,21 +132,15 @@ pub fn copy_rows(blocks: &[Block], prefs: &Prefs) -> Vec<CopyRow> {
         SnipKind::Table if table_html(blocks).is_none() => return Vec::new(),
         _ => {}
     }
-    exporters()
-        .iter()
-        .copied()
-        .filter(|exp| exp.applies_to(kind))
-        .filter_map(|exp| {
-            let text = exp.render(blocks, prefs);
-            if exp.copy_kind() == CopyKind::Tsv && text.is_empty() {
+    CopyKind::ALL
+        .into_iter()
+        .filter(|k| k.applies_to(kind))
+        .filter_map(|k| {
+            let text = k.render(blocks, prefs);
+            if k == CopyKind::Tsv && text.is_empty() {
                 None
             } else {
-                Some(CopyRow {
-                    kind: exp.copy_kind(),
-                    text,
-                    exporter_id: exp.id(),
-                    label: exp.label(),
-                })
+                Some(CopyRow { kind: k, text })
             }
         })
         .collect()
@@ -486,12 +285,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exporters_have_unique_ids() {
+    fn copy_kinds_have_unique_ids_and_cover_all() {
         let mut ids = std::collections::HashSet::new();
-        for exp in exporters() {
-            assert!(ids.insert(exp.id()), "duplicate {}", exp.id());
-            assert!(!exp.label().is_empty());
+        for kind in CopyKind::ALL {
+            assert!(ids.insert(kind.id()), "duplicate {}", kind.id());
+            assert!(!kind.label().is_empty());
+            assert!(!kind.symbol().is_empty());
         }
+        assert_eq!(CopyKind::ALL.len(), 10);
     }
 
     #[test]
