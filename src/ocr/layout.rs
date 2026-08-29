@@ -38,7 +38,6 @@ const LABEL_MAP: [&str; 25] = [
     "vision_footnote",
 ];
 
-/// Labels treated as images when use_chart_recognition=True (eval default).
 pub(super) const IMAGE_LABELS: [&str; 4] = ["image", "header_image", "footer_image", "seal"];
 
 #[derive(Clone, Debug)]
@@ -199,14 +198,12 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
     }
 
     let mut boxes = filter_overlap_boxes(boxes);
-    // Stable ascending sort by reading-order value.
     boxes.sort_by(|a, b| {
         a.order
             .partial_cmp(&b.order)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Suffix labels with 1-based order index, then crop.
     let mut regions: Vec<Region> = Vec::new();
     for (idx, b) in boxes.iter().enumerate() {
         let label = format!("{}_{:02}", b.label, idx + 1);

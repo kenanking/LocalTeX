@@ -355,9 +355,7 @@ fn local_midnight_ms<Tz: TimeZone>(d: NaiveDate, tz: &Tz) -> Option<i64> {
 }
 
 enum SnipsShape {
-    /// All columns the current binary reads. Extra columns from a newer writer are ok.
     Current,
-    /// The pre-`ocr_s`/`confidence` table, including a crash after only one ADD COLUMN.
     PreMetrics,
     Unknown,
 }
