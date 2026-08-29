@@ -160,9 +160,14 @@ pub(super) fn normalize_math_delimiters(text: &str) -> String {
 }
 
 /// MarkdownConverter._handle_formula.
+///
+/// OpenDoc peels `\] (n)\n\n` off the crop and drops the number. When the
+/// layout model missed a `formula_number` box, that number is the eqno —
+/// keep it as `\tag{n}` before wrapping in `$$`.
 pub(super) fn handle_formula(text: &str) -> String {
     let text = text.replace("\\upmu", "\\mu");
-    let mut result = sub(r"\\] \(\d+\)\n\n", "\\]", &text);
+    let (text, mut eqno) = take_bracket_eqno(&text);
+    let mut result = text;
     result = result.replace("<|sn|>", "");
     result = result.replace("<|unk|>", "");
     result = result.replace('\u{ffff}', "");
@@ -184,12 +189,67 @@ pub(super) fn handle_formula(text: &str) -> String {
     while text.ends_with('\\') || text.ends_with(' ') {
         text.pop();
     }
+    if eqno.is_none() {
+        let (body, tag) = take_trailing_paren_eqno(&text);
+        text = body;
+        eqno = tag;
+    }
     let mut text = text.replace("\\upmu", "\\mu");
     text = apply_replace_dict(text);
     let mut processed = format!("$${}$$", text);
     processed = processed.replace('\n', "\\\\\n");
     processed = fix_latex_brackets(&processed);
-    format!("{}\n\n", processed)
+    let mut processed = format!("{}\n\n", processed);
+    if let Some(tag) = eqno {
+        processed = fold_tag(&processed, &tag);
+    }
+    processed
+}
+
+/// `\] (11)\n\n` → drop the paren run, keep `"11"`.
+fn take_bracket_eqno(text: &str) -> (String, Option<String>) {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\\][ \t]*\(([^)]{1,12})\)[ \t]*(?:\n\n)?").unwrap());
+    let Some(caps) = re.captures(text) else {
+        return (text.to_string(), None);
+    };
+    let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+    if !inner.chars().any(|c| c.is_ascii_digit()) {
+        return (text.to_string(), None);
+    }
+    (
+        re.replace(text, r"\]").into_owned(),
+        Some(inner.trim().to_string()),
+    )
+}
+
+/// After delimiter strip: `a+b (1)` → `a+b` + `"1"`. Requires a space so
+/// `f(1)` stays math.
+fn take_trailing_paren_eqno(body: &str) -> (String, Option<String>) {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"[ \t]+\(([^)]{1,12})\)[ \t]*$").unwrap());
+    let Some(caps) = re.captures(body) else {
+        return (body.to_string(), None);
+    };
+    let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+    if inner.is_empty() || !inner.chars().any(|c| c.is_ascii_digit()) {
+        return (body.to_string(), None);
+    }
+    (
+        re.replace(body, "").into_owned(),
+        Some(inner.trim().to_string()),
+    )
+}
+
+fn fold_tag(wrapped: &str, tag: &str) -> String {
+    let core = wrapped.trim_end();
+    let trailing = &wrapped[core.len()..];
+    match core.strip_suffix("$$") {
+        Some(body) if !body.contains(&format!(r"\tag{{{tag}}}")) => {
+            format!("{body} \\tag{{{tag}}}$${trailing}")
+        }
+        _ => wrapped.to_string(),
+    }
 }
 
 /// to_markdown.py extract_table_from_html.

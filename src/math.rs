@@ -1,7 +1,7 @@
 //! Mixed `$` / `$$` splitting and TeX canonicalize (`\tag` repair).
 //! One owner: OCR, preview, and export all call these functions.
-//! Equation numbers are folded in the OCR pipeline (`formula_number` → `\tag`),
-//! not guessed from trailing `(n)` in the text.
+//! Equation numbers are folded in the OCR pipeline (`formula_number` or a
+//! trailing `(n)` on the formula crop → `\tag`).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MathRun {

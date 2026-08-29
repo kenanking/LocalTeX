@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_formula_strips_bracket_eqno_like_opendoc() {
+    fn handle_formula_lifts_trailing_paren_eqno_to_tag() {
         let out = text::handle_formula(
             r"\[{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right]\] (1)
 
@@ -210,8 +210,26 @@ mod tests {
             "expected $$ wrap, got {out:?}"
         );
         assert!(
+            out.contains(r"\tag{1}"),
+            "trailing (1) after \\] is the eqno, got {out:?}"
+        );
+        assert!(
             !out.contains("(1)"),
-            "OpenDoc strips \\] (n)\\n\\n before wrap; tags come from layout pairing, got {out:?}"
+            "paren form must not remain beside the math, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn handle_formula_lifts_spaced_trailing_paren() {
+        let out = text::handle_formula("a+b (2.1)");
+        assert!(
+            out.contains(r"\tag{2.1}"),
+            "expected trailing (2.1) as tag, got {out:?}"
+        );
+        let leave = text::handle_formula("f(1)");
+        assert!(
+            !leave.contains(r"\tag{"),
+            "f(1) is math, not an eqno, got {leave:?}"
         );
     }
 

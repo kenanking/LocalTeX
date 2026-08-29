@@ -2,7 +2,8 @@
 //! Recognition and label postprocess follow OpenDocONNX.__call__; markdown
 //! file assembly and figure-token painting are out of scope for this app.
 //! `formula_number` regions are paired with `display_formula` and folded
-//! into `\tag{N}` (ocr-pipeline assembly), not guessed from trailing `(n)`.
+//! into `\tag{N}` (ocr-pipeline assembly). A trailing `(n)` glued onto the
+//! formula crop is lifted the same way, so a missed layout box still tags.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -421,7 +422,14 @@ fn inject_tags(text: &str, tags: &[String]) -> String {
     let trailing = &text[core.len()..];
     match core.strip_suffix("$$") {
         Some(body) => {
-            let ins: String = tags.iter().map(|t| format!(" \\tag{{{t}}}")).collect();
+            let ins: String = tags
+                .iter()
+                .filter(|t| {
+                    let needle = format!(r"\tag{{{t}}}");
+                    !body.contains(&needle)
+                })
+                .map(|t| format!(" \\tag{{{t}}}"))
+                .collect();
             format!("{body}{ins}$${trailing}")
         }
         None => text.to_string(),
@@ -523,5 +531,20 @@ mod tests {
             to_doc_block("display_formula", [0.0, 0.0, 10.0, 10.0], &tagged).expect("formula");
         assert_eq!(block.text, r"a+b \tag{1}");
         assert!(block.display);
+    }
+
+    #[test]
+    fn inject_tags_does_not_duplicate_inline_eqno() {
+        let wrapped = text::handle_formula("\\[a+b\\] (1)\n\n");
+        assert!(
+            wrapped.contains(r"\tag{1}"),
+            "inline (1) should already be a tag, got {wrapped:?}"
+        );
+        let tagged = inject_tags(&wrapped, &["1".into()]);
+        assert_eq!(
+            tagged.matches(r"\tag{1}").count(),
+            1,
+            "layout pairing must not double the same eqno, got {tagged:?}"
+        );
     }
 }
