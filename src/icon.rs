@@ -62,6 +62,8 @@ const BUNDLED: &[(&str, &[u8])] = bundled![
     "icons/reset.svg",
     "icons/collapse.svg",
     "icons/expand.svg",
+    "icons/corners.svg",
+    "icons/close.svg",
 ];
 
 impl AssetSource for Assets {
@@ -220,6 +222,8 @@ mod tests {
             "icons/reset.svg",
             "icons/collapse.svg",
             "icons/expand.svg",
+            "icons/corners.svg",
+            "icons/close.svg",
         ] {
             let bytes = Assets
                 .load(path)

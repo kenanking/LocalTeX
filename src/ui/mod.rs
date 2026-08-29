@@ -2,6 +2,7 @@ mod detail;
 mod draw;
 mod history;
 mod main_window;
+mod orig_view;
 mod preview_doc;
 mod scroll;
 pub(crate) mod search_field;

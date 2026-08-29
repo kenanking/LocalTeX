@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
+use super::orig_view::OrigView;
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
@@ -95,6 +96,7 @@ pub struct MainWindow {
     pub(crate) state: Entity<AppState>,
     focus: FocusHandle,
     pub(crate) snip_list_focus: FocusHandle,
+    pub(crate) orig_focus: FocusHandle,
     pub(crate) search: Entity<SearchField>,
     pub(crate) media: Rc<RefCell<MediaCache>>,
     pub(crate) derived: Option<DocDerived>,
@@ -107,9 +109,7 @@ pub struct MainWindow {
     pub(crate) settings: Entity<SettingsPane>,
     pub(crate) copied: Option<(Uuid, CopyKind)>,
     copied_epoch: u64,
-    pub(crate) orig_hover: bool,
-    orig_zoomed: bool,
-    zoom_doc: Option<Uuid>,
+    pub(crate) orig: OrigView,
     pub(crate) preview: PreviewPane,
     pub(crate) sidebar_drag: Option<(f32, f32)>,
     pub(crate) history: HistoryPane,
@@ -119,6 +119,7 @@ impl MainWindow {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let snip_list_focus = cx.focus_handle();
+        let orig_focus = cx.focus_handle();
         window.focus(&snip_list_focus);
         let state_for_close = state.clone();
         window.on_window_should_close(cx, move |window, cx| {
@@ -194,6 +195,7 @@ impl MainWindow {
             state,
             focus,
             snip_list_focus,
+            orig_focus,
             search,
             media: Rc::new(RefCell::new(MediaCache::new())),
             derived: None,
@@ -206,9 +208,7 @@ impl MainWindow {
             settings,
             copied: None,
             copied_epoch: 0,
-            orig_hover: false,
-            orig_zoomed: false,
-            zoom_doc: None,
+            orig: OrigView::new(),
             preview: PreviewPane::new(),
             sidebar_drag: None,
             history,
@@ -256,9 +256,10 @@ impl MainWindow {
         cx.notify();
     }
 
-    fn close_sheet(&mut self, _: &CloseSheet, _: &mut Window, cx: &mut Context<Self>) {
-        if self.orig_zoomed {
+    fn close_sheet(&mut self, _: &CloseSheet, window: &mut Window, cx: &mut Context<Self>) {
+        if self.orig.open {
             self.unzoom();
+            window.focus(&self.snip_list_focus);
             cx.notify();
             return;
         }
@@ -271,7 +272,7 @@ impl MainWindow {
     }
 
     pub fn dismiss_sheet(&mut self, cx: &mut Context<Self>) {
-        let was_zoom = self.orig_zoomed;
+        let was_zoom = self.orig.open;
         self.unzoom();
         if matches!(self.view, View::Draw | View::Settings) {
             self.settings.update(cx, |pane, _| pane.dismiss_listen());
@@ -283,9 +284,7 @@ impl MainWindow {
     }
 
     pub(crate) fn unzoom(&mut self) {
-        self.orig_zoomed = false;
-        self.orig_hover = false;
-        self.zoom_doc = None;
+        self.orig.close();
     }
 
     pub(crate) fn toggle_sidebar(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -305,10 +304,10 @@ impl MainWindow {
             .width(has_docs, self.state.read(cx).prefs.sidebar_width)
     }
 
-    pub(crate) fn zoom_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.orig_zoomed = true;
-        self.orig_hover = false;
-        self.zoom_doc = Some(id);
+    pub(crate) fn zoom_original(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = id;
+        self.orig.open_view();
+        window.focus(&self.orig_focus);
         cx.notify();
     }
 
@@ -405,7 +404,7 @@ impl MainWindow {
         });
     }
 
-    fn ensure_selected_full(&self, cx: &App) {
+    pub(crate) fn ensure_selected_full(&self, cx: &App) {
         let state = self.state.read(cx);
         let Some(doc) = state.selected_doc() else {
             return;
@@ -509,10 +508,8 @@ impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
             let state = self.state.read(cx);
-            if self.orig_zoomed && self.zoom_doc != state.selected() {
-                self.orig_zoomed = false;
-                self.orig_hover = false;
-                self.zoom_doc = None;
+            if self.orig.open && state.selected().is_none() {
+                self.orig.close();
             }
             let (status_kind, status_label) = chrome(state);
             let status_label = if !matches!(
@@ -539,9 +536,11 @@ impl gpui::Render for MainWindow {
             (win_w - sidebar - 32.).max(112.)
         };
         let detail = self.render_detail(capturing, copy_pane_w, cx);
-        let zoom = self.render_orig_zoom(cx);
+        let orig_open = self.orig.open;
+        if orig_open && !self.orig_focus.is_focused(window) {
+            window.focus(&self.orig_focus);
+        }
         let view = self.view.clone();
-        let orig_zoomed = self.orig_zoomed;
         let (has_selected, can_open_docx) = {
             let state = self.state.read(cx);
             let has_selected = state.selected().is_some();
@@ -570,6 +569,11 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::quit))
             .cursor(CursorStyle::Arrow)
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
+                if this.orig.is_film_panning() && !ev.dragging() {
+                    this.orig.continue_film_pan(f32::from(ev.position.x), false);
+                    cx.notify();
+                    return;
+                }
                 // Sidebar resize drag: started by the "sidebar-resize" strip.
                 let Some((start_x, start_w)) = this.sidebar_drag else {
                     return;
@@ -587,6 +591,12 @@ impl gpui::Render for MainWindow {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    if this.orig.is_film_panning() {
+                        if let Some(id) = this.orig.end_film_pan() {
+                            this.state.update(cx, |s, cx| s.select(id, cx));
+                        }
+                        cx.notify();
+                    }
                     if this.sidebar_drag.take().is_some() {
                         this.state.update(cx, |s, _| s.persist_prefs());
                     }
@@ -602,21 +612,22 @@ impl gpui::Render for MainWindow {
                     self.preview.thumb.clone(),
                     self.settings.read(cx).scroll_thumb(),
                     self.history.thumb.clone(),
+                    self.orig.film_thumb.clone(),
                 ],
                 cx.entity_id(),
             ))
             .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .when(matches!(view, View::Library) && orig_zoomed, |d| {
-                        d.child(zoom)
-                    })
-                    .when(matches!(view, View::Library) && !orig_zoomed, |d| {
-                        d.when(has_docs, |d| d.child(history)).child(detail)
+                    .when(matches!(view, View::Library), |d| {
+                        d.when(has_docs, |d| d.child(history))
+                            .child(detail)
+                            .when(orig_open, |d| d.child(self.render_orig_overlay(window, cx)))
                     })
                     .when(matches!(view, View::Draw), |d| {
                         d.child(self.render_draw(cx))

@@ -23,6 +23,8 @@ pub enum ScrollbarTone {
     Default,
     /// Preview formula / page bars: 8px hit, 3px thumb, lighter fill.
     Subtle,
+    /// Dark gallery filmstrip: 6px hit, 2px thumb, white-on-dark.
+    OnDark,
 }
 
 /// GPUI 0.2 `overflow_y_scroll` enables wheel scrolling but does not
@@ -265,6 +267,7 @@ pub fn overlay_scrollbar(
     let (hit_px, bar_px, inset_px, fill) = match tone {
         ScrollbarTone::Default => (12.0, 6.0, 3.0, theme::scrollbar_thumb()),
         ScrollbarTone::Subtle => (8.0, 3.0, 2.5, theme::scrollbar_thumb_subtle()),
+        ScrollbarTone::OnDark => (6.0, 2.0, 2.0, theme::film_scroll_thumb()),
     };
     let hit = div()
         .id(id.into())

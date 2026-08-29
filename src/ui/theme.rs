@@ -1,4 +1,4 @@
-use gpui::{rgb, Rgba};
+use gpui::{rgb, rgba, Rgba};
 
 pub const BG: u32 = 0xf6f5f6;
 pub const BG_RAISED: u32 = 0xffffff;
@@ -40,6 +40,31 @@ pub fn scrollbar_thumb() -> Rgba {
 
 pub fn scrollbar_thumb_subtle() -> Rgba {
     rgb(0xd4d4d8)
+}
+
+/// Translucent gallery scrim (~0.38). gpui 0.2 has no backdrop-filter.
+pub fn overlay_scrim() -> Rgba {
+    rgba(0x16161c61)
+}
+
+pub fn hud_pill() -> Rgba {
+    rgba(0x1212169e)
+}
+
+pub fn hud_pill_hover() -> Rgba {
+    rgba(0x121216d1)
+}
+
+pub fn nav_disc() -> Rgba {
+    rgba(0xffffffe6)
+}
+
+pub fn film_selected_ring() -> Rgba {
+    rgba(0xffffffe6)
+}
+
+pub fn film_scroll_thumb() -> Rgba {
+    rgba(0xffffff66)
 }
 
 pub fn status_color(kind: StatusKind) -> Rgba {

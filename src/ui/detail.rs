@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, Context, Entity, MouseButton, RenderImage, SharedString,
+    div, img, prelude::*, px, rgb, rgba, svg, Context, Entity, MouseButton, RenderImage,
+    SharedString,
 };
 use uuid::Uuid;
 
@@ -9,7 +10,7 @@ use super::main_window::MainWindow;
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
 use super::widgets::{
-    btn, copy_chip, icon_btn, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
+    btn, copy_chip, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
 };
 use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta};
 use crate::state::AppState;
@@ -53,7 +54,7 @@ impl MainWindow {
         self.preview.reset_for(doc_id);
         let preview = self.preview_element(doc_id, &snap.status, cx);
         let copied = self.copied.filter(|(id, _)| *id == doc_id);
-        let orig_hover = self.orig_hover;
+        let orig_hover = self.orig.strip_hover;
         let image_missing = snap.image_missing;
         let can_retry = snap.can_retry;
         let ocr = snap.ocr;
@@ -228,91 +229,53 @@ impl MainWindow {
                             .when(full.is_some(), |d| {
                                 d.cursor_pointer()
                                     .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                        if this.orig_hover != *hovered {
-                                            this.orig_hover = *hovered;
+                                        if this.orig.strip_hover != *hovered {
+                                            this.orig.strip_hover = *hovered;
                                             cx.notify();
                                         }
                                     }))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.zoom_original(doc_id, cx);
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.zoom_original(doc_id, window, cx);
                                     }))
                             })
                             .when(hovered && full.is_some(), |d| {
                                 d.child(
                                     div()
+                                        .id("orig-zoom-btn")
                                         .absolute()
                                         .top(px(8.))
                                         .right(px(8.))
-                                        .rounded_md()
-                                        .bg(rgb(theme::BG_RAISED))
+                                        .size(px(28.))
+                                        .rounded_full()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .bg(theme::hud_pill())
                                         .border_1()
-                                        .border_color(rgb(theme::BORDER))
-                                        .child(icon_btn(
-                                            "orig-zoom-btn",
-                                            IconKind::Zoom,
-                                            "Zoom original",
-                                            false,
-                                            true,
-                                            {
-                                                let entity = cx.entity();
-                                                move |_, cx| {
-                                                    entity.update(cx, |this, cx| {
-                                                        this.zoom_original(doc_id, cx);
-                                                    });
-                                                }
-                                            },
-                                        )),
+                                        .border_color(rgba(0xffffff47))
+                                        .cursor_pointer()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_click({
+                                            let entity = cx.entity();
+                                            move |_, window, cx| {
+                                                entity.update(cx, |this, cx| {
+                                                    this.zoom_original(doc_id, window, cx);
+                                                });
+                                            }
+                                        })
+                                        .child(
+                                            svg()
+                                                .path(IconKind::Corners.asset_path())
+                                                .size(px(14.))
+                                                .text_color(rgb(0xffffff)),
+                                        ),
                                 )
                             }),
                     ),
             )
             .into_any()
-    }
-
-    pub(crate) fn render_orig_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let full = {
-            let state = self.state.read(cx);
-            state.selected().and_then(|id| self.full(id))
-        };
-        div()
-            .id("orig-zoom")
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::BG))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.unzoom();
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .p_4()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when_some(full, |d, img_data| {
-                        d.child(
-                            img(img_data)
-                                .max_w_full()
-                                .max_h_full()
-                                .object_fit(gpui::ObjectFit::Contain),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .pb_3()
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .flex()
-                    .justify_center()
-                    .child("Click or Esc to close"),
-            )
     }
 
     fn render_copy_rows(

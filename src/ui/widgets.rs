@@ -59,10 +59,14 @@ pub enum IconKind {
     Delete,
     Settings,
     Check,
+    /// Magnifier asset is still bundled; the strip chip uses `Corners`.
+    #[allow(dead_code)]
     Zoom,
     Reset,
     Collapse,
     Expand,
+    Corners,
+    Close,
 }
 
 impl IconKind {
@@ -80,11 +84,13 @@ impl IconKind {
             Self::Reset => "icons/reset.svg",
             Self::Collapse => "icons/collapse.svg",
             Self::Expand => "icons/expand.svg",
+            Self::Corners => "icons/corners.svg",
+            Self::Close => "icons/close.svg",
         }
     }
 
     #[cfg(test)]
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
@@ -97,6 +103,8 @@ impl IconKind {
         Self::Reset,
         Self::Collapse,
         Self::Expand,
+        Self::Corners,
+        Self::Close,
     ];
 }
 

@@ -274,6 +274,8 @@ pub fn apply(cx: &mut App, over: &Overrides) {
         KeyBinding::new("j", SelectNext, Some("SnipList && !SearchField")),
         KeyBinding::new("up", SelectPrev, None),
         KeyBinding::new("k", SelectPrev, Some("SnipList && !SearchField")),
+        KeyBinding::new("left", SelectPrev, Some("OrigView")),
+        KeyBinding::new("right", SelectNext, Some("OrigView")),
         KeyBinding::new(
             "backspace",
             DeleteSelected,
