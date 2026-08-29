@@ -10,6 +10,41 @@ pub enum MathRun {
     Display(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptKind {
+    Sub,
+    Super,
+}
+
+/// Lone `_{…}` / `^{…}` (no nucleus). `x^2` is not this.
+/// OCR often emits an empty group: `{}_{50}` for AP$_{50}$.
+pub fn script_kind(tex: &str) -> Option<ScriptKind> {
+    let t = strip_empty_nucleus(tex.trim());
+    if t.starts_with('_') {
+        Some(ScriptKind::Sub)
+    } else if t.starts_with('^') {
+        Some(ScriptKind::Super)
+    } else {
+        None
+    }
+}
+
+/// Body to typeset for a detected script: `_2` → `2`, `{}_{50}` → `50`.
+pub fn unwrap_script_body(tex: &str) -> &str {
+    let t = strip_empty_nucleus(tex.trim());
+    let rest = t
+        .strip_prefix('_')
+        .or_else(|| t.strip_prefix('^'))
+        .unwrap_or(t);
+    rest.strip_prefix('{')
+        .and_then(|inner| inner.strip_suffix('}'))
+        .unwrap_or(rest)
+}
+
+fn strip_empty_nucleus(tex: &str) -> &str {
+    tex.strip_prefix("{}").unwrap_or(tex)
+}
+
 /// Split mixed OCR text into prose and `$` / `$$` math.
 pub fn split_math(input: &str) -> Vec<MathRun> {
     let mut runs = Vec::new();
@@ -294,5 +329,30 @@ mod tests {
         assert_eq!(format_eqno("1"), "(1)");
         assert_eq!(format_eqno("(11)"), "(11)");
         assert_eq!(format_eqno(" 2 "), "(2)");
+    }
+
+    #[test]
+    fn script_kind_only_when_tex_is_a_lone_script() {
+        assert_eq!(script_kind("_2"), Some(ScriptKind::Sub));
+        assert_eq!(script_kind("_{ij}"), Some(ScriptKind::Sub));
+        assert_eq!(script_kind("^2"), Some(ScriptKind::Super));
+        assert_eq!(script_kind("^{th}"), Some(ScriptKind::Super));
+        assert_eq!(script_kind("{}_{50}"), Some(ScriptKind::Sub));
+        assert_eq!(script_kind("{}^{th}"), Some(ScriptKind::Super));
+        assert_eq!(script_kind("{x}_{50}"), None);
+        assert_eq!(script_kind("x^2"), None);
+        assert_eq!(script_kind("E=mc^2"), None);
+        assert_eq!(script_kind("2"), None);
+    }
+
+    #[test]
+    fn unwrap_script_body_strips_marker() {
+        assert_eq!(unwrap_script_body("_2"), "2");
+        assert_eq!(unwrap_script_body("_{ij}"), "ij");
+        assert_eq!(unwrap_script_body("^2"), "2");
+        assert_eq!(unwrap_script_body("^{th}"), "th");
+        assert_eq!(unwrap_script_body("{}_{50}"), "50");
+        assert_eq!(unwrap_script_body("{}^{th}"), "th");
+        assert_eq!(unwrap_script_body("2"), "2");
     }
 }

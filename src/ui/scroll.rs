@@ -17,6 +17,14 @@ pub enum ScrollAxis {
     Vertical,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarTone {
+    /// Settings gutter: 12px hit, 6px thumb.
+    Default,
+    /// Preview formula / page bars: 8px hit, 3px thumb, lighter fill.
+    Subtle,
+}
+
 /// GPUI 0.2 `overflow_y_scroll` enables wheel scrolling but does not
 /// paint a native thumb. Overlay this on a `relative` parent that
 /// `track_scroll`s the same handle. Drag is stored in `drag` and applied
@@ -204,6 +212,7 @@ pub fn overlay_scrollbar(
     handle: &ScrollHandle,
     drag: &Rc<RefCell<Option<ScrollThumbDrag>>>,
     visible: bool,
+    tone: ScrollbarTone,
 ) -> AnyElement {
     let vertical = matches!(axis, ScrollAxis::Vertical);
     let max: f32 = if vertical {
@@ -239,6 +248,10 @@ pub fn overlay_scrollbar(
     }
     let handle = handle.clone();
     let drag = drag.clone();
+    let (hit_px, bar_px, inset_px, fill) = match tone {
+        ScrollbarTone::Default => (12.0, 6.0, 3.0, theme::scrollbar_thumb()),
+        ScrollbarTone::Subtle => (8.0, 3.0, 2.5, theme::scrollbar_thumb_subtle()),
+    };
     let hit = div()
         .id(id.into())
         .absolute()
@@ -260,29 +273,29 @@ pub fn overlay_scrollbar(
     if vertical {
         hit.top(px(pos))
             .right(px(0.))
-            .w(px(12.))
+            .w(px(hit_px))
             .h(px(thumb_len))
             .child(
                 div()
-                    .ml(px(3.))
-                    .w(px(6.))
+                    .ml(px(inset_px))
+                    .w(px(bar_px))
                     .h_full()
                     .rounded_full()
-                    .bg(theme::scrollbar_thumb()),
+                    .bg(fill),
             )
             .into_any()
     } else {
         hit.left(px(pos))
             .bottom(px(0.))
-            .h(px(12.))
+            .h(px(hit_px))
             .w(px(thumb_len))
             .child(
                 div()
-                    .mt(px(3.))
-                    .h(px(6.))
+                    .mt(px(inset_px))
+                    .h(px(bar_px))
                     .w_full()
                     .rounded_full()
-                    .bg(theme::scrollbar_thumb()),
+                    .bg(fill),
             )
             .into_any()
     }
@@ -377,7 +390,7 @@ pub fn h_scroll_pane(
         .relative()
         .w_full()
         .min_w_0()
-        .pb(px(10.))
+        .pb(px(8.))
         .on_hover({
             let hover = hover.clone();
             let pane_key = pane_key.clone();
@@ -401,6 +414,26 @@ pub fn h_scroll_pane(
             handle,
             drag,
             thumb_visible(hovered, drag, false),
+            ScrollbarTone::Subtle,
         ))
         .into_any()
+}
+
+/// Center only when the pane is measured and the content fits. Unmeasured
+/// (`view_w == 0`) must not center: that clips a wide formula on the first frame.
+pub fn hscroll_should_center(content_w: f32, view_w: f32) -> bool {
+    view_w > 1.0 && content_w <= view_w
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hscroll_centers_only_when_content_fits_a_measured_pane() {
+        assert!(hscroll_should_center(120.0, 400.0));
+        assert!(!hscroll_should_center(800.0, 400.0));
+        assert!(!hscroll_should_center(800.0, 0.0));
+        assert!(!hscroll_should_center(120.0, 0.0));
+    }
 }

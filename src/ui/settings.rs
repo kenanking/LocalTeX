@@ -6,7 +6,7 @@ use gpui::{
     SharedString,
 };
 
-use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag};
+use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
 use super::theme;
 use super::widgets::{
     btn, icon_btn_sized, kbd_chip, pill_tab, seg_item, segmented, setting_row, settings_group,
@@ -141,6 +141,7 @@ pub fn page(
                         scroll.handle,
                         scroll.thumb,
                         true,
+                        ScrollbarTone::Default,
                     ),
                 ))
         })

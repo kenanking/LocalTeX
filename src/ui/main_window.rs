@@ -534,6 +534,15 @@ impl gpui::Render for MainWindow {
                 self.zoom_doc = None;
             }
             let (status_kind, status_label) = chrome(state);
+            let status_label = if !matches!(
+                status_kind,
+                theme::StatusKind::Busy | theme::StatusKind::Error
+            ) && self.preview.sel.borrow().selected_text().is_some()
+            {
+                "Ctrl+C to copy".into()
+            } else {
+                status_label
+            };
             (
                 status_kind,
                 status_label,

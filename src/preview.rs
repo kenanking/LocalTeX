@@ -6,6 +6,7 @@ use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
 use ratex_types::math_style::MathStyle;
 
 use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, CopyRow, MathRun, SnipKind};
+use crate::math::ScriptKind;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::table::{self, Slot, Table};
 use uuid::Uuid;
@@ -13,7 +14,9 @@ use uuid::Uuid;
 /// Inline math em size. Display blocks use `FONT_SIZE_DISPLAY`.
 const FONT_SIZE: f64 = 16.0;
 const FONT_SIZE_DISPLAY: f64 = 18.0;
+const FONT_SIZE_SCRIPT: f64 = 11.5;
 const FONT_PAD: f64 = 3.0;
+const FONT_PAD_SCRIPT: f64 = 0.0;
 /// Extra device pixels in the SVG file. GPUI then rasters SVG at
 /// `SMOOTH_SVG_SCALE_FACTOR` (2×). Keep this modest so we don't stack to ~6×.
 pub fn raster_dpr(scale: f32) -> f64 {
@@ -28,9 +31,31 @@ pub struct SvgMath {
 }
 
 #[derive(Clone, Debug)]
+pub struct ScriptGlyph {
+    pub svg: SvgMath,
+    pub tex: String,
+    pub kind: ScriptKind,
+}
+
+#[derive(Clone, Debug)]
 pub enum InlineSeg {
     Text(String),
-    Math { svg: SvgMath, tex: String },
+    /// Nucleus plus a lone `_{…}` / `^{…}` (or OCR orphan) kept as one wrap atom.
+    TextScript {
+        nucleus: String,
+        glyph: ScriptGlyph,
+    },
+    Math {
+        svg: SvgMath,
+        tex: String,
+    },
+}
+
+fn seg_is_visible(seg: &InlineSeg) -> bool {
+    match seg {
+        InlineSeg::Text(t) => !t.trim().is_empty(),
+        InlineSeg::TextScript { .. } | InlineSeg::Math { .. } => true,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -125,25 +150,35 @@ pub fn latex_to_math(latex: &str, style: MathStyle) -> Result<SvgMath> {
 }
 
 pub fn latex_to_math_with_dpr(latex: &str, style: MathStyle, dpr: f64) -> Result<SvgMath> {
-    let source = compact_tex(latex.trim());
-    if source.is_empty() {
-        return Err(anyhow!("empty latex"));
-    }
     let display = matches!(style, MathStyle::Display);
-    let svg = match render_math(&source, style, dpr) {
-        Ok(svg) => svg,
-        Err(err) => {
-            if let Some(inner) = strip_env(&source, "aligned") {
-                render_math(&inner, style, dpr)?
-            } else {
-                return Err(err);
-            }
-        }
-    };
     let font = if display {
         FONT_SIZE_DISPLAY
     } else {
         FONT_SIZE
+    };
+    latex_to_math_sized(latex, style, dpr, font, FONT_PAD)
+}
+
+fn latex_to_math_sized(
+    latex: &str,
+    style: MathStyle,
+    dpr: f64,
+    font: f64,
+    pad: f64,
+) -> Result<SvgMath> {
+    let source = compact_tex(latex.trim());
+    if source.is_empty() {
+        return Err(anyhow!("empty latex"));
+    }
+    let svg = match render_math(&source, style, dpr, font, pad) {
+        Ok(svg) => svg,
+        Err(err) => {
+            if let Some(inner) = strip_env(&source, "aligned") {
+                render_math(&inner, style, dpr, font, pad)?
+            } else {
+                return Err(err);
+            }
+        }
     };
     let (width, height) =
         svg_pt_size(&svg).unwrap_or((font as f32 * 2.0 * dpr as f32, font as f32 * dpr as f32));
@@ -154,23 +189,17 @@ pub fn latex_to_math_with_dpr(latex: &str, style: MathStyle, dpr: f64) -> Result
     })
 }
 
-fn render_math(source: &str, style: MathStyle, dpr: f64) -> Result<String> {
+fn render_math(source: &str, style: MathStyle, dpr: f64, font: f64, pad: f64) -> Result<String> {
     let ast = parse(source).map_err(|e| anyhow!("ratex parse: {e}"))?;
-    let display = matches!(style, MathStyle::Display);
     let opts = LayoutOptions {
         style,
         ..Default::default()
     };
     let tree = layout(&ast, &opts);
     let list = to_display_list(&tree);
-    let font = if display {
-        FONT_SIZE_DISPLAY
-    } else {
-        FONT_SIZE
-    };
     let opts = SvgOptions {
         font_size: font * dpr,
-        padding: FONT_PAD * dpr,
+        padding: pad * dpr,
         stroke_width: 0.7 * dpr,
         embed_glyphs: true,
         ..Default::default()
@@ -238,14 +267,80 @@ fn try_math(latex: &str, style: MathStyle, dpr: f64) -> Option<SvgMath> {
     latex_to_math_with_dpr(latex, style, dpr).ok()
 }
 
-fn math_seg(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
-    match try_math(tex, style, dpr) {
-        Some(svg) => InlineSeg::Math {
+fn last_attach_char(segs: &[InlineSeg]) -> Option<char> {
+    match segs.last()? {
+        InlineSeg::Text(t) => t.chars().last(),
+        InlineSeg::TextScript { nucleus, .. } => nucleus.chars().last(),
+        InlineSeg::Math { .. } => None,
+    }
+}
+
+fn is_orphan_script_body(tex: &str) -> bool {
+    let t = tex.trim();
+    if t.is_empty() || t.chars().count() > 24 {
+        return false;
+    }
+    if t.contains('+') || t.contains('=') || t.contains('^') || t.contains('_') || t.contains('-') {
+        return false;
+    }
+    let lower = t.to_ascii_lowercase();
+    !lower.contains(r"\frac")
+        && !lower.contains(r"\sum")
+        && !lower.contains(r"\int")
+        && !lower.contains(r"\prod")
+        && !lower.contains(r"\sqrt")
+}
+
+fn script_glyph_for(prev: Option<char>, tex: &str) -> Option<(ScriptKind, String)> {
+    if let Some(kind) = crate::math::script_kind(tex) {
+        return Some((kind, crate::math::unwrap_script_body(tex).to_string()));
+    }
+    if prev.is_some_and(|c| c.is_alphanumeric() || c == ')') && is_orphan_script_body(tex) {
+        Some((ScriptKind::Sub, tex.trim().to_string()))
+    } else {
+        None
+    }
+}
+
+fn attach_script(segs: &mut Vec<InlineSeg>, glyph: ScriptGlyph) -> bool {
+    let Some(InlineSeg::Text(_)) = segs.last() else {
+        return false;
+    };
+    let InlineSeg::Text(nucleus) = segs.pop().expect("last is Text") else {
+        return false;
+    };
+    segs.push(InlineSeg::TextScript { nucleus, glyph });
+    true
+}
+
+fn math_only(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
+    match latex_to_math_sized(tex, style, dpr, FONT_SIZE, FONT_PAD) {
+        Ok(svg) => InlineSeg::Math {
             svg,
             tex: tex.to_string(),
         },
-        None => InlineSeg::Text(format!("${tex}$")),
+        Err(_) => InlineSeg::Text(format!("${tex}$")),
     }
+}
+
+fn push_inline(segs: &mut Vec<InlineSeg>, tex: &str, style: MathStyle, dpr: f64) {
+    if matches!(style, MathStyle::Text) {
+        if let Some((kind, body)) = script_glyph_for(last_attach_char(segs), tex) {
+            if let Ok(svg) =
+                latex_to_math_sized(&body, style, dpr, FONT_SIZE_SCRIPT, FONT_PAD_SCRIPT)
+            {
+                let glyph = ScriptGlyph {
+                    svg,
+                    tex: tex.to_string(),
+                    kind,
+                };
+                if attach_script(segs, glyph) {
+                    return;
+                }
+            }
+        }
+    }
+    segs.push(math_only(tex, style, dpr));
 }
 
 fn segs_from_text(text: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
@@ -268,7 +363,9 @@ fn segs_from_normalized(normalized: &str, math: MathStyle, dpr: f64) -> Vec<Inli
     for run in split_math(normalized) {
         match run {
             MathRun::Text(t) if !t.is_empty() => segs.push(InlineSeg::Text(t)),
-            MathRun::Inline(tex) | MathRun::Display(tex) => segs.push(math_seg(&tex, math, dpr)),
+            MathRun::Inline(tex) | MathRun::Display(tex) => {
+                push_inline(&mut segs, &tex, math, dpr);
+            }
             MathRun::Text(_) => {}
         }
     }
@@ -568,10 +665,7 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
     let mut out = Vec::new();
     let mut para: Vec<InlineSeg> = Vec::new();
     let flush_para = |para: &mut Vec<InlineSeg>, blocks: &mut Vec<PreviewBlock>| {
-        if para.iter().any(|s| match s {
-            InlineSeg::Text(t) => !t.trim().is_empty(),
-            InlineSeg::Math { .. } => true,
-        }) {
+        if para.iter().any(seg_is_visible) {
             blocks.push(PreviewBlock::Paragraph(std::mem::take(para)));
         } else {
             para.clear();
@@ -593,7 +687,7 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                     flush_para(&mut para, &mut out);
                     push_display(&body, &body, dpr, &mut out);
                 } else {
-                    para.push(math_seg(&body, MathStyle::Text, dpr));
+                    push_inline(&mut para, &body, MathStyle::Text, dpr);
                 }
             }
             BlockKind::Text => {
@@ -605,10 +699,7 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                 if block.role.interrupts_prose() {
                     flush_para(&mut para, &mut out);
                     let segs = segs_from_text(&block.text, MathStyle::Text, dpr);
-                    if segs.iter().any(|s| match s {
-                        InlineSeg::Text(t) => !t.trim().is_empty(),
-                        InlineSeg::Math { .. } => true,
-                    }) {
+                    if segs.iter().any(seg_is_visible) {
                         match block.role {
                             BlockRole::DocTitle | BlockRole::SectionTitle => {
                                 out.push(PreviewBlock::Heading {
@@ -639,7 +730,9 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                                 para.push(InlineSeg::Text(t));
                             }
                         }
-                        MathRun::Inline(tex) => para.push(math_seg(&tex, MathStyle::Text, dpr)),
+                        MathRun::Inline(tex) => {
+                            push_inline(&mut para, &tex, MathStyle::Text, dpr);
+                        }
                         MathRun::Display(tex) => {
                             flush_para(&mut para, &mut out);
                             push_display(&tex, &format!("$${tex}$$"), dpr, &mut out);
@@ -791,6 +884,161 @@ mod tests {
             }),
             "expected SARCLIP text, got {segs:?}"
         );
+    }
+
+    #[test]
+    fn subscript_formula_is_marked_and_smaller() {
+        let segs = inline_preview(r"H$_2$O");
+        let sub = segs.iter().find_map(|s| match s {
+            InlineSeg::TextScript { glyph, .. } if glyph.kind == ScriptKind::Sub => {
+                Some((glyph.svg.height, glyph.tex.as_str()))
+            }
+            _ => None,
+        });
+        let Some((sub_h, tex)) = sub else {
+            panic!("expected a TextScript subscript, got {segs:?}");
+        };
+        assert!(tex.contains('2'), "subscript tex {tex}");
+        let full = inline_preview("$x$");
+        let full_h = full
+            .iter()
+            .find_map(|s| match s {
+                InlineSeg::Math { svg, .. } => Some(svg.height),
+                _ => None,
+            })
+            .expect("inline x");
+        assert!(
+            sub_h < full_h,
+            "subscript {sub_h} should be shorter than inline {full_h}"
+        );
+    }
+
+    #[test]
+    fn orphan_digit_after_letter_is_subscript() {
+        let segs = inline_preview("H$2$O");
+        assert!(
+            segs.iter().any(|s| matches!(
+                s,
+                InlineSeg::TextScript {
+                    glyph: ScriptGlyph {
+                        kind: ScriptKind::Sub,
+                        ..
+                    },
+                    ..
+                }
+            )),
+            "expected orphan $2$ after H to be a TextScript subscript, got {segs:?}"
+        );
+    }
+
+    #[test]
+    fn empty_nucleus_script_from_ocr_is_subscript() {
+        let segs = inline_preview(r"AP${}_{50}$, and");
+        assert!(
+            segs.iter().any(|s| matches!(
+                s,
+                InlineSeg::TextScript {
+                    glyph: ScriptGlyph {
+                        kind: ScriptKind::Sub,
+                        ..
+                    },
+                    ..
+                }
+            )),
+            "expected {{}}_{{50}} after AP to be a TextScript subscript, got {segs:?}"
+        );
+    }
+
+    #[test]
+    fn document_preview_marks_empty_nucleus_subscripts() {
+        let r = crate::doc::Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
+        let blocks = vec![Block::new(
+            BlockKind::Text,
+            r,
+            r"reaching 36.02 mAP, 69.60 AP${}_{50}$, and 33.80 AP${}_{75}$.",
+        )];
+        let preview = document_preview(&blocks);
+        let segs = match &preview[0] {
+            PreviewBlock::Paragraph(segs) => segs,
+            other => panic!("expected paragraph, got {other:?}"),
+        };
+        let subs: Vec<&str> = segs
+            .iter()
+            .filter_map(|s| match s {
+                InlineSeg::TextScript {
+                    glyph:
+                        ScriptGlyph {
+                            kind: ScriptKind::Sub,
+                            tex,
+                            ..
+                        },
+                    ..
+                } => Some(tex.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(subs, ["{}_{50}", "{}_{75}"]);
+        assert!(
+            segs.iter().any(|s| matches!(
+                s,
+                InlineSeg::TextScript { nucleus, .. } if nucleus.ends_with("AP")
+            )),
+            "script must attach to the AP text run, got {segs:?}"
+        );
+    }
+
+    #[test]
+    fn next_script_keeps_leading_space_on_its_nucleus() {
+        let segs = inline_preview(r"AP${}_{50}$ by 2.65%, and AP${}_{75}$");
+        let nuclei: Vec<&str> = segs
+            .iter()
+            .filter_map(|s| match s {
+                InlineSeg::TextScript { nucleus, .. } => Some(nucleus.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            nuclei.len(),
+            2,
+            "expected two TextScript atoms, got {segs:?}"
+        );
+        assert!(
+            nuclei[1].starts_with(' '),
+            "space after the first script stays on the next nucleus, got {nuclei:?}"
+        );
+    }
+
+    #[test]
+    fn script_glyph_for_orphans_after_letters() {
+        assert_eq!(
+            script_glyph_for(Some('H'), "2"),
+            Some((ScriptKind::Sub, "2".into()))
+        );
+        assert_eq!(
+            script_glyph_for(Some('H'), "_2"),
+            Some((ScriptKind::Sub, "2".into()))
+        );
+        assert_eq!(script_glyph_for(Some(' '), "x"), None);
+        assert_eq!(script_glyph_for(None, "2"), None);
+        assert_eq!(
+            script_glyph_for(Some('n'), "^2"),
+            Some((ScriptKind::Super, "2".into()))
+        );
+    }
+
+    #[test]
+    fn orphan_script_body_is_a_short_nucleus() {
+        assert!(is_orphan_script_body("2"));
+        assert!(is_orphan_script_body("ij"));
+        assert!(is_orphan_script_body(r"\mathrm{max}"));
+        assert!(!is_orphan_script_body("x+y"));
+        assert!(!is_orphan_script_body(r"\frac{1}{2}"));
+        assert!(!is_orphan_script_body("E=mc^2"));
     }
 
     #[test]
@@ -1046,6 +1294,7 @@ mod tests {
             .iter()
             .map(|s| match s {
                 InlineSeg::Text(t) => t.as_str(),
+                InlineSeg::TextScript { nucleus, .. } => nucleus.as_str(),
                 InlineSeg::Math { .. } => "",
             })
             .collect()

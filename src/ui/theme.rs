@@ -4,6 +4,8 @@ pub const BG: u32 = 0xf6f5f6;
 pub const BG_RAISED: u32 = 0xffffff;
 pub const BG_SUNKEN: u32 = 0xefefef;
 pub const TEXT: u32 = 0x1a1a1a;
+/// Preview document ink (body, captions, formulas). Chrome stays `TEXT`/`MUTED`.
+pub const INK: u32 = 0x000000;
 pub const MUTED: u32 = 0x6b6b6b;
 pub const ACCENT: u32 = 0x2563eb;
 pub const DANGER: u32 = 0xdc2626;
@@ -34,6 +36,10 @@ pub fn row_hover() -> Rgba {
 
 pub fn scrollbar_thumb() -> Rgba {
     rgb(0x9ca3af)
+}
+
+pub fn scrollbar_thumb_subtle() -> Rgba {
+    rgb(0xd4d4d8)
 }
 
 pub fn status_color(kind: StatusKind) -> Rgba {
