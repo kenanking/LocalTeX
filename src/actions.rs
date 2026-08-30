@@ -17,5 +17,9 @@ actions!(
         ToggleFormat,
         RetryOcr,
         QuitApp,
+        DrawPen,
+        DrawEraser,
+        DrawUndo,
+        DrawRedo,
     ]
 );

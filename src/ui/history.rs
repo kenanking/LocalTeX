@@ -333,6 +333,7 @@ impl MainWindow {
             IconBtnSize {
                 hit: px(22.),
                 glyph: px(14.),
+                kbd: None,
             },
             move |window, cx| {
                 entity.update(cx, |this, cx| this.toggle_sidebar(window, cx));

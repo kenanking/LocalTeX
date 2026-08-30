@@ -1,3 +1,4 @@
+mod chrome;
 mod detail;
 mod draw;
 mod history;

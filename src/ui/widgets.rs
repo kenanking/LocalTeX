@@ -55,6 +55,9 @@ pub enum IconKind {
     Upload,
     Paste,
     Draw,
+    Eraser,
+    Undo,
+    Redo,
     Word,
     Delete,
     Settings,
@@ -76,6 +79,9 @@ impl IconKind {
             Self::Upload => "icons/upload.svg",
             Self::Paste => "icons/paste.svg",
             Self::Draw => "icons/draw.svg",
+            Self::Eraser => "icons/eraser.svg",
+            Self::Undo => "icons/undo.svg",
+            Self::Redo => "icons/redo.svg",
             Self::Word => "icons/word.svg",
             Self::Delete => "icons/delete.svg",
             Self::Settings => "icons/settings.svg",
@@ -90,11 +96,14 @@ impl IconKind {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 17] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
         Self::Draw,
+        Self::Eraser,
+        Self::Undo,
+        Self::Redo,
         Self::Word,
         Self::Delete,
         Self::Settings,
@@ -111,6 +120,7 @@ impl IconKind {
 pub struct IconBtnSize {
     pub hit: Pixels,
     pub glyph: Pixels,
+    pub kbd: Option<char>,
 }
 
 pub fn icon_btn(
@@ -130,6 +140,7 @@ pub fn icon_btn(
         IconBtnSize {
             hit: px(32.),
             glyph: px(18.),
+            kbd: None,
         },
         on_click,
     )
@@ -153,6 +164,7 @@ pub fn icon_btn_sized(
         .flex()
         .items_center()
         .justify_center()
+        .when(size.kbd.is_some(), |d| d.relative())
         .when(enabled, |d| d.cursor_pointer())
         .when(!enabled, |d| d.opacity(0.38))
         .when(active, |d| d.bg(theme::accent_soft()))
@@ -173,6 +185,42 @@ pub fn icon_btn_sized(
                 .flex_shrink_0()
                 .text_color(rgb(theme::TEXT)),
         )
+        .when_some(size.kbd, |d, digit| {
+            d.child(
+                div()
+                    .absolute()
+                    .right(px(3.))
+                    .bottom(px(2.))
+                    .text_size(px(9.))
+                    .font_family("monospace")
+                    .text_color(rgb(theme::MUTED))
+                    .child(digit.to_string()),
+            )
+        })
+}
+
+pub fn icon_btn_kbd(
+    id: impl Into<SharedString>,
+    kind: IconKind,
+    hint: impl Into<SharedString>,
+    digit: char,
+    active: bool,
+    enabled: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    icon_btn_sized(
+        id,
+        kind,
+        hint,
+        active,
+        enabled,
+        IconBtnSize {
+            hit: px(32.),
+            glyph: px(16.),
+            kbd: Some(digit),
+        },
+        on_click,
+    )
 }
 
 pub fn switch(
@@ -342,6 +390,7 @@ pub fn seg_item(
                     d.text_color(rgb(theme::MUTED))
                         .hover(|d| d.text_color(rgb(theme::TEXT)))
                 })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |_, window, cx| on_click(window, cx))
                 .child(label.into()),
         )

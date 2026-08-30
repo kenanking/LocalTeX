@@ -264,7 +264,10 @@ pub fn to_global_hotkey(chord: &str) -> Option<HotKey> {
 }
 
 pub fn apply(cx: &mut App, over: &Overrides) {
-    use crate::actions::{CloseSheet, QuitApp, RetryOcr, SelectNext, SelectPrev};
+    use crate::actions::{
+        CloseSheet, DrawEraser, DrawPen, DrawRedo, DrawUndo, QuitApp, RetryOcr, SelectNext,
+        SelectPrev,
+    };
     cx.clear_key_bindings();
     cx.bind_keys([
         KeyBinding::new("ctrl-n", Capture, None),
@@ -283,6 +286,14 @@ pub fn apply(cx: &mut App, over: &Overrides) {
         ),
         KeyBinding::new("ctrl-r", RetryOcr, None),
         KeyBinding::new("ctrl-q", QuitApp, None),
+    ]);
+    cx.bind_keys([
+        KeyBinding::new("1", DrawPen, Some("DrawBoard")),
+        KeyBinding::new("2", DrawEraser, Some("DrawBoard")),
+        KeyBinding::new("3", DrawUndo, Some("DrawBoard")),
+        KeyBinding::new("4", DrawRedo, Some("DrawBoard")),
+        KeyBinding::new("ctrl-z", DrawUndo, Some("DrawBoard")),
+        KeyBinding::new("ctrl-shift-z", DrawRedo, Some("DrawBoard")),
     ]);
     for spec in CATALOG {
         let Some(chord) = effective(over, spec.id) else {

@@ -160,6 +160,7 @@ fn shortcut_row(
                     IconBtnSize {
                         hit: px(24.),
                         glyph: px(14.),
+                        kbd: None,
                     },
                     move |_, cx| {
                         cx.stop_propagation();
