@@ -7,12 +7,15 @@ use image::RgbaImage;
 use crate::identity::{models_dir, APP_SLUG};
 
 mod imgops;
+pub(crate) mod inktex;
 mod layout;
 mod pipeline;
 mod text;
 mod unirec;
 
+use crate::doc::{Block, BlockKind, OcrMeta, Rect};
 use imgops::RgbImg;
+use inktex::{InkTex, INK_FILES};
 use pipeline::{Pipeline, SHIP_FILES};
 
 pub use pipeline::OcrResult;
@@ -34,18 +37,25 @@ impl EngineStatus {
     }
 }
 
-/// OpenDoc sessions load on the first snip.
+struct Sessions {
+    page: Option<Pipeline>,
+    ink: Option<InkTex>,
+}
+
+/// OpenDoc and inktex sessions load on first use.
 pub struct Engine {
     dir: PathBuf,
-    inner: Mutex<Option<Pipeline>>,
+    inner: Mutex<Sessions>,
     ship_ok: bool,
+    ink_ok: bool,
 }
 
 impl Engine {
     pub fn load() -> Arc<Self> {
         let dir = models_dir();
-        let present = ship_present(&dir);
-        if present {
+        let ship_ok = ship_present(&dir);
+        let ink_ok = ink_present(&dir);
+        if ship_ok {
             eprintln!(
                 "{APP_SLUG}: OpenDoc weights deferred until first snip ({})",
                 dir.display()
@@ -56,10 +66,25 @@ impl Engine {
                 dir.display()
             );
         }
+        if ink_ok {
+            eprintln!(
+                "{APP_SLUG}: handwriting weights deferred until first drawing ({})",
+                handwriting_dir(&dir).display()
+            );
+        } else {
+            eprintln!(
+                "{APP_SLUG}: handwriting models missing in {}",
+                handwriting_dir(&dir).display()
+            );
+        }
         Arc::new(Self {
             dir,
-            inner: Mutex::new(None),
-            ship_ok: present,
+            inner: Mutex::new(Sessions {
+                page: None,
+                ink: None,
+            }),
+            ship_ok,
+            ink_ok,
         })
     }
 
@@ -78,17 +103,50 @@ impl Engine {
             bail!("OpenDoc ship models missing in {}", self.dir.display());
         }
         let mut guard = self.inner.lock().expect("ocr mutex");
-        if guard.is_none() {
-            *guard = Some(load_pipeline(&self.dir)?);
+        if guard.page.is_none() {
+            guard.page = Some(load_pipeline(&self.dir)?);
         }
-        let pipeline = guard.as_mut().expect("ocr just loaded");
+        let pipeline = guard.page.as_mut().expect("ocr just loaded");
         let mut rgb = rgba_to_rgb(image)?;
         pipeline.infer(&mut rgb)
     }
+
+    pub fn recognize_ink(
+        &self,
+        traces: &[Vec<[f32; 3]>],
+        image_size: (u32, u32),
+    ) -> Result<OcrResult> {
+        if !self.ink_ok {
+            bail!(
+                "Handwriting models missing in {}",
+                handwriting_dir(&self.dir).display()
+            );
+        }
+        let mut guard = self.inner.lock().expect("ocr mutex");
+        if guard.ink.is_none() {
+            guard.ink = Some(load_ink(&self.dir)?);
+        }
+        let ink = guard.ink.as_mut().expect("inktex just loaded");
+        let out = ink.recognize(traces)?;
+        Ok(ink_formula_result(
+            out.text,
+            image_size,
+            (out.encode_s + out.decode_s) as f32,
+        ))
+    }
+}
+
+fn handwriting_dir(models: &Path) -> PathBuf {
+    models.join("handwriting")
 }
 
 fn ship_present(dir: &Path) -> bool {
     SHIP_FILES.iter().all(|name| dir.join(name).is_file())
+}
+
+fn ink_present(dir: &Path) -> bool {
+    let dir = handwriting_dir(dir);
+    INK_FILES.iter().all(|name| dir.join(name).is_file())
 }
 
 fn load_pipeline(dir: &Path) -> Result<Pipeline> {
@@ -97,6 +155,41 @@ fn load_pipeline(dir: &Path) -> Result<Pipeline> {
     let pipeline = Pipeline::load(dir, intra)?;
     eprintln!("{APP_SLUG}: loaded PP-DocLayoutV2 + UniRec-0.1B");
     Ok(pipeline)
+}
+
+fn load_ink(dir: &Path) -> Result<InkTex> {
+    let intra = default_intra();
+    let spinning = std::env::var("LOCALTEX_SPINNING").is_ok_and(|v| v != "0");
+    let ink_dir = handwriting_dir(dir);
+    eprintln!(
+        "{APP_SLUG}: loading handwriting inktex ({intra} intra-op threads, {})",
+        ink_dir.display()
+    );
+    ort::init().with_name("localtex").commit();
+    let ink = InkTex::load(&ink_dir, intra, spinning)?;
+    eprintln!("{APP_SLUG}: loaded inktex encoder + decoder-step");
+    Ok(ink)
+}
+
+fn ink_formula_result(text: String, (w, h): (u32, u32), elapsed_s: f32) -> OcrResult {
+    let mut block = Block::new(
+        BlockKind::Formula,
+        Rect {
+            x: 0,
+            y: 0,
+            w: w.max(1),
+            h: h.max(1),
+        },
+        text,
+    );
+    block.display = true;
+    OcrResult {
+        blocks: vec![block],
+        meta: Some(OcrMeta {
+            elapsed_s,
+            confidence: 1.0,
+        }),
+    }
 }
 
 /// ORT binds thread pools at session commit. Default: at most half the
@@ -237,8 +330,12 @@ mod tests {
     fn missing_weights_are_an_error() {
         let engine = Engine {
             dir: PathBuf::from("/no/such/localtex-models"),
-            inner: Mutex::new(None),
+            inner: Mutex::new(Sessions {
+                page: None,
+                ink: None,
+            }),
             ship_ok: false,
+            ink_ok: false,
         };
         assert!(matches!(
             engine.status(),
@@ -246,6 +343,19 @@ mod tests {
         ));
         let img = RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255]));
         assert!(engine.recognize(&img).is_err());
+        let traces = vec![vec![[0.0, 0.0, 0.0], [1.0, 0.0, 1.0]]];
+        assert!(engine.recognize_ink(&traces, (8, 8)).is_err());
+    }
+
+    #[test]
+    fn ink_result_is_display_formula() {
+        let out = ink_formula_result("a+b".into(), (64, 32), 0.01);
+        assert_eq!(out.blocks.len(), 1);
+        assert_eq!(out.blocks[0].kind, BlockKind::Formula);
+        assert_eq!(out.blocks[0].text, "a+b");
+        assert!(out.blocks[0].display);
+        assert_eq!(out.blocks[0].bbox.w, 64);
+        assert_eq!(out.blocks[0].bbox.h, 32);
     }
 
     #[test]
@@ -269,5 +379,83 @@ mod tests {
         let engine = Engine::load();
         let img = RgbaImage::from_pixel(64, 32, image::Rgba([255, 255, 255, 255]));
         let _ = engine.recognize(&img).expect("OpenDoc recognize");
+    }
+
+    #[test]
+    #[ignore]
+    fn inktex_smoke_if_weights_exist() {
+        let dir = models_dir();
+        if !ink_present(&dir) {
+            return;
+        }
+        let engine = Engine::load();
+        let traces = vec![vec![
+            [10.0, 10.0, 0.0],
+            [40.0, 12.0, 80.0],
+            [42.0, 40.0, 160.0],
+        ]];
+        let out = engine
+            .recognize_ink(&traces, (64, 64))
+            .expect("inktex recognize");
+        assert_eq!(out.blocks[0].kind, BlockKind::Formula);
+        assert!(out.blocks[0].display);
+    }
+
+    /// End-to-end check against converted dataset samples (sidecar-format
+    /// traces JSON + expected label TXT in INKTEX_E2E_DIR). Prints EM and the
+    /// first mismatches for inspection.
+    #[test]
+    #[ignore]
+    fn inktex_e2e_dataset_dir() {
+        let dir = std::env::var("INKTEX_E2E_DIR").expect("INKTEX_E2E_DIR");
+        let dir = std::path::Path::new(&dir);
+        if !ink_present(&models_dir()) {
+            eprintln!("inktex e2e skipped: weights missing (set LOCALTEX_MODELS)");
+            return;
+        }
+        let mut ids: Vec<std::path::PathBuf> = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("read e2e dir") {
+            let p = entry.expect("entry").path();
+            if p.extension().is_some_and(|e| e == "json") {
+                ids.push(p);
+            }
+        }
+        ids.sort();
+        let engine = Engine::load();
+        let mut exact = 0usize;
+        let mut shown = 0usize;
+        let mut total_ms = 0u128;
+        for json_path in &ids {
+            let id = json_path.file_stem().unwrap().to_string_lossy().to_string();
+            let mut traces: Vec<Vec<[f32; 3]>> =
+                serde_json::from_slice(&std::fs::read(json_path).expect("read traces"))
+                    .expect("parse traces");
+            if std::env::var("INKTEX_E2E_DEBURST").is_ok_and(|v| v == "1") {
+                inktex::deburst(&mut traces);
+            }
+            let expected_path = json_path.with_extension("txt");
+            let expected = std::fs::read_to_string(&expected_path)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let t0 = std::time::Instant::now();
+            let out = engine
+                .recognize_ink(&traces, (64, 64))
+                .unwrap_or_else(|e| panic!("{id}: recognize failed: {e}"));
+            total_ms += t0.elapsed().as_millis();
+            let got = out.blocks[0].text.trim().to_string();
+            if got == expected {
+                exact += 1;
+            } else if shown < 15 {
+                eprintln!("MISMATCH {id}\n  want: {expected}\n  got : {got}");
+                shown += 1;
+            }
+        }
+        eprintln!(
+            "inktex e2e: EM {exact}/{} = {:.2}% (avg {:.1} ms/sample)",
+            ids.len(),
+            100.0 * exact as f64 / ids.len() as f64,
+            total_ms as f64 / ids.len().max(1) as f64
+        );
     }
 }

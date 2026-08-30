@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use gpui::{
     canvas, div, prelude::*, px, rgb, Context, CursorStyle, MouseButton, MouseDownEvent,
     PathBuilder, Pixels, Point,
@@ -8,9 +10,15 @@ use super::theme;
 use super::widgets::{btn, ghost_btn, section_label};
 use crate::ingest::IngestSource;
 
+struct StrokePt {
+    pos: Point<Pixels>,
+    t_ms: f32,
+}
+
 pub(crate) struct DrawBoard {
-    pub(crate) lines: Vec<Vec<Point<Pixels>>>,
-    pub(crate) painting: bool,
+    lines: Vec<Vec<StrokePt>>,
+    painting: bool,
+    t0: Option<Instant>,
 }
 
 impl DrawBoard {
@@ -18,17 +26,46 @@ impl DrawBoard {
         Self {
             lines: Vec::new(),
             painting: false,
+            t0: None,
         }
     }
 
     pub(crate) fn has_ink(&self) -> bool {
         self.lines.iter().any(|line| line.len() >= 2)
     }
+
+    fn stamp(&mut self, pos: Point<Pixels>) -> StrokePt {
+        let t0 = *self.t0.get_or_insert_with(Instant::now);
+        StrokePt {
+            pos,
+            t_ms: t0.elapsed().as_secs_f32() * 1000.0,
+        }
+    }
+
+    fn traces(&self) -> Vec<Vec<[f32; 3]>> {
+        let mut traces: Vec<Vec<[f32; 3]>> = self
+            .lines
+            .iter()
+            .filter(|line| line.len() >= 2)
+            .map(|line| {
+                line.iter()
+                    .map(|p| [f32::from(p.pos.x), f32::from(p.pos.y), p.t_ms])
+                    .collect()
+            })
+            .collect();
+        crate::ocr::inktex::deburst(&mut traces);
+        traces
+    }
 }
 
 impl MainWindow {
     pub(crate) fn render_draw(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let lines = self.board.lines.clone();
+        let lines: Vec<Vec<Point<Pixels>>> = self
+            .board
+            .lines
+            .iter()
+            .map(|line| line.iter().map(|p| p.pos).collect())
+            .collect();
         let has_ink = self.board.has_ink();
 
         div()
@@ -47,14 +84,13 @@ impl MainWindow {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(theme::BORDER))
-                    .child(section_label("Draw a formula or note"))
+                    .child(section_label("Draw a formula"))
                     .child(div().flex_1())
                     .child(ghost_btn("draw-clear", "Clear", has_ink, {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
-                                this.board.lines.clear();
-                                this.board.painting = false;
+                                this.board = DrawBoard::new();
                                 cx.notify();
                             });
                         }
@@ -71,16 +107,7 @@ impl MainWindow {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
-                                let pts: Vec<Vec<(f32, f32)>> = this
-                                    .board
-                                    .lines
-                                    .iter()
-                                    .map(|line| {
-                                        line.iter()
-                                            .map(|p| (f32::from(p.x), f32::from(p.y)))
-                                            .collect()
-                                    })
-                                    .collect();
+                                let pts = this.board.traces();
                                 this.board = DrawBoard::new();
                                 this.view = View::Library;
                                 this.state.update(cx, |s, cx| {
@@ -130,7 +157,8 @@ impl MainWindow {
                         MouseButton::Left,
                         cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                             this.board.painting = true;
-                            this.board.lines.push(vec![ev.position]);
+                            let pt = this.board.stamp(ev.position);
+                            this.board.lines.push(vec![pt]);
                             cx.notify();
                         }),
                     )
@@ -138,8 +166,9 @@ impl MainWindow {
                         if !this.board.painting {
                             return;
                         }
+                        let pt = this.board.stamp(ev.position);
                         if let Some(line) = this.board.lines.last_mut() {
-                            line.push(ev.position);
+                            line.push(pt);
                         }
                         cx.notify();
                     }))

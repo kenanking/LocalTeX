@@ -1,0 +1,36 @@
+{
+  "name": "ship",
+  "strategy": "layout-freeze-fold + weight-int8-conv + WOQ-int8-matmul + decoder-emb8 + decoder-kv-v2 + decoder-gqa",
+  "graph_opt": "conv-bn-fold + identity-elim",
+  "decoder_contract": "gqa: per-layer cross_kt_{0..5}[b,6,128,seq]/cross_v_{0..5}[b,6,seq,128]; self-attn = com.microsoft.GroupQueryAttention, past/present [b,6,len,128]; seqlens_k[b]=past+s-1; total_seq_len[1]=past+s",
+  "files_mb": {
+    "layout.onnx": 56.9,
+    "encoder.onnx": 41.6,
+    "decoder.onnx": 136.2,
+    "unirec_tokenizer_mapping.json": 9.4
+  },
+  "onnx_mb": 234.7,
+  "total_mb": 244.1,
+  "inktex": {
+    "name": "inktex-woq",
+    "tarball": "inktex-woq.tar.gz",
+    "strategy": "transformer-woq-matmul (MatMulConstBOnly)",
+    "source": "ink2tex full-v1-woq",
+    "input": "online ink (x, y, t) → 12-dim point features",
+    "output": "bare LaTeX, greedy decode, 258-token vocab (JSON key order = id)",
+    "install_dir": "handwriting/",
+    "release_assets": [
+      "inktex-encoder.onnx",
+      "inktex-decoder-step.onnx",
+      "inktex-vocab.json"
+    ],
+    "files_mb": {
+      "handwriting/inktex-encoder.onnx": 11.7,
+      "handwriting/inktex-decoder-step.onnx": 10.8,
+      "handwriting/inktex-vocab.json": 0.004
+    },
+    "onnx_mb": 22.5,
+    "total_mb": 22.5,
+    "note": "Same distribution as the OpenDoc ship: GitHub release v0.0.0, SHA256SUMS, not in git, lazy load. Filenames are prefixed so they do not collide with UniRec encoder.onnx / decoder.onnx at the release root."
+  }
+}

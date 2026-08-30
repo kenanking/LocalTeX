@@ -38,18 +38,18 @@ If linking fails on `-lgbm` (Linux), see `.cargo/config.toml.example` (unversion
 
 ## Models
 
-OpenDoc ship weights (~244 MB) stay on disk, not in git. Install from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
+OpenDoc ship weights (~244 MB) and inktex handwriting weights (~23 MB) stay on disk, not in git. Install both from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
 
 ```bash
 ./scripts/download-models.sh
 ```
 
-That unpacks `opendoc-0.1b-ship.tar.gz` into `$LOCALTEX_MODELS`, else:
+That unpacks `opendoc-0.1b-ship.tar.gz` and `inktex-woq.tar.gz` into `$LOCALTEX_MODELS`, else:
 
 - Linux: `~/.local/share/localtex/models`
 - Windows: `%LOCALAPPDATA%\localtex\models`
 
-Required files: `layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`. `manifest.json` documents the ship strategy (INT8 + layout freeze-fold + GQA decoder). Layout is image-only (boxes in 800-space); the decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; snip OCR errors until the weights are in place.
+Printed snips need `layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`. Draw-a-formula needs `handwriting/inktex-encoder.onnx`, `handwriting/inktex-decoder-step.onnx`, `handwriting/inktex-vocab.json`. See [`models/README.md`](models/README.md). `manifest.json` is the same card in JSON. Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
 
 The GitHub repo may be private: `download-models.sh` uses `gh` when you are logged in (`gh auth status`).
 

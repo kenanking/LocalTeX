@@ -191,6 +191,13 @@ impl Store {
         let dest = self.root.join(&rel);
         std::fs::write(&tmp, &png).with_context(|| "write png tmp")?;
         std::fs::rename(&tmp, &dest).with_context(|| "rename png")?;
+        if let Err(err) = match &doc.ink {
+            Some(ink) => self.write_ink(doc.id, ink),
+            None => Ok(()),
+        } {
+            let _ = std::fs::remove_file(&dest);
+            return Err(err);
+        }
 
         let blocks_json = encode_blocks_json(&doc.blocks)?;
         let search_text = Document::search_text_for_blocks(&doc.blocks);
@@ -213,6 +220,7 @@ impl Store {
         );
         if let Err(err) = sql {
             let _ = std::fs::remove_file(&dest);
+            let _ = std::fs::remove_file(self.ink_path(doc.id));
             return Err(err.into());
         }
         Ok(thumb)
@@ -253,7 +261,31 @@ impl Store {
         if let Some(rel) = rel {
             let _ = std::fs::remove_file(self.root.join(rel));
         }
+        let _ = std::fs::remove_file(self.ink_path(id));
         Ok(())
+    }
+
+    fn ink_path(&self, id: Uuid) -> PathBuf {
+        self.root.join(format!("snips/{id}.ink.json"))
+    }
+
+    fn write_ink(&self, id: Uuid, traces: &[Vec<[f32; 3]>]) -> Result<()> {
+        let dest = self.ink_path(id);
+        let tmp = self.root.join(format!("snips/{id}.ink.json.tmp"));
+        let bytes = serde_json::to_vec(traces).context("encode ink")?;
+        std::fs::write(&tmp, bytes).with_context(|| "write ink tmp")?;
+        std::fs::rename(&tmp, &dest).with_context(|| "rename ink")?;
+        Ok(())
+    }
+
+    pub fn load_ink(&self, id: Uuid) -> Result<Option<Vec<Vec<[f32; 3]>>>> {
+        let path = self.ink_path(id);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let traces = serde_json::from_slice(&bytes).context("decode ink")?;
+        Ok(Some(traces))
     }
 
     pub fn query_ids(&self, text: &str, range: DateRange) -> Result<Vec<Uuid>> {
@@ -551,6 +583,7 @@ mod tests {
             persisted: false,
             blocks_loaded: true,
             ocr: None,
+            ink: None,
             revision: 0,
         }
     }
@@ -578,6 +611,20 @@ mod tests {
         assert_eq!(blocks[0].text, r"\frac{1}{2}");
         let png = store.load_png(id).unwrap();
         assert_eq!(png.dimensions(), (8, 8));
+    }
+
+    #[test]
+    fn ink_sidecar_round_trips_and_deletes() {
+        let (store, root) = tmp_store();
+        let mut doc = sample_doc("a+b", SystemTime::now());
+        let id = doc.id;
+        doc.ink = Some(Arc::new(vec![vec![[1.0, 2.0, 0.0], [3.0, 4.0, 12.0]]]));
+        store.insert_ready(&doc).unwrap();
+        let loaded = store.load_ink(id).unwrap().expect("ink");
+        assert_eq!(loaded, vec![vec![[1.0, 2.0, 0.0], [3.0, 4.0, 12.0]]]);
+        store.delete(id).unwrap();
+        assert!(!root.join(format!("snips/{id}.ink.json")).exists());
+        assert!(store.load_ink(id).unwrap().is_none());
     }
 
     #[test]

@@ -6,5 +6,7 @@
 *.swp
 .DS_Store
 *.onnx
+# Handwriting ONNX + vocab ship via GitHub release, not git.
+/models/handwriting/
 # Host-specific linker flags; see .cargo/config.toml.example
 /.cargo/config.toml

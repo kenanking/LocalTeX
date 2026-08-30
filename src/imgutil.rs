@@ -178,7 +178,14 @@ pub fn crop(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> RgbaImage {
     imageops::crop_imm(img, x, y, w, h).to_image()
 }
 
-/// Rasterize window-space polylines to a tight white crop for OCR.
+/// Rasterize window-space polylines to a tight white crop for the library PNG.
+pub fn traces_xy(traces: &[Vec<[f32; 3]>]) -> Vec<Vec<(f32, f32)>> {
+    traces
+        .iter()
+        .map(|line| line.iter().map(|p| (p[0], p[1])).collect())
+        .collect()
+}
+
 pub fn rasterize_strokes(lines: &[Vec<(f32, f32)>], stroke: u32) -> Option<RgbaImage> {
     let mut min_x = f32::MAX;
     let mut min_y = f32::MAX;
@@ -282,6 +289,12 @@ mod tests {
         let img = rasterize_strokes(&[vec![(10.0, 10.0), (40.0, 12.0)]], 3).unwrap();
         assert!(img.width() >= 64);
         assert!(img.pixels().any(|p| p.0[0] < 40));
+    }
+
+    #[test]
+    fn traces_xy_drops_time() {
+        let xy = traces_xy(&[vec![[1.0, 2.0, 9.0], [3.0, 4.0, 10.0]]]);
+        assert_eq!(xy, vec![vec![(1.0, 2.0), (3.0, 4.0)]]);
     }
 
     #[test]

@@ -20,13 +20,14 @@ impl AppState {
                 self.pump_file_ingest(cx);
             }
             IngestSource::Strokes(pts) => {
+                let xy = crate::imgutil::traces_xy(&pts);
                 cx.spawn(async move |this, cx| {
                     let img = cx
-                        .background_spawn(async move { crate::imgutil::rasterize_strokes(&pts, 3) })
+                        .background_spawn(async move { crate::imgutil::rasterize_strokes(&xy, 3) })
                         .await;
                     if let Err(err) = this.update(cx, |this, cx| {
                         if let Some(img) = img {
-                            this.ingest_pixels(img, cx);
+                            this.ingest_drawing(pts, img, cx);
                         } else {
                             this.flash_capture_error("That drawing is empty", cx);
                         }
@@ -51,6 +52,22 @@ impl AppState {
             );
         }
         let doc = Document::pending(Arc::new(image));
+        let id = doc.id;
+        self.library.insert_newest(doc);
+        self.enqueue_ocr(id, cx);
+        cx.notify();
+    }
+
+    fn ingest_drawing(
+        &mut self,
+        traces: Vec<Vec<[f32; 3]>>,
+        image: RgbaImage,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture.set(Capture::Idle);
+        let image = crate::imgutil::cap_megapixels(image);
+        let mut doc = Document::pending(Arc::new(image));
+        doc.ink = Some(Arc::new(traces));
         let id = doc.id;
         self.library.insert_newest(doc);
         self.enqueue_ocr(id, cx);
@@ -105,10 +122,26 @@ impl AppState {
             self.pump_ocr(cx);
             return;
         };
+        let ink = self.library.get(id).and_then(|d| d.ink.clone());
+        let size = (image.width(), image.height());
         let engine = self.engine.clone();
+        let store = self.store.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { engine.recognize(image.as_ref()) })
+                .background_spawn(async move {
+                    let traces = match ink {
+                        Some(t) => Some(t),
+                        None => store
+                            .as_ref()
+                            .and_then(|s| s.load_ink(id).ok().flatten())
+                            .map(Arc::new),
+                    };
+                    if let Some(traces) = traces {
+                        engine.recognize_ink(traces.as_ref(), size)
+                    } else {
+                        engine.recognize(image.as_ref())
+                    }
+                })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 if let Some(doc) = this.library.get_mut(id) {

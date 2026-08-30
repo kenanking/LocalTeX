@@ -269,6 +269,7 @@ pub struct Document {
     pub persisted: bool,
     pub blocks_loaded: bool,
     pub ocr: Option<OcrMeta>,
+    pub ink: Option<Arc<Vec<Vec<[f32; 3]>>>>,
     pub revision: u64,
 }
 
@@ -285,6 +286,7 @@ impl Document {
             persisted: false,
             blocks_loaded: true,
             ocr: None,
+            ink: None,
             revision: 0,
         }
     }
@@ -305,6 +307,7 @@ impl Document {
             persisted: true,
             blocks_loaded: false,
             ocr: item.ocr,
+            ink: None,
             revision: 0,
         }
     }
