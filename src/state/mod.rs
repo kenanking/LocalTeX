@@ -98,6 +98,11 @@ impl AppState {
         Ok(stolen)
     }
 
+    pub fn unbind_shortcut(&mut self, id: ShortcutId, cx: &mut Context<Self>) {
+        keymap::unbind(&mut self.prefs.shortcuts, id);
+        self.commit_shortcuts(cx);
+    }
+
     pub fn reset_shortcuts(&mut self, cx: &mut Context<Self>) {
         keymap::reset(&mut self.prefs.shortcuts);
         self.commit_shortcuts(cx);

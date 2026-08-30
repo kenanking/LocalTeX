@@ -28,10 +28,9 @@ pub(super) fn shortcuts_page(
                 .gap_3()
                 .px_1()
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(theme::MUTED))
-                        .child("Click a shortcut to rebind it. Esc cancels."),
+                    div().text_sm().text_color(rgb(theme::MUTED)).child(
+                        "Click a shortcut, then press the new keys. Esc cancels. × removes it.",
+                    ),
                 )
                 .child(btn(
                     "sc-reset-all",
@@ -116,60 +115,106 @@ fn shortcut_row(
                 .bg(theme::accent_soft())
         });
     if listening {
-        keys = keys.child(
-            div()
-                .size(px(7.))
-                .rounded_full()
-                .bg(rgb(theme::ACCENT))
-                .flex_shrink_0(),
-        );
-    }
-    keys = match &chord {
-        Some(c) => {
-            let mut row = keys;
-            for chip in keymap::chips(c) {
-                row = row.child(kbd_chip(chip));
+        keys = keys
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded_full()
+                    .bg(rgb(theme::ACCENT))
+                    .flex_shrink_0(),
+            )
+            .child(
+                div()
+                    .w(px(1.5))
+                    .h(px(13.))
+                    .bg(rgb(theme::ACCENT))
+                    .flex_shrink_0(),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(theme::ACCENT))
+                    .child("Press a shortcut"),
+            );
+    } else {
+        keys = match &chord {
+            Some(c) => {
+                let mut row = keys;
+                for chip in keymap::chips(c) {
+                    row = row.child(kbd_chip(chip));
+                }
+                row
             }
-            row
-        }
-        None => keys.child(
-            div()
-                .px_2()
-                .text_sm()
-                .italic()
-                .text_color(rgb(theme::MUTED))
-                .child("Unbound"),
-        ),
-    };
+            None => keys.child(
+                div()
+                    .px_2()
+                    .text_sm()
+                    .italic()
+                    .text_color(rgb(theme::MUTED))
+                    .child("Unbound"),
+            ),
+        };
+    }
 
     let mut right = div().flex().items_center().gap_1().child(keys);
-    if customized && !listening {
-        right = right.child(
-            div()
-                .id(SharedString::from(format!(
-                    "sc-reset-hit-{}",
-                    spec.id.as_str()
-                )))
-                .on_click(move |_, _, cx| cx.stop_propagation())
-                .child(icon_btn_sized(
-                    SharedString::from(format!("sc-reset-{}", spec.id.as_str())),
-                    IconKind::Reset,
-                    "Reset to default",
-                    false,
-                    true,
-                    IconBtnSize {
-                        hit: px(24.),
-                        glyph: px(14.),
-                        kbd: None,
-                    },
-                    move |_, cx| {
-                        cx.stop_propagation();
-                        state.update(cx, |s, cx| {
-                            let _ = s.restore_shortcut(id, cx);
-                        });
-                    },
-                )),
-        );
+    if !listening {
+        if chord.is_some() {
+            let close_state = state.clone();
+            right = right.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "sc-unbind-hit-{}",
+                        spec.id.as_str()
+                    )))
+                    .on_click(move |_, _, cx| cx.stop_propagation())
+                    .child(icon_btn_sized(
+                        SharedString::from(format!("sc-unbind-{}", spec.id.as_str())),
+                        IconKind::Close,
+                        "Remove shortcut",
+                        false,
+                        true,
+                        IconBtnSize {
+                            hit: px(24.),
+                            glyph: px(14.),
+                            kbd: None,
+                        },
+                        move |_, cx| {
+                            cx.stop_propagation();
+                            close_state.update(cx, |s, cx| {
+                                s.unbind_shortcut(id, cx);
+                            });
+                        },
+                    )),
+            );
+        }
+        if customized {
+            right = right.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "sc-reset-hit-{}",
+                        spec.id.as_str()
+                    )))
+                    .on_click(move |_, _, cx| cx.stop_propagation())
+                    .child(icon_btn_sized(
+                        SharedString::from(format!("sc-reset-{}", spec.id.as_str())),
+                        IconKind::Reset,
+                        "Reset to default",
+                        false,
+                        true,
+                        IconBtnSize {
+                            hit: px(24.),
+                            glyph: px(14.),
+                            kbd: None,
+                        },
+                        move |_, cx| {
+                            cx.stop_propagation();
+                            state.update(cx, |s, cx| {
+                                let _ = s.restore_shortcut(id, cx);
+                            });
+                        },
+                    )),
+            );
+        }
     }
 
     div()

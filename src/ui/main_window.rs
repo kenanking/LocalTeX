@@ -181,6 +181,17 @@ impl MainWindow {
             ) {
                 return;
             }
+            if matches!(key, "backspace" | "delete") {
+                let state = this.read(cx).state.clone();
+                state.update(cx, |s, cx| {
+                    s.unbind_shortcut(id, cx);
+                });
+                settings.update(cx, |pane, cx| {
+                    pane.set_listen(None);
+                    cx.notify();
+                });
+                return;
+            }
             let chord = event.keystroke.unparse();
             let state = this.read(cx).state.clone();
             state.update(cx, |s, cx| {

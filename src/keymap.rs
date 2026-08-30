@@ -199,6 +199,10 @@ pub fn restore(over: &mut Overrides, id: ShortcutId) -> Result<Option<ShortcutId
     assign(over, id, spec(id).default.to_string())
 }
 
+pub fn unbind(over: &mut Overrides, id: ShortcutId) {
+    over.insert(id, None);
+}
+
 pub fn reset(over: &mut Overrides) {
     over.clear();
 }
@@ -468,5 +472,39 @@ mod tests {
     fn normalize_rejects_modifier_only() {
         assert_eq!(normalize("ctrl"), Err(AssignError::ModifierOnly));
         assert_eq!(normalize("Ctrl-Shift-S").unwrap(), "ctrl-shift-s");
+    }
+
+    #[test]
+    fn unbind_required_stores_null() {
+        let mut over = Overrides::new();
+        unbind(&mut over, ShortcutId::Copy);
+        assert_eq!(over.get(&ShortcutId::Copy), Some(&None));
+        assert_eq!(effective(&over, ShortcutId::Copy), None);
+        assert!(is_customized(&over, ShortcutId::Copy));
+    }
+
+    #[test]
+    fn restore_after_unbind_brings_default_back() {
+        let mut over = Overrides::new();
+        unbind(&mut over, ShortcutId::Copy);
+        restore(&mut over, ShortcutId::Copy).unwrap();
+        assert_eq!(
+            effective(&over, ShortcutId::Copy).as_deref(),
+            Some("ctrl-c")
+        );
+        assert!(!is_customized(&over, ShortcutId::Copy));
+        assert!(over.is_empty());
+    }
+
+    #[test]
+    fn unbind_then_assign_new_chord() {
+        let mut over = Overrides::new();
+        unbind(&mut over, ShortcutId::Draw);
+        assert_eq!(effective(&over, ShortcutId::Draw), None);
+        assign(&mut over, ShortcutId::Draw, "ctrl-shift-d".into()).unwrap();
+        assert_eq!(
+            effective(&over, ShortcutId::Draw).as_deref(),
+            Some("ctrl-shift-d")
+        );
     }
 }
