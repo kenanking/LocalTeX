@@ -39,8 +39,10 @@ pub enum WindowCloseAction {
 pub struct Prefs {
     #[serde(default)]
     pub default_fmt: ExportFmt,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub autocopy: bool,
+    #[serde(default)]
+    pub copy_habit: crate::doc::CopyHabit,
     #[serde(default = "default_true")]
     pub show_original: bool,
     #[serde(default = "default_true")]
@@ -81,7 +83,8 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             default_fmt: ExportFmt::Markdown,
-            autocopy: false,
+            autocopy: true,
+            copy_habit: crate::doc::CopyHabit::default(),
             show_original: true,
             hide_on_capture: true,
             close_action: WindowCloseAction::Minimize,
@@ -153,6 +156,22 @@ mod tests {
         assert_eq!(p.wrap_block("x^2"), "$$\nx^2\n$$");
         assert_eq!(p.close_action, WindowCloseAction::Minimize);
         assert!(p.hide_on_capture);
+        assert!(p.autocopy);
+    }
+
+    #[test]
+    fn autocopy_false_in_json_stays_off_omitted_is_on() {
+        let p: Prefs = serde_json::from_str(r#"{"autocopy":false}"#).unwrap();
+        assert!(!p.autocopy);
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(p.autocopy);
+    }
+
+    #[test]
+    fn copy_habit_unknown_id_does_not_fail_prefs() {
+        let p: Prefs =
+            serde_json::from_str(r#"{"copy_habit":{"formula":"not_a_kind"}}"#).unwrap();
+        assert_eq!(p.copy_habit.preferred(crate::doc::SnipKind::Formula), None);
     }
 
     #[test]

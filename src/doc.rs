@@ -227,6 +227,84 @@ impl CopyKind {
             CopyKind::Tsv => "TSV",
         }
     }
+
+    /// Coarse fallback used when the habit slot is empty or inapplicable.
+    pub fn primary(snip: SnipKind, fmt: ExportFmt) -> Self {
+        match (snip, fmt) {
+            (SnipKind::Formula, ExportFmt::Markdown) => Self::MdDisplay,
+            (SnipKind::Formula, ExportFmt::Latex) => Self::Latex,
+            (SnipKind::Table, ExportFmt::Markdown) => Self::MdTable,
+            (SnipKind::Table, ExportFmt::Latex) => Self::LatexTable,
+            (SnipKind::Mixed, ExportFmt::Markdown) => Self::Markdown,
+            (SnipKind::Mixed, ExportFmt::Latex) => Self::LatexDoc,
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.id() == id)
+    }
+}
+
+impl Serialize for CopyKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.id())
+    }
+}
+
+/// Last text copy per snip kind. PNG is not represented.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopyHabit {
+    #[serde(default, deserialize_with = "de_opt_copy_kind")]
+    formula: Option<CopyKind>,
+    #[serde(default, deserialize_with = "de_opt_copy_kind")]
+    table: Option<CopyKind>,
+    #[serde(default, deserialize_with = "de_opt_copy_kind")]
+    mixed: Option<CopyKind>,
+}
+
+impl CopyHabit {
+    fn slot(&self, snip: SnipKind) -> Option<CopyKind> {
+        match snip {
+            SnipKind::Formula => self.formula,
+            SnipKind::Table => self.table,
+            SnipKind::Mixed => self.mixed,
+        }
+    }
+
+    fn slot_mut(&mut self, snip: SnipKind) -> &mut Option<CopyKind> {
+        match snip {
+            SnipKind::Formula => &mut self.formula,
+            SnipKind::Table => &mut self.table,
+            SnipKind::Mixed => &mut self.mixed,
+        }
+    }
+
+    /// No-op if `kind` does not apply. Returns whether the stored value changed.
+    pub fn remember(&mut self, snip: SnipKind, kind: CopyKind) -> bool {
+        if !kind.applies_to(snip) {
+            return false;
+        }
+        let slot = self.slot_mut(snip);
+        if *slot == Some(kind) {
+            return false;
+        }
+        *slot = Some(kind);
+        true
+    }
+
+    pub fn preferred(&self, snip: SnipKind) -> Option<CopyKind> {
+        self.slot(snip).filter(|k| k.applies_to(snip))
+    }
+
+    pub fn resolve(&self, snip: SnipKind, fmt: ExportFmt) -> CopyKind {
+        self.preferred(snip)
+            .unwrap_or_else(|| CopyKind::primary(snip, fmt))
+    }
+}
+
+fn de_opt_copy_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CopyKind>, D::Error> {
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(raw.and_then(|s| CopyKind::from_id(&s)))
 }
 
 #[derive(Clone)]
@@ -385,17 +463,13 @@ impl Document {
     }
 
     pub fn primary_copy(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
+        self.text_for(CopyKind::primary(self.snip_kind(), fmt), prefs)
+    }
+
+    pub fn text_for(&self, kind: CopyKind, prefs: &crate::prefs::Prefs) -> String {
         let rows = self.copy_rows(prefs);
-        let want = match (self.snip_kind(), fmt) {
-            (SnipKind::Formula, ExportFmt::Markdown) => CopyKind::MdDisplay,
-            (SnipKind::Formula, ExportFmt::Latex) => CopyKind::Latex,
-            (SnipKind::Table, ExportFmt::Markdown) => CopyKind::MdTable,
-            (SnipKind::Table, ExportFmt::Latex) => CopyKind::LatexTable,
-            (SnipKind::Mixed, ExportFmt::Markdown) => CopyKind::Markdown,
-            (SnipKind::Mixed, ExportFmt::Latex) => CopyKind::LatexDoc,
-        };
         rows.iter()
-            .find(|r| r.kind == want)
+            .find(|r| r.kind == kind)
             .or(rows.first())
             .map(|r| r.text.clone())
             .unwrap_or_default()
@@ -485,6 +559,62 @@ mod tests {
             w: 10,
             h: 10,
         }
+    }
+
+    #[test]
+    fn copy_habit_ignores_inapplicable_and_isolates_kinds() {
+        let mut h = CopyHabit::default();
+        assert!(!h.remember(SnipKind::Formula, CopyKind::Tsv));
+        assert_eq!(
+            h.resolve(SnipKind::Formula, ExportFmt::Markdown),
+            CopyKind::MdDisplay
+        );
+
+        assert!(h.remember(SnipKind::Table, CopyKind::Tsv));
+        assert!(!h.remember(SnipKind::Table, CopyKind::Tsv));
+        assert_eq!(
+            h.resolve(SnipKind::Formula, ExportFmt::Markdown),
+            CopyKind::MdDisplay
+        );
+        assert_eq!(h.resolve(SnipKind::Table, ExportFmt::Latex), CopyKind::Tsv);
+    }
+
+    #[test]
+    fn copy_habit_preferred_drops_inapplicable_slot() {
+        let h: CopyHabit = serde_json::from_str(r#"{"formula":"md_table"}"#).unwrap();
+        assert_eq!(h.preferred(SnipKind::Formula), None);
+        assert_eq!(
+            h.resolve(SnipKind::Formula, ExportFmt::Latex),
+            CopyKind::Latex
+        );
+    }
+
+    #[test]
+    fn copy_habit_unknown_id_is_none_for_that_slot() {
+        let h: CopyHabit =
+            serde_json::from_str(r#"{"formula":"not_a_kind","table":"tsv"}"#).unwrap();
+        assert_eq!(h.preferred(SnipKind::Formula), None);
+        assert_eq!(h.preferred(SnipKind::Table), Some(CopyKind::Tsv));
+    }
+
+    #[test]
+    fn primary_copy_shares_kind_table_with_habit_resolve() {
+        let mut doc = Document::pending(Arc::new(RgbaImage::new(1, 1)));
+        doc.status = DocStatus::Ready;
+        doc.blocks = vec![Block::new(BlockKind::Formula, rect(0), r"x^{2}")];
+        let prefs = crate::prefs::Prefs::default();
+        assert_eq!(
+            doc.primary_copy(ExportFmt::Markdown, &prefs),
+            doc.text_for(
+                CopyKind::primary(SnipKind::Formula, ExportFmt::Markdown),
+                &prefs
+            )
+        );
+        let habit = CopyHabit::default();
+        assert_eq!(
+            habit.resolve(SnipKind::Formula, ExportFmt::Markdown),
+            CopyKind::primary(SnipKind::Formula, ExportFmt::Markdown)
+        );
     }
 
     #[test]

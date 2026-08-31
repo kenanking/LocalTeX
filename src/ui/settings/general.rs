@@ -35,7 +35,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                     &state,
                     "pref-copy",
                     "Copy result automatically",
-                    "Copies the primary format for this snip (Ctrl+C).",
+                    "Copies the last text format you used for this kind of snip, or the primary format.",
                     prefs.autocopy,
                     |p, v| p.autocopy = v,
                 ),
