@@ -141,7 +141,7 @@ impl Store {
         .map_err(|e| anyhow!("load thumb: {e}"))
     }
 
-    pub fn png_missing(&self, id: Uuid) -> Result<bool> {
+    fn image_path(&self, id: Uuid) -> Result<PathBuf> {
         let rel = {
             let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
             conn.query_row(
@@ -150,7 +150,20 @@ impl Store {
                 |row| row.get::<_, String>(0),
             )?
         };
-        Ok(!self.root.join(rel).is_file())
+        Ok(self.root.join(rel))
+    }
+
+    #[cfg(test)]
+    pub fn png_missing(&self, id: Uuid) -> Result<bool> {
+        Ok(!self.image_path(id)?.is_file())
+    }
+
+    pub fn png_path(&self, id: Uuid) -> Result<PathBuf> {
+        let path = self.image_path(id)?;
+        if !path.is_file() {
+            return Err(anyhow!("png missing"));
+        }
+        Ok(path)
     }
 
     pub fn load_blocks(&self, id: Uuid) -> Result<Vec<Block>> {
@@ -164,19 +177,7 @@ impl Store {
     }
 
     pub fn load_png(&self, id: Uuid) -> Result<image::RgbaImage> {
-        if self.png_missing(id)? {
-            return Err(anyhow!("png missing"));
-        }
-        let rel = {
-            let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-            conn.query_row(
-                "SELECT image_relpath FROM snips WHERE id = ?1",
-                params![id.to_string()],
-                |row| row.get::<_, String>(0),
-            )?
-        };
-        let path = self.root.join(rel);
-        imgutil::decode_png_file(&path)
+        imgutil::decode_png_file(&self.png_path(id)?)
     }
 
     pub fn insert_ready(&self, doc: &Document) -> Result<Vec<u8>> {
@@ -592,6 +593,27 @@ mod tests {
         let root = std::env::temp_dir().join(format!("localtex-store-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         (Store::open(root.clone()).unwrap(), root)
+    }
+
+    #[test]
+    fn png_path_round_trips_after_insert_ready() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("hello", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        let path = store.png_path(id).unwrap();
+        assert_eq!(path, root.join(format!("snips/{id}.png")));
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn png_path_errors_when_file_missing() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("hello", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        std::fs::remove_file(root.join(format!("snips/{id}.png"))).unwrap();
+        assert!(store.png_path(id).is_err());
     }
 
     #[test]

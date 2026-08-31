@@ -138,6 +138,25 @@ pub fn decode_clipboard_image(bytes: Vec<u8>) -> anyhow::Result<image::RgbaImage
     }
 }
 
+/// Write PNG bytes to the system clipboard so other apps can paste the image.
+///
+/// GPUI 0.2's X11 `write_to_clipboard` only calls `set_text`.
+pub fn write_clipboard_png(png: Vec<u8>, cx: &mut gpui::App) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = cx;
+        linux::write_clipboard_png(png)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_image(&gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            png,
+        )));
+        Ok(())
+    }
+}
+
 /// Native snip overlay. Returns `Ok(None)` if the user cancelled.
 /// Must run off the GPUI thread. Never opens a second GPUI/Vulkan window.
 pub fn select_region(

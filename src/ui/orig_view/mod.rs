@@ -1,7 +1,10 @@
 //! Original-image gallery overlay: contain-fit, wheel zoom, pan, click-to-close.
 
+mod chrome;
 mod geom;
 mod overlay;
+
+pub(crate) use chrome::{orig_action_capsule, orig_hud_disc};
 
 use std::cell::RefCell;
 use std::rc::Rc;

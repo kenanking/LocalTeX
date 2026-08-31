@@ -8,6 +8,7 @@ use super::super::main_window::MainWindow;
 use super::super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::super::theme;
 use super::super::widgets::IconKind;
+use super::chrome::{hud_pill, orig_action_capsule, orig_hud_disc};
 use super::geom::{
     film_content_w, film_pan_offset, zoom_factor_for_wheel, zoom_percent, FILM_GAP, FILM_H,
     FILM_PAD_X, FILM_THUMB_H, FILM_THUMB_W, FOOTER_H, TOPBAR_H, ZOOM_PILL_W,
@@ -21,7 +22,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl gpui::IntoElement {
         self.ensure_selected_full(cx);
-        let (ids, selected, age, idx) = {
+        let (ids, selected, age, idx, copy_flashed, reveal_enabled) = {
             let state = self.state.read(cx);
             let ids = state.visible_ids().to_vec();
             let selected = state.selected();
@@ -30,7 +31,9 @@ impl MainWindow {
                 .map(|d| d.age_label())
                 .unwrap_or_default();
             let idx = selected.and_then(|id| ids.iter().position(|x| *x == id));
-            (ids, selected, age, idx)
+            let copy_flashed = selected.is_some_and(|id| state.orig_copy_flashed(id));
+            let reveal_enabled = selected.is_some_and(|id| state.can_reveal_original(id));
+            (ids, selected, age, idx, copy_flashed, reveal_enabled)
         };
         if let Some(id) = selected {
             if self.orig.on_new_image(id) {
@@ -111,7 +114,7 @@ impl MainWindow {
                 }),
             )
             .child(self.render_orig_stage(full, at_start, at_end, cx))
-            .child(self.render_orig_hud(&counter, pct, cx))
+            .child(self.render_orig_hud(&counter, pct, selected, copy_flashed, reveal_enabled, cx))
             .child(self.render_orig_film(&thumbs, selected, cx))
     }
 
@@ -278,8 +281,12 @@ impl MainWindow {
         &self,
         counter: &str,
         pct: i32,
+        selected: Option<Uuid>,
+        copy_flashed: bool,
+        reveal_enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl gpui::IntoElement {
+        let entity = cx.entity();
         div()
             .absolute()
             .top(px(12.))
@@ -307,32 +314,24 @@ impl MainWindow {
                     .child(SharedString::from(format!("{pct}%"))),
             )
             .child(div().flex_1())
-            .child(
-                div()
-                    .id("orig-close")
-                    .size(px(28.))
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme::hud_pill())
-                    .border_1()
-                    .border_color(rgba(0xffffff14))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _, window, cx| {
+            .when_some(selected, |d, doc_id| {
+                d.child(orig_action_capsule(
+                    doc_id,
+                    copy_flashed,
+                    reveal_enabled,
+                    "hud",
+                    cx,
+                ))
+            })
+            .child(orig_hud_disc("hud-close", IconKind::Close, "Close", {
+                move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
                         this.unzoom();
                         window.focus(&this.snip_list_focus);
                         cx.notify();
-                    }))
-                    .hover(|d| d.bg(theme::hud_pill_hover()))
-                    .child(
-                        svg()
-                            .path(IconKind::Close.asset_path())
-                            .size(px(14.))
-                            .text_color(rgb(0xffffff)),
-                    ),
-            )
+                    });
+                }
+            }))
     }
 
     fn render_orig_film(
@@ -467,21 +466,6 @@ impl MainWindow {
                 ScrollbarTone::OnDark,
             ))
     }
-}
-
-fn hud_pill() -> gpui::Div {
-    div()
-        .h(px(26.))
-        .px(px(10.))
-        .rounded_full()
-        .flex()
-        .items_center()
-        .bg(theme::hud_pill())
-        .border_1()
-        .border_color(rgba(0xffffff14))
-        .text_color(rgb(0xececef))
-        .text_xs()
-        .whitespace_nowrap()
 }
 
 fn nav_disc(

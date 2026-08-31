@@ -44,6 +44,8 @@ image = { version = "0.25", default-features = false, features = ["png", "ico"] 
 # blocking = no extra tokio runtime (0.3 default is async).
 ksni = { version = "0.3", features = ["blocking"] }
 x11rb = { version = "0.13", features = ["image"] }
+# Direct PNG CLIPBOARD write; GPUI 0.2 X11 write_to_clipboard is text-only.
+x11-clipboard = "0.9"
 # statvfs + sysconf for the settings System tab.
 libc = "0.2"
 

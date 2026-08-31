@@ -322,7 +322,7 @@ impl Document {
             DocStatus::Failed(err) => format!("Failed: {err}"),
             DocStatus::Ready => {
                 if !self.first_line.is_empty() {
-                    self.first_line.clone()
+                    collapse_preview_line(&self.first_line)
                 } else {
                     ready_first_line(&self.blocks)
                 }
@@ -430,9 +430,20 @@ fn ready_first_line(blocks: &[Block]) -> String {
         .find(|b| !b.text.trim().is_empty())
         .map(|b| match b.kind {
             BlockKind::Table => table_preview_line(&b.text),
-            _ => b.text.chars().take(48).collect(),
+            _ => collapse_preview_line(&b.text),
         })
         .unwrap_or_else(|| "(empty)".into())
+}
+
+/// Sidebar / library titles are one line. OCR file lists keep blank lines in
+/// `Block.text` (correct for preview); collapse them here, not in OCR.
+fn collapse_preview_line(text: &str) -> String {
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        "(empty)".into()
+    } else {
+        collapsed.chars().take(48).collect()
+    }
 }
 
 fn table_preview_line(html: &str) -> String {
@@ -716,5 +727,32 @@ mod tests {
                 .any(|b| matches!(b, crate::preview::PreviewBlock::Table(_))),
             "promoted HTML must typeset as a table, got {preview:?}"
         );
+    }
+
+    #[test]
+    fn first_line_collapses_blank_lines_in_text_block() {
+        let blocks = vec![Block::new(
+            BlockKind::Text,
+            rect(0),
+            "build.rs\n\nCargo.lock\n\nCargo.toml\n\nLICENSE\n\nREADME.md\n\nrustfmt.toml",
+        )];
+        let line = ready_first_line(&blocks);
+        assert!(
+            !line.contains('\n') && !line.contains('\r'),
+            "sidebar title must be one line, got {line:?}"
+        );
+        assert!(
+            line.starts_with("build.rs Cargo.lock"),
+            "expected collapsed file names, got {line:?}"
+        );
+        assert!(line.chars().count() <= 48, "{line:?}");
+    }
+
+    #[test]
+    fn first_line_getter_collapses_stored_newlines() {
+        let mut doc = Document::pending(Arc::new(RgbaImage::new(1, 1)));
+        doc.status = DocStatus::Ready;
+        doc.first_line = "build.rs\n\nCargo.lock\n\nCargo.toml".into();
+        assert_eq!(doc.first_line(), "build.rs Cargo.lock Cargo.toml");
     }
 }

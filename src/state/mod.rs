@@ -16,6 +16,7 @@ use crate::ui::MainWindow;
 
 mod capture;
 mod ingest;
+mod orig_export;
 mod search;
 mod session;
 
@@ -32,6 +33,8 @@ pub struct AppState {
     search: SearchFilter,
     ingest: IngestPump,
     capture: CaptureSession,
+    orig_copy_flash: Option<Uuid>,
+    orig_copy_flash_gen: u64,
     pub main_window: Option<WindowHandle<MainWindow>>,
 }
 
@@ -63,6 +66,8 @@ impl AppState {
             search: SearchFilter::new(),
             ingest: IngestPump::new(),
             capture: CaptureSession::new(),
+            orig_copy_flash: None,
+            orig_copy_flash_gen: 0,
             main_window: None,
         }
     }

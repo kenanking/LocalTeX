@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 
 use ksni::blocking::TrayMethods;
@@ -85,6 +86,26 @@ fn send(tx: &Sender<DesktopCmd>, cmd: DesktopCmd) {
     if let Err(err) = tx.send(cmd) {
         eprintln!("{APP_SLUG}: tray send: {err}");
     }
+}
+
+/// GPUI 0.2's X11 `write_to_clipboard` only calls `set_text`. Keep a native
+/// `x11-clipboard` connection alive; dropping it kills the setter thread.
+pub fn write_clipboard_png(png: Vec<u8>) -> anyhow::Result<()> {
+    thread_local! {
+        static CLIP: RefCell<Option<(x11_clipboard::Clipboard, x11_clipboard::Atom)>> =
+            const { RefCell::new(None) };
+    }
+    CLIP.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            let clip = x11_clipboard::Clipboard::new()?;
+            let atom = clip.setter.get_atom("image/png")?;
+            *slot = Some((clip, atom));
+        }
+        let (clip, atom) = slot.as_ref().expect("clipboard");
+        clip.store(clip.setter.atoms.clipboard, *atom, png)?;
+        Ok(())
+    })
 }
 
 /// GNOME ignores GPUI's ICCCM `WM_CHANGE_STATE` iconify. EWMH HIDDEN on the

@@ -61,6 +61,9 @@ pub enum IconKind {
     Word,
     Delete,
     Settings,
+    Copy,
+    Save,
+    Folder,
     Check,
     /// Magnifier asset is still bundled; the strip chip uses `Corners`.
     #[allow(dead_code)]
@@ -85,6 +88,9 @@ impl IconKind {
             Self::Word => "icons/word.svg",
             Self::Delete => "icons/delete.svg",
             Self::Settings => "icons/settings.svg",
+            Self::Copy => "icons/copy.svg",
+            Self::Save => "icons/save.svg",
+            Self::Folder => "icons/folder.svg",
             Self::Check => "icons/check.svg",
             Self::Zoom => "icons/zoom.svg",
             Self::Reset => "icons/reset.svg",
@@ -96,7 +102,7 @@ impl IconKind {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 20] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
@@ -107,6 +113,9 @@ impl IconKind {
         Self::Word,
         Self::Delete,
         Self::Settings,
+        Self::Copy,
+        Self::Save,
+        Self::Folder,
         Self::Check,
         Self::Zoom,
         Self::Reset,

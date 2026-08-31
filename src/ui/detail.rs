@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, rgba, svg, Context, Entity, MouseButton, RenderImage,
-    SharedString,
+    div, img, prelude::*, px, rgb, Context, Entity, MouseButton, RenderImage, SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
+use super::orig_view::{orig_action_capsule, orig_hud_disc};
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
 use super::widgets::{
@@ -58,7 +58,22 @@ impl MainWindow {
         let image_missing = snap.image_missing;
         let can_retry = snap.can_retry;
         let ocr = snap.ocr;
-        let orig = self.render_orig_strip(doc_id, full, orig_hover, image_missing, cx);
+        let (orig_copied, reveal_enabled) = {
+            let state = self.state.read(cx);
+            (
+                state.orig_copy_flashed(doc_id),
+                state.can_reveal_original(doc_id),
+            )
+        };
+        let orig = self.render_orig_strip(
+            doc_id,
+            full,
+            orig_hover,
+            orig_copied,
+            reveal_enabled,
+            image_missing,
+            cx,
+        );
 
         if ready && self.preview.bar_pending {
             if self.preview.hscroll_bounds_ready() {
@@ -182,6 +197,8 @@ impl MainWindow {
         doc_id: Uuid,
         full: Option<Arc<RenderImage>>,
         hovered: bool,
+        copied: bool,
+        reveal_enabled: bool,
         missing: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -189,9 +206,10 @@ impl MainWindow {
             return div()
                 .px_4()
                 .pt_3()
-                .child(missing_image_slot(px(720.), px(96.)).w_full())
+                .child(missing_image_slot(px(720.), px(ORIG_STRIP_H)).w_full())
                 .into_any();
         }
+        let entity = cx.entity();
         div()
             .px_4()
             .pt_3()
@@ -200,80 +218,77 @@ impl MainWindow {
                     .id("orig-thumb")
                     .relative()
                     .w_full()
-                    .h(px(96.))
+                    .h(px(ORIG_STRIP_H))
                     .rounded_md()
                     .bg(rgb(theme::BG_SUNKEN))
                     .border_1()
                     .border_color(rgb(theme::BORDER))
                     .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .justify_center()
                     .when_some(full.clone(), |d, img_data| {
                         d.child(
                             img(img_data)
                                 .w_full()
-                                .h(px(96.))
+                                .h(px(ORIG_STRIP_H))
                                 .object_fit(gpui::ObjectFit::Contain),
                         )
                     })
-                    .child(
-                        div()
-                            .id("orig-hit")
-                            .absolute()
-                            .top(px(0.))
-                            .left(px(0.))
-                            .w_full()
-                            .h(px(96.))
-                            .occlude()
-                            .when(full.is_some(), |d| {
-                                d.cursor_pointer()
-                                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                        if this.orig.strip_hover != *hovered {
-                                            this.orig.strip_hover = *hovered;
-                                            cx.notify();
-                                        }
-                                    }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.zoom_original(doc_id, window, cx);
-                                    }))
-                            })
-                            .when(hovered && full.is_some(), |d| {
-                                d.child(
-                                    div()
-                                        .id("orig-zoom-btn")
-                                        .absolute()
-                                        .top(px(8.))
-                                        .right(px(8.))
-                                        .size(px(28.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .bg(theme::hud_pill())
-                                        .border_1()
-                                        .border_color(rgba(0xffffff47))
-                                        .cursor_pointer()
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_click({
-                                            let entity = cx.entity();
-                                            move |_, window, cx| {
-                                                entity.update(cx, |this, cx| {
-                                                    this.zoom_original(doc_id, window, cx);
-                                                });
-                                            }
-                                        })
-                                        .child(
-                                            svg()
-                                                .path(IconKind::Corners.asset_path())
-                                                .size(px(14.))
-                                                .text_color(rgb(0xffffff)),
-                                        ),
-                                )
-                            }),
-                    ),
+                    .when(full.is_some(), |d| {
+                        d.child(
+                            div()
+                                .id("orig-hit")
+                                .absolute()
+                                .inset_0()
+                                .occlude()
+                                .cursor_pointer()
+                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                    if this.orig.strip_hover != *hovered {
+                                        this.orig.strip_hover = *hovered;
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.zoom_original(doc_id, window, cx);
+                                }))
+                                .flex()
+                                .items_start()
+                                .justify_end()
+                                .pt(px(8.))
+                                .pr(px(8.))
+                                .when(hovered, |d| {
+                                    d.child(
+                                        div()
+                                            .id("strip-actions")
+                                            .h(px(28.))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .child(orig_action_capsule(
+                                                doc_id,
+                                                copied,
+                                                reveal_enabled,
+                                                "strip",
+                                                cx,
+                                            ))
+                                            .child(orig_hud_disc(
+                                                "strip-zoom",
+                                                IconKind::Corners,
+                                                "Open original",
+                                                {
+                                                    let entity = entity.clone();
+                                                    move |_, window, cx| {
+                                                        entity.update(cx, |this, cx| {
+                                                            this.zoom_original(doc_id, window, cx);
+                                                        });
+                                                    }
+                                                },
+                                            )),
+                                    )
+                                }),
+                        )
+                    }),
             )
             .into_any()
     }
@@ -356,6 +371,8 @@ struct DetailSnap {
     revision: u64,
     ready: bool,
 }
+
+const ORIG_STRIP_H: f32 = 96.;
 
 fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
     div()

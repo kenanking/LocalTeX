@@ -381,6 +381,7 @@ fn history_row(
         .id(SharedString::from(id.to_string()))
         .w_full()
         .h(px(row_h))
+        .overflow_hidden()
         .flex()
         .items_center()
         .when(!collapsed, |d| d.gap_2().px_2())
@@ -424,6 +425,8 @@ fn history_row(
                     .child(
                         div()
                             .text_xs()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
                             .text_ellipsis()
                             .text_color(rgb(theme::TEXT))
                             .child(SharedString::from(title)),
