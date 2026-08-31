@@ -85,6 +85,27 @@ pub(crate) fn clamp_neg(offset: f32, max: f32) -> f32 {
     offset.clamp(-max, 0.0)
 }
 
+/// Capture-phase move/up on the window. GPUI `on_mouse_move` on a thin
+/// handle dies once the cursor leaves the hitbox.
+pub fn attach_capture_mouse(
+    window: &mut Window,
+    on_move: impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static,
+    on_up: impl Fn(&MouseUpEvent, &mut App) + 'static,
+) {
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        on_move(event, window, cx);
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        on_up(event, cx);
+    });
+}
+
 /// Window-level mouse capture so scrollbar thumbs stay draggable after the
 /// cursor leaves the 12px hit target. GPUI `on_mouse_move` only fires when
 /// that element's hitbox is hovered.
@@ -161,33 +182,30 @@ impl Element for ThumbDragCatcher {
     ) {
         let drags = self.drags.clone();
         let view = self.view;
-        window.on_mouse_event({
-            let drags = drags.clone();
-            move |event: &MouseMoveEvent, phase, _window, cx| {
-                if phase != DispatchPhase::Capture {
-                    return;
-                }
-                let mut any = false;
-                for drag in &drags {
-                    if apply_thumb_drag(drag, event.position) {
-                        any = true;
+        attach_capture_mouse(
+            window,
+            {
+                let drags = drags.clone();
+                move |event, _window, cx| {
+                    let mut any = false;
+                    for drag in &drags {
+                        if apply_thumb_drag(drag, event.position) {
+                            any = true;
+                        }
+                    }
+                    if any {
+                        cx.notify(view);
                     }
                 }
-                if any {
-                    cx.notify(view);
-                }
-            }
-        });
-        window.on_mouse_event({
-            let drags = drags.clone();
-            move |event: &MouseUpEvent, phase, _, _| {
-                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+            },
+            move |event, _cx| {
+                if event.button == MouseButton::Left {
                     for drag in &drags {
                         drag.borrow_mut().take();
                     }
                 }
-            }
-        });
+            },
+        );
     }
 }
 

@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, App, Bounds, ClipboardItem, Context, CursorStyle,
-    DispatchPhase, Element, Entity, FocusHandle, Focusable, GlobalElementId, Image, LayoutId,
-    MouseButton, MouseMoveEvent, MouseUpEvent, RenderImage, ScrollHandle, Style, Timer, Window,
+    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
+    Focusable, Image, MouseButton, MouseMoveEvent, RenderImage, ScrollHandle, Timer, Window,
 };
 use uuid::Uuid;
 
@@ -21,7 +20,7 @@ use super::selectable::PreviewSel;
 use super::settings::SettingsPane;
 use super::source_editor::SourceEditor;
 use super::theme;
-use super::window_drag::WindowDrag;
+use super::window_drag::{WindowDrag, WindowDragCatcher};
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp,
     RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource, UploadImage,
@@ -659,7 +658,7 @@ impl MainWindow {
         .detach();
     }
 
-    fn apply_window_drag(
+    pub(crate) fn apply_window_drag(
         &mut self,
         ev: &MouseMoveEvent,
         window: &mut Window,
@@ -713,7 +712,7 @@ impl MainWindow {
         }
     }
 
-    fn end_window_drag(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn end_window_drag(&mut self, cx: &mut Context<Self>) {
         let Some(drag) = self.window_drag.take() else {
             return;
         };
@@ -844,7 +843,7 @@ impl gpui::Render for MainWindow {
                 ],
                 cx.entity_id(),
             ))
-            .child(SplitDragCatcher { view: cx.entity() })
+            .child(WindowDragCatcher { view: cx.entity() })
             .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
             .child(
                 div()
@@ -871,92 +870,5 @@ impl gpui::Render for MainWindow {
             )
             .child(self.render_footer(status_kind, status_label))
             .into_any_element()
-    }
-}
-
-/// GPUI `on_mouse_move` on a 12px handle dies once the cursor leaves it.
-/// Capture-phase listeners on the window match `ThumbDragCatcher`.
-struct SplitDragCatcher {
-    view: Entity<MainWindow>,
-}
-
-impl IntoElement for SplitDragCatcher {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for SplitDragCatcher {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<gpui::ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        (window.request_layout(Style::default(), [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: Bounds<gpui::Pixels>,
-        _state: &mut (),
-        _window: &mut Window,
-        _cx: &mut App,
-    ) {
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: Bounds<gpui::Pixels>,
-        _request: &mut (),
-        _prepaint: &mut (),
-        window: &mut Window,
-        _cx: &mut App,
-    ) {
-        let view = self.view.clone();
-        window.on_mouse_event({
-            let view = view.clone();
-            move |event: &MouseMoveEvent, phase, window, cx| {
-                if phase != DispatchPhase::Capture {
-                    return;
-                }
-                let active = view.read(cx).window_drag.is_some();
-                if !active {
-                    return;
-                }
-                view.update(cx, |this, cx| this.apply_window_drag(event, window, cx));
-            }
-        });
-        window.on_mouse_event({
-            let view = view.clone();
-            move |event: &MouseUpEvent, phase, _, cx| {
-                if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
-                    return;
-                }
-                let active = view.read(cx).window_drag.is_some();
-                if !active {
-                    return;
-                }
-                view.update(cx, |this, cx| this.end_window_drag(cx));
-            }
-        });
     }
 }
