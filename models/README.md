@@ -1,18 +1,33 @@
 # LocalTeX model card
 
-Weights stay on disk, not in git. Install from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
+Weights stay on disk, not in git. Layout matches ocr-pipeline: dated version
+directories plus `current/` links. Install from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
 
 ```bash
 ./scripts/download-models.sh
 ```
 
-Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Windows: `%LOCALAPPDATA%\localtex\models`). Both packs use the same channel: GitHub release tarball, `SHA256SUMS`, lazy ONNX load, clear error if a file is missing.
+Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Windows: `%LOCALAPPDATA%\localtex\models`).
+
+## Directory layout
+
+```
+models/
+  current/opendoc      → ../opendoc_int8_20260827_45af38b
+  current/handwriting  → ../handwriting_e10_20260831_cf27b99
+  ship                 → opendoc_int8_20260827_45af38b
+  handwriting          → handwriting_e10_20260831_cf27b99
+  opendoc_int8_20260827_45af38b/
+  handwriting_e10_20260831_cf27b99/
+```
+
+The app loads `current/opendoc` and `current/handwriting`. `ship` and `handwriting` stay as compat links. Naming is `<name>_<form>_<YYYYMMDD>_<git-short>`.
 
 `manifest.json` on the release is the machine-readable copy of this card.
 
-## OpenDoc-0.1B ship (printed snips)
+## OpenDoc-0.1B (`opendoc_int8_20260827_45af38b`)
 
-Tarball: `opendoc-0.1b-ship.tar.gz` (~244 MB unpacked).
+Tarball: `opendoc_int8_20260827_45af38b.tar.gz` (~244 MB unpacked).
 
 | File | Role |
 |---|---|
@@ -23,16 +38,16 @@ Tarball: `opendoc-0.1b-ship.tar.gz` (~244 MB unpacked).
 
 Strategy: layout-freeze-fold + INT8 conv weights + WOQ INT8 MatMul + decoder GQA.
 
-## inktex WOQ (draw-a-formula)
+## Handwriting (`handwriting_e10_20260831_cf27b99`)
 
-Tarball: `inktex-woq.tar.gz` (~23 MB unpacked). Unpacks into `handwriting/`. Release also publishes the two ONNX files as `inktex-encoder.onnx` and `inktex-decoder-step.onnx` so they do not collide with UniRec `encoder.onnx` / `decoder.onnx` at the release root.
+Tarball: `handwriting_e10_20260831_cf27b99.tar.gz` (~23 MB unpacked). Filenames match ocr-pipeline. The packs live in separate directories, so they do not collide with UniRec `encoder.onnx` / `decoder.onnx`.
 
-Current bytes are ocr-pipeline `handwriting_e10_20260831_cf27b99` (Rust/WOQ: MW 63.47 / C23 50.87). Filenames stay `inktex-*`. `./scripts/download-models.sh` still unpacks the GitHub `v0.0.0` baseline until a new tag is published.
+Rust/WOQ scores: MW 63.47 / C23 50.87.
 
 | File | Role |
 |---|---|
-| `handwriting/inktex-encoder.onnx` | Stroke encoder (12-dim point features, KV memory) |
-| `handwriting/inktex-decoder-step.onnx` | Autoregressive decoder step (greedy, KV cache) |
-| `handwriting/inktex-vocab.json` | LaTeX vocab (258 tokens, JSON key order is the id) |
+| `encoder.onnx` | Stroke encoder (12-dim point features, KV memory) |
+| `decoder_step.onnx` | Autoregressive decoder step (greedy, KV cache) |
+| `vocab.json` | LaTeX vocab (258 tokens, JSON key order is the id) |
 
-Strategy: weights-only quantization (MatMulConstBOnly), same family as the OpenDoc ship MatMul WOQ. Input is online ink `(x, y, t)`, not a raster. Output is bare LaTeX.
+Strategy: weights-only quantization (MatMulConstBOnly). Input is online ink `(x, y, t)`, not a raster. Output is bare LaTeX.

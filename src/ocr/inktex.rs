@@ -12,9 +12,9 @@ use ort::session::{Session, SessionInputValue};
 use ort::value::{DynValue, Tensor};
 
 pub const MAX_LEN: usize = 150;
-pub const ENCODER_ONNX: &str = "inktex-encoder.onnx";
-pub const DECODER_ONNX: &str = "inktex-decoder-step.onnx";
-pub const VOCAB_JSON: &str = "inktex-vocab.json";
+pub const ENCODER_ONNX: &str = "encoder.onnx";
+pub const DECODER_ONNX: &str = "decoder_step.onnx";
+pub const VOCAB_JSON: &str = "vocab.json";
 pub const INK_FILES: [&str; 3] = [ENCODER_ONNX, DECODER_ONNX, VOCAB_JSON];
 
 /// Nominal UI frame length used to spread burst-timestamped points.

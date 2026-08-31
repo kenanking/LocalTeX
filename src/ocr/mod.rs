@@ -58,12 +58,12 @@ impl Engine {
         if ship_ok {
             eprintln!(
                 "{APP_SLUG}: OpenDoc weights deferred until first snip ({})",
-                dir.display()
+                opendoc_dir(&dir).display()
             );
         } else {
             eprintln!(
                 "{APP_SLUG}: OpenDoc ship models missing in {}",
-                dir.display()
+                opendoc_dir(&dir).display()
             );
         }
         if ink_ok {
@@ -136,23 +136,50 @@ impl Engine {
     }
 }
 
+fn has_all(dir: &Path, files: &[&str]) -> bool {
+    files.iter().all(|name| dir.join(name).is_file())
+}
+
+fn first_pack(models: &Path, rels: &[&str], files: &[&str]) -> PathBuf {
+    for rel in rels {
+        let dir = if rel.is_empty() {
+            models.to_path_buf()
+        } else {
+            models.join(rel)
+        };
+        if has_all(&dir, files) {
+            return dir;
+        }
+    }
+    models.join(rels[0])
+}
+
+/// Prefer `current/opendoc`, then the `ship` compat link, then a flat root.
+fn opendoc_dir(models: &Path) -> PathBuf {
+    first_pack(models, &["current/opendoc", "ship", ""], &SHIP_FILES)
+}
+
+/// Prefer `current/handwriting`, then the `handwriting` compat link.
 fn handwriting_dir(models: &Path) -> PathBuf {
-    models.join("handwriting")
+    first_pack(models, &["current/handwriting", "handwriting"], &INK_FILES)
 }
 
 fn ship_present(dir: &Path) -> bool {
-    SHIP_FILES.iter().all(|name| dir.join(name).is_file())
+    has_all(&opendoc_dir(dir), &SHIP_FILES)
 }
 
 fn ink_present(dir: &Path) -> bool {
-    let dir = handwriting_dir(dir);
-    INK_FILES.iter().all(|name| dir.join(name).is_file())
+    has_all(&handwriting_dir(dir), &INK_FILES)
 }
 
 fn load_pipeline(dir: &Path) -> Result<Pipeline> {
     let intra = default_intra();
-    eprintln!("{APP_SLUG}: loading OpenDoc ship ({intra} intra-op threads)");
-    let pipeline = Pipeline::load(dir, intra)?;
+    let pack = opendoc_dir(dir);
+    eprintln!(
+        "{APP_SLUG}: loading OpenDoc ship ({intra} intra-op threads, {})",
+        pack.display()
+    );
+    let pipeline = Pipeline::load(&pack, intra)?;
     eprintln!("{APP_SLUG}: loaded PP-DocLayoutV2 + UniRec-0.1B");
     Ok(pipeline)
 }
@@ -324,6 +351,50 @@ mod tests {
             !leave.contains(r"\tag{"),
             "f(1) is math, not an eqno, got {leave:?}"
         );
+    }
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir");
+        }
+        std::fs::write(path, b"").expect("touch");
+    }
+
+    fn pack_fixture(rels: &[&str], files: &[&str]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "localtex-models-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for rel in rels {
+            let dir = if rel.is_empty() {
+                root.clone()
+            } else {
+                root.join(rel)
+            };
+            for name in files {
+                touch(&dir.join(name));
+            }
+        }
+        root
+    }
+
+    #[test]
+    fn opendoc_dir_prefers_current_over_flat() {
+        let root = pack_fixture(&["current/opendoc", ""], &SHIP_FILES);
+        assert_eq!(opendoc_dir(&root), root.join("current/opendoc"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn handwriting_dir_prefers_current() {
+        let root = pack_fixture(&["current/handwriting", "handwriting"], &INK_FILES);
+        assert_eq!(handwriting_dir(&root), root.join("current/handwriting"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -3,6 +3,15 @@
   "strategy": "layout-freeze-fold + weight-int8-conv + WOQ-int8-matmul + decoder-emb8 + decoder-kv-v2 + decoder-gqa",
   "graph_opt": "conv-bn-fold + identity-elim",
   "decoder_contract": "gqa: per-layer cross_kt_{0..5}[b,6,128,seq]/cross_v_{0..5}[b,6,seq,128]; self-attn = com.microsoft.GroupQueryAttention, past/present [b,6,len,128]; seqlens_k[b]=past+s-1; total_seq_len[1]=past+s",
+  "current": {
+    "opendoc": "opendoc_int8_20260827_45af38b",
+    "handwriting": "handwriting_e10_20260831_cf27b99"
+  },
+  "compat": {
+    "ship": "opendoc_int8_20260827_45af38b",
+    "handwriting": "handwriting_e10_20260831_cf27b99"
+  },
+  "tarball": "opendoc_int8_20260827_45af38b.tar.gz",
   "files_mb": {
     "layout.onnx": 56.9,
     "encoder.onnx": 41.6,
@@ -12,25 +21,24 @@
   "onnx_mb": 234.7,
   "total_mb": 244.1,
   "inktex": {
-    "name": "inktex-woq-e10",
-    "tarball": "inktex-woq.tar.gz",
+    "name": "handwriting_e10",
+    "tarball": "handwriting_e10_20260831_cf27b99.tar.gz",
+    "dir": "handwriting_e10_20260831_cf27b99",
     "strategy": "transformer-woq-matmul (MatMulConstBOnly)",
     "source": "ink2tex handwriting_e10_20260831_cf27b99",
     "input": "online ink (x, y, t) → 12-dim point features",
     "output": "bare LaTeX, greedy decode, 258-token vocab (JSON key order = id)",
-    "install_dir": "handwriting/",
-    "release_assets": [
-      "inktex-encoder.onnx",
-      "inktex-decoder-step.onnx",
-      "inktex-vocab.json"
+    "files": [
+      "encoder.onnx",
+      "decoder_step.onnx",
+      "vocab.json"
     ],
     "files_mb": {
-      "handwriting/inktex-encoder.onnx": 11.7,
-      "handwriting/inktex-decoder-step.onnx": 10.8,
-      "handwriting/inktex-vocab.json": 0.004
+      "encoder.onnx": 11.7,
+      "decoder_step.onnx": 10.8,
+      "vocab.json": 0.004
     },
     "onnx_mb": 22.5,
-    "total_mb": 22.5,
-    "note": "Bytes match ocr-pipeline models/current/handwriting (e10). LocalTeX filenames stay inktex-* so they do not collide with UniRec encoder.onnx / decoder.onnx. GitHub release v0.0.0 still ships the 2026-08-30 baseline until a new tag is published."
+    "total_mb": 22.5
   }
 }
