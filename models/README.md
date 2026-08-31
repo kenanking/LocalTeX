@@ -27,10 +27,12 @@ Strategy: layout-freeze-fold + INT8 conv weights + WOQ INT8 MatMul + decoder GQA
 
 Tarball: `inktex-woq.tar.gz` (~23 MB unpacked). Unpacks into `handwriting/`. Release also publishes the two ONNX files as `inktex-encoder.onnx` and `inktex-decoder-step.onnx` so they do not collide with UniRec `encoder.onnx` / `decoder.onnx` at the release root.
 
+Current bytes are ocr-pipeline `handwriting_e10_20260831_cf27b99` (Rust/WOQ: MW 63.47 / C23 50.87). Filenames stay `inktex-*`. `./scripts/download-models.sh` still unpacks the GitHub `v0.0.0` baseline until a new tag is published.
+
 | File | Role |
 |---|---|
 | `handwriting/inktex-encoder.onnx` | Stroke encoder (12-dim point features, KV memory) |
 | `handwriting/inktex-decoder-step.onnx` | Autoregressive decoder step (greedy, KV cache) |
 | `handwriting/inktex-vocab.json` | LaTeX vocab (258 tokens, JSON key order is the id) |
 
-Strategy: weights-only quantization (MatMulConstBOnly), same family as the OpenDoc ship MatMul WOQ. Input is online ink `(x, y, t)`, not a raster. Output is bare LaTeX. Source export is ink2tex `full-v1-woq`.
+Strategy: weights-only quantization (MatMulConstBOnly), same family as the OpenDoc ship MatMul WOQ. Input is online ink `(x, y, t)`, not a raster. Output is bare LaTeX.

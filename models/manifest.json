@@ -12,10 +12,10 @@
   "onnx_mb": 234.7,
   "total_mb": 244.1,
   "inktex": {
-    "name": "inktex-woq",
+    "name": "inktex-woq-e10",
     "tarball": "inktex-woq.tar.gz",
     "strategy": "transformer-woq-matmul (MatMulConstBOnly)",
-    "source": "ink2tex full-v1-woq",
+    "source": "ink2tex handwriting_e10_20260831_cf27b99",
     "input": "online ink (x, y, t) → 12-dim point features",
     "output": "bare LaTeX, greedy decode, 258-token vocab (JSON key order = id)",
     "install_dir": "handwriting/",
@@ -31,6 +31,6 @@
     },
     "onnx_mb": 22.5,
     "total_mb": 22.5,
-    "note": "Same distribution as the OpenDoc ship: GitHub release v0.0.0, SHA256SUMS, not in git, lazy load. Filenames are prefixed so they do not collide with UniRec encoder.onnx / decoder.onnx at the release root."
+    "note": "Bytes match ocr-pipeline models/current/handwriting (e10). LocalTeX filenames stay inktex-* so they do not collide with UniRec encoder.onnx / decoder.onnx. GitHub release v0.0.0 still ships the 2026-08-30 baseline until a new tag is published."
   }
 }
