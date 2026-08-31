@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, rgba, Context, CursorStyle, Entity, MouseButton, MouseDownEvent,
-    RenderImage, SharedString,
+    canvas, div, img, prelude::*, px, rgb, rgba, Context, Corners, CursorStyle, Entity,
+    MouseButton, MouseDownEvent, ObjectFit, RenderImage, SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
-use super::orig_view::{fit_scale, max_strip_h, orig_action_capsule, orig_hud_disc};
+use super::orig_view::{
+    auto_strip_h, clamp_strip_h, max_strip_h, orig_action_capsule, orig_hud_disc,
+};
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
 use super::widgets::{
@@ -38,6 +40,7 @@ impl MainWindow {
                 ocr: doc.ocr,
                 image_missing: matches!(doc.image, ImageSlot::Missing),
                 show_original: state.prefs.show_original,
+                orig_strip_h: state.prefs.orig_strip_h,
                 revision: doc.revision,
                 ready: matches!(doc.status, DocStatus::Ready),
             }
@@ -114,9 +117,7 @@ impl MainWindow {
             .unwrap_or((0.0, 0.0));
         let copy_h = if ready { 72.0 } else { 0.0 };
         let max_h = max_strip_h(win_h, copy_h);
-        let strip_h = self
-            .orig_strip
-            .displayed_h(img_w, img_h, copy_pane_w, max_h);
+        let strip_h = clamp_strip_h(snap.orig_strip_h, max_h);
         let orig = self.render_orig_strip(
             doc_id,
             full,
@@ -128,6 +129,7 @@ impl MainWindow {
             img_h,
             copy_pane_w,
             strip_h,
+            max_h,
             cx,
         );
 
@@ -387,10 +389,9 @@ impl MainWindow {
         let start_split = self.source_split;
         div()
             .id("source-split")
+            .relative()
             .w(px(7.))
-            .h_full()
-            .mt_3()
-            .mb_3()
+            .min_h_0()
             .cursor(CursorStyle::ResizeLeftRight)
             .on_mouse_down(
                 MouseButton::Left,
@@ -425,15 +426,14 @@ impl MainWindow {
         img_h: f32,
         pane_w: f32,
         strip_h: f32,
+        max_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let split_on = self.orig_strip.split_hover || self.orig_strip.drag.is_some();
         let card = if missing {
             missing_image_slot(px(720.), px(strip_h))
                 .id("orig-thumb")
-                .absolute()
-                .inset_0()
-                .w_full()
+                .size_full()
                 .when(split_on, |d| {
                     d.child(
                         div()
@@ -446,30 +446,31 @@ impl MainWindow {
                             .bg(rgb(theme::ACCENT)),
                     )
                 })
-                .child(self.orig_strip_handle(strip_h, cx))
+                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
                 .into_any()
         } else {
-            let scale = fit_scale(img_w, img_h, pane_w, strip_h);
-            let draw_w = (img_w * scale).max(1.0);
-            let draw_h = (img_h * scale).max(1.0);
             let entity = cx.entity();
             div()
                 .id("orig-thumb")
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
+                .size_full()
+                .overflow_hidden()
                 .rounded_md()
                 .bg(rgb(theme::BG_SUNKEN))
                 .border_1()
                 .border_color(rgb(theme::BORDER))
                 .when_some(full.clone(), |d, img_data| {
                     d.child(
-                        img(img_data)
-                            .w(px(draw_w))
-                            .h(px(draw_h))
-                            .object_fit(gpui::ObjectFit::Fill),
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let fitted =
+                                    ObjectFit::Contain.get_bounds(bounds, img_data.size(0));
+                                window
+                                    .paint_image(fitted, Corners::default(), img_data, 0, false)
+                                    .ok();
+                            },
+                        )
+                        .size_full(),
                     )
                 })
                 .when(full.is_some(), |d| {
@@ -544,21 +545,29 @@ impl MainWindow {
                             .bg(rgb(theme::ACCENT)),
                     )
                 })
-                .child(self.orig_strip_handle(strip_h, cx))
+                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
                 .into_any()
         };
 
-        div().px_4().pt_3().flex_shrink_0().child(
-            div()
-                .id("orig-wrap")
-                .relative()
-                .w_full()
-                .h(px(strip_h))
-                .child(card),
-        )
+        div()
+            .id("orig-wrap")
+            .px_4()
+            .pt_3()
+            .flex_none()
+            .h(px(strip_h))
+            .overflow_hidden()
+            .child(card)
     }
 
-    fn orig_strip_handle(&self, strip_h: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn orig_strip_handle(
+        &self,
+        strip_h: f32,
+        img_w: f32,
+        img_h: f32,
+        pane_w: f32,
+        max_h: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         div()
             .id("orig-strip-resize")
             .absolute()
@@ -578,7 +587,12 @@ impl MainWindow {
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                     if ev.click_count >= 2 {
-                        this.orig_strip.reset_auto();
+                        let next = auto_strip_h(img_w, img_h, pane_w, max_h);
+                        this.state.update(cx, |s, cx| {
+                            s.prefs.orig_strip_h = next;
+                            s.persist_prefs();
+                            cx.notify();
+                        });
                     } else {
                         this.orig_strip
                             .begin_drag(f32::from(ev.position.y), strip_h);
@@ -664,6 +678,7 @@ struct DetailSnap {
     ocr: Option<OcrMeta>,
     image_missing: bool,
     show_original: bool,
+    orig_strip_h: f32,
     revision: u64,
     ready: bool,
 }
