@@ -81,13 +81,7 @@ fn main() {
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.
             let rx = desktop::spawn();
             state.update(cx, |state, _| {
-                desktop::rebind_capture(
-                    crate::keymap::effective(
-                        &state.prefs.shortcuts,
-                        crate::keymap::ShortcutId::Capture,
-                    )
-                    .as_deref(),
-                );
+                desktop::rebind_globals(&state.prefs.shortcuts);
             });
             state::pump_desktop_events(state, rx, cx);
             cx.activate(true);

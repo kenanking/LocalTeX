@@ -169,8 +169,7 @@ mod tests {
 
     #[test]
     fn copy_habit_unknown_id_does_not_fail_prefs() {
-        let p: Prefs =
-            serde_json::from_str(r#"{"copy_habit":{"formula":"not_a_kind"}}"#).unwrap();
+        let p: Prefs = serde_json::from_str(r#"{"copy_habit":{"formula":"not_a_kind"}}"#).unwrap();
         assert_eq!(p.copy_habit.preferred(crate::doc::SnipKind::Formula), None);
     }
 

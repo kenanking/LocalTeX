@@ -116,9 +116,7 @@ impl AppState {
     fn commit_shortcuts(&mut self, cx: &mut Context<Self>) {
         self.persist_prefs();
         keymap::apply(cx, &self.prefs.shortcuts);
-        crate::desktop::rebind_capture(
-            keymap::effective(&self.prefs.shortcuts, ShortcutId::Capture).as_deref(),
-        );
+        crate::desktop::rebind_globals(&self.prefs.shortcuts);
         cx.notify();
     }
 
