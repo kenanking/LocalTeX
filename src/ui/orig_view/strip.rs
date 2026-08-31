@@ -21,7 +21,6 @@ pub fn copy_reserve(ready: bool) -> f32 {
 
 pub struct OrigStrip {
     doc: Option<Uuid>,
-    pub drag: Option<(f32, f32)>,
     pub split_hover: bool,
 }
 
@@ -29,30 +28,17 @@ impl OrigStrip {
     pub fn new() -> Self {
         Self {
             doc: None,
-            drag: None,
             split_hover: false,
         }
     }
 
-    pub fn bind_doc(&mut self, id: Option<Uuid>) {
+    /// `true` when the bound document changed. Caller must cancel `WindowDrag::Strip`.
+    pub fn bind_doc(&mut self, id: Option<Uuid>) -> bool {
         if self.doc == id {
-            return;
+            return false;
         }
         self.doc = id;
-        self.drag = None;
-    }
-
-    pub fn begin_drag(&mut self, y: f32, current_h: f32) {
-        self.drag = Some((y, current_h));
-    }
-
-    pub fn drag_to(&self, y: f32, max_h: f32) -> Option<f32> {
-        let (start_y, start_h) = self.drag?;
-        Some(clamp_strip_h(start_h + (y - start_y), max_h))
-    }
-
-    pub fn end_drag(&mut self) {
-        self.drag = None;
+        true
     }
 }
 
@@ -107,25 +93,15 @@ mod tests {
     }
 
     #[test]
-    fn bind_doc_clears_drag_only_on_doc_change() {
+    fn bind_doc_reports_change_only() {
         let mut strip = OrigStrip::new();
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
-        strip.bind_doc(Some(a));
-        strip.begin_drag(10.0, 180.0);
-        assert!(strip.drag.is_some());
-        strip.bind_doc(Some(a));
-        assert!(strip.drag.is_some());
-        strip.bind_doc(Some(b));
-        assert!(strip.drag.is_none());
-    }
-
-    #[test]
-    fn drag_to_is_relative_to_press() {
-        let mut strip = OrigStrip::new();
-        strip.begin_drag(10.0, 180.0);
-        let next = strip.drag_to(40.0, 500.0).unwrap();
-        assert!((next - 210.0).abs() < 0.5, "got {next}");
+        assert!(strip.bind_doc(Some(a)));
+        assert!(!strip.bind_doc(Some(a)));
+        assert!(strip.bind_doc(Some(b)));
+        assert!(strip.bind_doc(None));
+        assert!(!strip.bind_doc(None));
     }
 
     #[test]
