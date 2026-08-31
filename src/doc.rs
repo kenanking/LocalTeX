@@ -462,6 +462,7 @@ impl Document {
         crate::export::copy_rows(&self.blocks, prefs)
     }
 
+    #[cfg(test)]
     pub fn primary_copy(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
         self.text_for(CopyKind::primary(self.snip_kind(), fmt), prefs)
     }

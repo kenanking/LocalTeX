@@ -47,7 +47,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                 &state,
                 "pref-close-min",
                 "Minimize on close",
-                "Keeps the tray and Ctrl+Shift+S. Off quits; Ctrl+Q always quits.",
+                "Keeps the tray, Ctrl+Shift+S, and Ctrl+Shift+A. Off quits; Ctrl+Q always quits.",
                 prefs.close_action == WindowCloseAction::Minimize,
                 |p, v| {
                     p.close_action = if v {

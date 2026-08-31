@@ -214,6 +214,9 @@ impl AppState {
         let snip = doc.snip_kind();
         let kind = self.prefs.copy_habit.resolve(snip, self.export_fmt);
         let text = doc.text_for(kind, &self.prefs);
+        if text.is_empty() {
+            return;
+        }
         Self::write_clipboard(text, cx);
         self.record_copy_habit(snip, kind);
     }
@@ -224,6 +227,9 @@ impl AppState {
         };
         let snip = doc.snip_kind();
         let text = doc.text_for(kind, &self.prefs);
+        if text.is_empty() {
+            return;
+        }
         Self::write_clipboard(text, cx);
         self.record_copy_habit(snip, kind);
     }
