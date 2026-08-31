@@ -18,10 +18,11 @@ use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsPane;
+use super::source_editor::SourceEditor;
 use super::theme;
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp,
-    RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, UploadImage,
+    RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource, UploadImage,
 };
 use crate::cache::MediaCache;
 use crate::doc::{CopyKind, DocStatus};
@@ -114,6 +115,13 @@ pub struct MainWindow {
     pub(crate) preview: PreviewPane,
     pub(crate) sidebar_drag: Option<(f32, f32)>,
     pub(crate) history: HistoryPane,
+    pub(crate) source_open: bool,
+    pub(crate) source: Entity<SourceEditor>,
+    pub(crate) source_bound: Option<Uuid>,
+    pub(crate) source_last: String,
+    pub(crate) source_split: f32,
+    pub(crate) source_split_drag: Option<(f32, f32, f32)>,
+    source_epoch: u64,
 }
 
 impl MainWindow {
@@ -204,6 +212,11 @@ impl MainWindow {
             });
         })
         .detach();
+        let source = cx.new(|cx| SourceEditor::new(cx));
+        cx.observe(&source, |this, _, cx| {
+            this.on_source_edit(cx);
+        })
+        .detach();
         let mut this = Self {
             state,
             focus,
@@ -227,6 +240,13 @@ impl MainWindow {
             preview: PreviewPane::new(),
             sidebar_drag: None,
             history,
+            source_open: false,
+            source,
+            source_bound: None,
+            source_last: String::new(),
+            source_split: 0.5,
+            source_split_drag: None,
+            source_epoch: 0,
         };
         this.schedule_derived(window, cx);
         this
@@ -274,6 +294,10 @@ impl MainWindow {
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, window: &mut Window, cx: &mut Context<Self>) {
+        if self.source_open {
+            self.set_source_open(false, window, cx);
+            return;
+        }
         if self.orig.open {
             self.unzoom();
             window.focus(&self.snip_list_focus);
@@ -378,6 +402,127 @@ impl MainWindow {
 
     fn retry(&mut self, _: &RetryOcr, _: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| state.retry_selected(cx));
+    }
+
+    fn toggle_source(&mut self, _: &ToggleSource, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_source_open(!self.source_open, window, cx);
+    }
+
+    pub(crate) fn set_source_open(
+        &mut self,
+        on: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ready = self
+            .state
+            .read(cx)
+            .selected_doc()
+            .is_some_and(|d| matches!(d.status, DocStatus::Ready) && d.blocks_loaded);
+        if on && !ready {
+            return;
+        }
+        if on == self.source_open {
+            if on {
+                self.bind_source(cx);
+                window.focus(&self.source.focus_handle(cx));
+            }
+            return;
+        }
+        if on {
+            self.source_open = true;
+            self.bind_source(cx);
+            window.focus(&self.source.focus_handle(cx));
+        } else {
+            self.close_source(cx);
+            window.focus(&self.snip_list_focus);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_source(&mut self, cx: &mut Context<Self>) {
+        if self.source_open {
+            self.flush_source(cx);
+        }
+        self.source_open = false;
+        self.source_bound = None;
+    }
+
+    pub(crate) fn bind_source(&mut self, cx: &mut Context<Self>) {
+        let id = {
+            let state = self.state.read(cx);
+            let Some(doc) = state.selected_doc() else {
+                return;
+            };
+            doc.id
+        };
+        if self.source_bound == Some(id) {
+            return;
+        }
+        if self.source_bound.is_some() {
+            self.flush_source(cx);
+        }
+        let (prefs, blocks) = {
+            let state = self.state.read(cx);
+            let Some(doc) = state.selected_doc() else {
+                return;
+            };
+            (state.prefs.clone(), doc.blocks.clone())
+        };
+        let text = crate::source::blocks_to_source(&blocks, &prefs);
+        self.source_last = text.clone();
+        self.source_bound = Some(id);
+        self.source.update(cx, |ed, cx| ed.set_text(text, cx));
+    }
+
+    fn on_source_edit(&mut self, cx: &mut Context<Self>) {
+        if !self.source_open {
+            return;
+        }
+        self.source_epoch = self.source_epoch.wrapping_add(1);
+        let epoch = self.source_epoch;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(280)).await;
+            this.update(cx, |this, cx| {
+                if this.source_epoch != epoch {
+                    return;
+                }
+                this.flush_source(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn flush_source(&mut self, cx: &mut Context<Self>) {
+        if !self.source_open {
+            return;
+        }
+        let text = self.source.read(cx).text();
+        if text == self.source_last {
+            return;
+        }
+        let prefs = self.state.read(cx).prefs.clone();
+        let Ok(blocks) = crate::source::parse_source(&text, &prefs) else {
+            return;
+        };
+        let Some(id) = self.source_bound else {
+            return;
+        };
+        self.source_last = text;
+        self.state
+            .update(cx, |state, cx| state.apply_parsed_source(id, blocks, cx));
+    }
+
+    pub(crate) fn revert_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.source_bound else {
+            return;
+        };
+        self.state.update(cx, |state, cx| state.revert_ocr(id, cx));
+        self.source_bound = None;
+        self.bind_source(cx);
+        window.focus(&self.source.focus_handle(cx));
+        cx.notify();
     }
 
     fn quit(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
@@ -587,6 +732,7 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::delete_selected))
             .on_action(cx.listener(Self::toggle_format))
             .on_action(cx.listener(Self::retry))
+            .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::quit))
             .cursor(CursorStyle::Arrow)
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
@@ -607,6 +753,14 @@ impl gpui::Render for MainWindow {
                     };
                     let max_h = max_strip_h(win_h, copy_h);
                     if this.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
+                        cx.notify();
+                    }
+                    return;
+                }
+                if let Some((start_x, start, work_w)) = this.source_split_drag {
+                    if work_w > 1.0 {
+                        let pct = start + (f32::from(ev.position.x) - start_x) / work_w;
+                        this.source_split = pct.clamp(0.28, 0.72);
                         cx.notify();
                     }
                     return;
@@ -642,6 +796,7 @@ impl gpui::Render for MainWindow {
                         this.orig_strip.end_drag();
                         cx.notify();
                     }
+                    this.source_split_drag = None;
                     if this.sidebar_drag.take().is_some() {
                         this.state.update(cx, |s, _| s.persist_prefs());
                     }

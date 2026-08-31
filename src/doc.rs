@@ -80,7 +80,7 @@ impl BlockRole {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub kind: BlockKind,
     pub bbox: Rect,
@@ -271,6 +271,8 @@ pub struct Document {
     pub ocr: Option<OcrMeta>,
     pub ink: Option<Arc<Vec<Vec<[f32; 3]>>>>,
     pub revision: u64,
+    /// Snapshot written at recognition. Edits change `blocks` only.
+    pub ocr_blocks: Vec<Block>,
 }
 
 impl Document {
@@ -288,6 +290,7 @@ impl Document {
             ocr: None,
             ink: None,
             revision: 0,
+            ocr_blocks: Vec::new(),
         }
     }
 
@@ -309,6 +312,7 @@ impl Document {
             ocr: item.ocr,
             ink: None,
             revision: 0,
+            ocr_blocks: Vec::new(),
         }
     }
 
@@ -334,6 +338,10 @@ impl Document {
         if matches!(self.status, DocStatus::Ready) {
             self.first_line = ready_first_line(&self.blocks);
         }
+    }
+
+    pub fn is_edited(&self) -> bool {
+        self.blocks_loaded && self.blocks != self.ocr_blocks
     }
 
     pub fn can_retry(&self) -> bool {
@@ -564,7 +572,7 @@ mod tests {
         assert_eq!(rows[2].kind.label(), "Inline");
         assert_eq!(rows[2].text, r"$x^{2}$");
         assert_eq!(rows[3].kind.label(), "Display");
-        assert_eq!(rows[3].text, r"$$ x^{2} $$");
+        assert_eq!(rows[3].text, "$$\nx^{2}\n$$");
         assert!(rows[4].text.contains(r"\begin{equation}"));
         assert_eq!(rows[0].kind.symbol(), "ml");
         assert_eq!(rows[1].kind.symbol(), "TeX");

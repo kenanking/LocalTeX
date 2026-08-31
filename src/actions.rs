@@ -17,6 +17,7 @@ actions!(
         ToggleFormat,
         RetryOcr,
         QuitApp,
+        ToggleSource,
         DrawPen,
         DrawEraser,
         DrawUndo,

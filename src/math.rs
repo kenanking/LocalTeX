@@ -57,6 +57,15 @@ pub fn split_math(input: &str) -> Vec<MathRun> {
         }
     };
     while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '[' {
+            if let Some(end) = find_bracket_closer(&chars, i + 2) {
+                push_text(&mut buf, &mut runs);
+                let body: String = chars[i + 2..end].iter().collect();
+                runs.push(MathRun::Display(canonicalize_tex(body.trim())));
+                i = end + 2;
+                continue;
+            }
+        }
         if chars[i] == '$' {
             let display = i + 1 < chars.len() && chars[i + 1] == '$';
             let delim_len = if display { 2 } else { 1 };
@@ -80,10 +89,14 @@ pub fn split_math(input: &str) -> Vec<MathRun> {
     runs
 }
 
-/// Reconstruct mixed text after splitting `$` / `$$` runs.
+/// Reconstruct mixed text after splitting `$` / `$$` / `\[` runs.
+/// Display delimiters always sit on their own lines so the body is not jammed
+/// onto `$$` / `\[`.
 pub fn canonicalize_mixed_text(input: &str) -> String {
+    let runs = split_math(input);
+    let n = runs.len();
     let mut out = String::new();
-    for run in split_math(input) {
+    for (i, run) in runs.into_iter().enumerate() {
         match run {
             MathRun::Text(t) => out.push_str(&t),
             MathRun::Inline(s) => {
@@ -92,9 +105,15 @@ pub fn canonicalize_mixed_text(input: &str) -> String {
                 out.push('$');
             }
             MathRun::Display(s) => {
-                out.push_str("$$");
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("$$\n");
                 out.push_str(&s);
-                out.push_str("$$");
+                out.push_str("\n$$");
+                if i + 1 < n {
+                    out.push('\n');
+                }
             }
         }
     }
@@ -106,6 +125,14 @@ pub fn canonicalize_mixed_text(input: &str) -> String {
 pub fn unwrap_formula(text: &str) -> (String, bool) {
     let t = text.trim();
     let chars: Vec<char> = t.chars().collect();
+    if chars.len() >= 4 && chars[0] == '\\' && chars[1] == '[' {
+        if let Some(end) = find_bracket_closer(&chars, 2) {
+            if chars[end + 2..].iter().all(|c| c.is_whitespace()) {
+                let body: String = chars[2..end].iter().collect();
+                return finish_formula(body.trim().to_string(), true);
+            }
+        }
+    }
     if chars.len() >= 2 && chars[0] == '$' && chars[1] == '$' {
         if let Some(end) = find_closer(&chars, 2, true) {
             if chars[end + 2..].iter().all(|c| c.is_whitespace()) {
@@ -226,6 +253,17 @@ fn find_closer(chars: &[char], start: usize, display: bool) -> Option<usize> {
     None
 }
 
+fn find_bracket_closer(chars: &[char], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i + 1 < chars.len() {
+        if chars[i] == '\\' && chars[i + 1] == ']' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +289,25 @@ mod tests {
                 MathRun::Text(".".into()),
             ]
         );
+        let runs = split_math("See \\[\nE=mc^2\n\\] here.");
+        assert_eq!(
+            runs,
+            vec![
+                MathRun::Text("See ".into()),
+                MathRun::Display("E=mc^2".into()),
+                MathRun::Text(" here.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn canonicalize_mixed_puts_display_on_own_lines() {
+        let out = canonicalize_mixed_text("Hence $$E=mc^2$$ (1) holds.");
+        assert_eq!(out, "Hence \n$$\nE=mc^2\n$$\n (1) holds.");
+        let bracket = canonicalize_mixed_text(r"Hence \[E=mc^2\] holds.");
+        assert_eq!(bracket, "Hence \n$$\nE=mc^2\n$$\n holds.");
+        assert!(!out.contains("$$E="));
+        assert!(!bracket.contains("\\[E="));
     }
 
     #[test]
@@ -269,6 +326,12 @@ mod tests {
     #[test]
     fn unwrap_formula_strips_dollars_and_repairs_tag() {
         let (body, display) = unwrap_formula("$$ E=mc^2 $$");
+        assert_eq!(body, "E=mc^2");
+        assert!(display);
+        let (body, display) = unwrap_formula("$$\nE=mc^2\n$$");
+        assert_eq!(body, "E=mc^2");
+        assert!(display);
+        let (body, display) = unwrap_formula("\\[\nE=mc^2\n\\]");
         assert_eq!(body, "E=mc^2");
         assert!(display);
         let (body, display) = unwrap_formula("$x$");

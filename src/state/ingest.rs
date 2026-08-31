@@ -4,7 +4,7 @@ use gpui::{App, AppContext, ClipboardItem, Context};
 use image::RgbaImage;
 use uuid::Uuid;
 
-use crate::doc::{DocStatus, Document, ImageSlot};
+use crate::doc::{Block, DocStatus, Document, ImageSlot};
 use crate::identity::APP_SLUG;
 use crate::ingest::IngestSource;
 
@@ -148,6 +148,7 @@ impl AppState {
                     match result {
                         Ok(out) => {
                             doc.blocks = out.blocks;
+                            doc.ocr_blocks = doc.blocks.clone();
                             doc.blocks_loaded = true;
                             doc.ocr = out.meta;
                             doc.status = DocStatus::Ready;
@@ -188,6 +189,9 @@ impl AppState {
         let Some(id) = self.library.selected() else {
             return;
         };
+        if self.library.get(id).is_some_and(|d| d.is_edited()) {
+            return;
+        }
         let slot = self.library.get(id).map(|d| d.image.clone());
         match slot {
             None | Some(ImageSlot::Missing) => (),
@@ -360,6 +364,61 @@ impl AppState {
         .detach();
     }
 
+    pub fn apply_parsed_source(&mut self, id: Uuid, blocks: Vec<Block>, cx: &mut Context<Self>) {
+        if let Some(doc) = self.library.get_mut(id) {
+            if !matches!(doc.status, DocStatus::Ready) {
+                return;
+            }
+            doc.blocks = blocks;
+            doc.refresh_first_line();
+            doc.bump_revision();
+        }
+        self.persist_edits(id, cx);
+        self.schedule_filter(cx);
+        cx.notify();
+    }
+
+    pub fn revert_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(doc) = self.library.get_mut(id) else {
+            return;
+        };
+        if !doc.is_edited() {
+            return;
+        }
+        doc.blocks = doc.ocr_blocks.clone();
+        doc.refresh_first_line();
+        doc.bump_revision();
+        self.persist_edits(id, cx);
+        self.schedule_filter(cx);
+        cx.notify();
+    }
+
+    fn persist_edits(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let Some(doc) = self.library.get(id).cloned() else {
+            return;
+        };
+        if !doc.persisted || !matches!(doc.status, DocStatus::Ready) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { store.update_blocks(&doc) })
+                .await;
+            if let Err(err) = this.update(cx, |_, cx| {
+                if let Err(err) = result {
+                    eprintln!("{APP_SLUG}: persist edits: {err}");
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: persist edits task: {err}");
+            }
+        })
+        .detach();
+    }
+
     fn load_png_then_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(store) = self.store.clone() else {
             return;
@@ -417,13 +476,14 @@ impl AppState {
         };
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { store.load_blocks(id) })
+                .background_spawn(async move { store.load_block_pair(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 match result {
-                    Ok(blocks) => {
+                    Ok((blocks, ocr_blocks)) => {
                         if let Some(doc) = this.library.get_mut(id) {
                             doc.blocks = blocks;
+                            doc.ocr_blocks = ocr_blocks;
                             doc.blocks_loaded = true;
                             doc.refresh_first_line();
                             doc.bump_revision();

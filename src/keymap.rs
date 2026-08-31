@@ -270,7 +270,7 @@ pub fn to_global_hotkey(chord: &str) -> Option<HotKey> {
 pub fn apply(cx: &mut App, over: &Overrides) {
     use crate::actions::{
         CloseSheet, DrawEraser, DrawPen, DrawRedo, DrawUndo, QuitApp, RetryOcr, SelectNext,
-        SelectPrev,
+        SelectPrev, ToggleSource,
     };
     cx.clear_key_bindings();
     cx.bind_keys([
@@ -289,6 +289,7 @@ pub fn apply(cx: &mut App, over: &Overrides) {
             Some("SnipList && !SearchField"),
         ),
         KeyBinding::new("ctrl-r", RetryOcr, None),
+        KeyBinding::new("ctrl-e", ToggleSource, None),
         KeyBinding::new("ctrl-q", QuitApp, None),
     ]);
     cx.bind_keys([
@@ -309,6 +310,7 @@ pub fn apply(cx: &mut App, over: &Overrides) {
         bind_catalog(cx, spec, &chord);
     }
     crate::ui::search_field::bind_keys(cx);
+    crate::ui::source_editor::bind_keys(cx);
 }
 
 fn bind_catalog(cx: &mut App, spec: &Spec, chord: &str) {

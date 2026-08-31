@@ -14,10 +14,7 @@ impl CopyKind {
             CopyKind::MsWord => crate::office::formula_mathml(&formula_body(blocks)),
             CopyKind::Latex => formula_body(blocks),
             CopyKind::MdInline => prefs.wrap_inline(&formula_body(blocks)),
-            CopyKind::MdDisplay => {
-                let body = formula_body(blocks);
-                format!("$$ {body} $$")
-            }
+            CopyKind::MdDisplay => prefs.wrap_block(&formula_body(blocks)),
             CopyKind::Equation => {
                 let body = formula_body(blocks);
                 format!("\\begin{{equation}}\n{body}\n\\end{{equation}}")
@@ -338,5 +335,24 @@ mod tests {
         .with_role(BlockRole::DocTitle)];
         let md = export_blocks(&titled, ExportFmt::Markdown, &prefs);
         assert_eq!(md, "# Intro");
+    }
+
+    #[test]
+    fn display_copy_uses_multiline_dollars() {
+        let prefs = crate::prefs::Prefs::default();
+        let mut b = Block::new(
+            BlockKind::Formula,
+            crate::doc::Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            "E=mc^2",
+        );
+        b.display = true;
+        let text = CopyKind::MdDisplay.render(&[b], &prefs);
+        assert_eq!(text, "$$\nE=mc^2\n$$");
+        assert!(!text.contains("$$ E="));
     }
 }

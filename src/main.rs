@@ -21,6 +21,7 @@ mod ocr_queue;
 mod office;
 mod prefs;
 mod preview;
+mod source;
 mod state;
 mod store;
 mod sysmon;

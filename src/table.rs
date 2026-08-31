@@ -332,6 +332,202 @@ pub fn html_to_latex(html: &str) -> String {
         .unwrap_or_else(|| html.trim().to_string())
 }
 
+pub fn latex_to_html(tex: &str) -> Option<String> {
+    parse_tabular(tex).map(|t| t.to_html())
+}
+
+impl Table {
+    pub fn to_html(&self) -> String {
+        let mut out = String::from("<table>");
+        for row in &self.rows {
+            out.push_str("<tr>");
+            for cell in row {
+                let mut attrs = String::new();
+                if cell.rowspan > 1 {
+                    attrs.push_str(&format!(" rowspan=\"{}\"", cell.rowspan));
+                }
+                if cell.colspan > 1 {
+                    attrs.push_str(&format!(" colspan=\"{}\"", cell.colspan));
+                }
+                out.push_str("<td");
+                out.push_str(&attrs);
+                out.push('>');
+                out.push_str(&html_escape(&cell.text));
+                out.push_str("</td>");
+            }
+            out.push_str("</tr>");
+        }
+        out.push_str("</table>");
+        out
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Parse a `\\begin{tabular}...\\end{tabular}` island into a [`Table`].
+pub fn parse_tabular(tex: &str) -> Option<Table> {
+    let t = tex.trim();
+    let rest = t.strip_prefix("\\begin{tabular}")?;
+    let rest = skip_optional_pos(rest);
+    let rest = skip_colspec(rest)?;
+    let inner = rest.strip_suffix("\\end{tabular}")?.trim();
+    let inner = strip_hline(inner);
+    let mut rows = Vec::new();
+    for raw in split_rows(&inner) {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let cells = split_align_aware(raw, '&')
+            .into_iter()
+            .map(|c| parse_cell(c.trim()))
+            .collect();
+        rows.push(cells);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(Table { rows })
+}
+
+fn skip_optional_pos(s: &str) -> &str {
+    let s = s.trim_start();
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return rest[end + 1..].trim_start();
+        }
+    }
+    s
+}
+
+fn skip_colspec(s: &str) -> Option<&str> {
+    let s = s.trim_start();
+    let rest = s.strip_prefix('{')?;
+    let (inner, after) = crate::math::split_braced(rest)?;
+    let _ = inner;
+    Some(after)
+}
+
+fn strip_hline(s: &str) -> String {
+    s.replace("\\hline", "")
+}
+
+fn split_rows(s: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut buf = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0usize;
+    let mut depth = 0i32;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            depth += 1;
+            buf.push('{');
+            i += 1;
+            continue;
+        }
+        if chars[i] == '}' {
+            depth = (depth - 1).max(0);
+            buf.push('}');
+            i += 1;
+            continue;
+        }
+        if depth == 0 && chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '\\' {
+            rows.push(std::mem::take(&mut buf));
+            i += 2;
+            continue;
+        }
+        buf.push(chars[i]);
+        i += 1;
+    }
+    if !buf.trim().is_empty() {
+        rows.push(buf);
+    }
+    rows
+}
+
+fn split_align_aware(s: &str, sep: char) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for ch in s.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                buf.push(ch);
+            }
+            '}' => {
+                depth = (depth - 1).max(0);
+                buf.push(ch);
+            }
+            c if c == sep && depth == 0 => {
+                cells.push(std::mem::take(&mut buf));
+            }
+            _ => buf.push(ch),
+        }
+    }
+    cells.push(buf);
+    cells
+}
+
+fn parse_cell(cell: &str) -> Cell {
+    if let Some((n, text)) = parse_command(cell, "multicolumn") {
+        return Cell {
+            text,
+            rowspan: 1,
+            colspan: n,
+        };
+    }
+    if let Some((n, text)) = parse_command(cell, "multirow") {
+        return Cell {
+            text,
+            rowspan: n,
+            colspan: 1,
+        };
+    }
+    Cell {
+        text: unwrap_shortstack(cell),
+        rowspan: 1,
+        colspan: 1,
+    }
+}
+
+fn parse_command(cell: &str, name: &str) -> Option<(usize, String)> {
+    let prefix = format!("\\{name}{{");
+    let rest = cell.trim().strip_prefix(&prefix)?;
+    let (n_s, after_n) = crate::math::split_braced(rest)?;
+    let n: usize = n_s.trim().parse().ok()?;
+    let after_n = after_n.trim_start();
+    let rest = if let Some(inner) = after_n.strip_prefix('{') {
+        let (spec, after) = crate::math::split_braced(inner)?;
+        let _ = spec;
+        after.trim_start()
+    } else {
+        after_n
+    };
+    let rest = rest.strip_prefix('{')?;
+    let (text, _) = crate::math::split_braced(rest)?;
+    Some((n, unwrap_shortstack(&text)))
+}
+
+fn unwrap_shortstack(s: &str) -> String {
+    let t = s.trim();
+    let Some(rest) = t.strip_prefix("\\shortstack") else {
+        return t.to_string();
+    };
+    let rest = skip_optional_pos(rest);
+    let Some(rest) = rest.strip_prefix('{') else {
+        return t.to_string();
+    };
+    let Some((inner, _)) = crate::math::split_braced(rest) else {
+        return t.to_string();
+    };
+    inner.replace(" \\\\", "\n").replace("\\\\", "\n")
+}
+
 fn strip_tags(s: &str) -> String {
     static TAG: OnceLock<Regex> = OnceLock::new();
     let re = TAG.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("tag re"));
@@ -476,6 +672,10 @@ mod tests {
         assert!(tex.contains(" & AP & AP50 & AP75 \\\\"), "{tex}");
         assert!(tex.contains("初版（错误归一化） & 48.48"), "{tex}");
         assert!(tex.contains("\\end{tabular}"), "{tex}");
+        let html = latex_to_html(&tex).expect("parse tabular");
+        assert!(html.contains("<table>"), "{html}");
+        assert!(html.contains("AP50"), "{html}");
+        assert!(html.contains("54.20"), "{html}");
     }
 
     #[test]

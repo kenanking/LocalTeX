@@ -11,7 +11,7 @@ use crate::doc::{decode_blocks_json, encode_blocks_json, Block, Document, OcrMet
 use crate::identity::APP_SLUG;
 use crate::imgutil;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CivilDate {
@@ -166,14 +166,24 @@ impl Store {
         Ok(path)
     }
 
+    #[cfg(test)]
     pub fn load_blocks(&self, id: Uuid) -> Result<Vec<Block>> {
+        Ok(self.load_block_pair(id)?.0)
+    }
+
+    pub fn load_block_pair(&self, id: Uuid) -> Result<(Vec<Block>, Vec<Block>)> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-        let json: String = conn.query_row(
-            "SELECT blocks_json FROM snips WHERE id = ?1",
+        let (json, ocr_json): (String, Option<String>) = conn.query_row(
+            "SELECT blocks_json, ocr_blocks_json FROM snips WHERE id = ?1",
             params![id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        decode_blocks_json(&json).context("blocks_json")
+        let blocks = decode_blocks_json(&json).context("blocks_json")?;
+        let ocr_blocks = match ocr_json.as_deref().filter(|s| !s.is_empty()) {
+            Some(raw) => decode_blocks_json(raw).context("ocr_blocks_json")?,
+            None => blocks.clone(),
+        };
+        Ok((blocks, ocr_blocks))
     }
 
     pub fn load_png(&self, id: Uuid) -> Result<image::RgbaImage> {
@@ -201,12 +211,17 @@ impl Store {
         }
 
         let blocks_json = encode_blocks_json(&doc.blocks)?;
+        let ocr_json = encode_blocks_json(if doc.ocr_blocks.is_empty() {
+            &doc.blocks
+        } else {
+            &doc.ocr_blocks
+        })?;
         let search_text = Document::search_text_for_blocks(&doc.blocks);
         let first_line = doc.first_line();
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let sql = conn.execute(
-            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath, ocr_s, confidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath, ocr_s, confidence, ocr_blocks_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 doc.id.to_string(),
                 unix_ms(doc.created_at),
@@ -217,6 +232,7 @@ impl Store {
                 rel,
                 doc.ocr.map(|m| m.elapsed_s as f64),
                 doc.ocr.map(|m| m.confidence as f64),
+                ocr_json,
             ],
         );
         if let Err(err) = sql {
@@ -229,16 +245,38 @@ impl Store {
 
     pub fn update_ocr(&self, doc: &Document) -> Result<()> {
         let blocks_json = encode_blocks_json(&doc.blocks)?;
+        let ocr_json = encode_blocks_json(if doc.ocr_blocks.is_empty() {
+            &doc.blocks
+        } else {
+            &doc.ocr_blocks
+        })?;
         let search_text = Document::search_text_for_blocks(&doc.blocks);
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         conn.execute(
-            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, ocr_s = ?4, confidence = ?5 WHERE id = ?6",
+            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, ocr_s = ?4, confidence = ?5, ocr_blocks_json = ?6 WHERE id = ?7",
             params![
                 doc.first_line(),
                 blocks_json,
                 search_text,
                 doc.ocr.map(|m| m.elapsed_s as f64),
                 doc.ocr.map(|m| m.confidence as f64),
+                ocr_json,
+                doc.id.to_string()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_blocks(&self, doc: &Document) -> Result<()> {
+        let blocks_json = encode_blocks_json(&doc.blocks)?;
+        let search_text = Document::search_text_for_blocks(&doc.blocks);
+        let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
+        conn.execute(
+            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3 WHERE id = ?4",
+            params![
+                doc.first_line(),
+                blocks_json,
+                search_text,
                 doc.id.to_string()
             ],
         )?;
@@ -429,9 +467,20 @@ fn migrate(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn migrate_from(_conn: &Connection, from: i32) -> Result<i32> {
+fn migrate_from(conn: &Connection, from: i32) -> Result<i32> {
     match from {
         0 => Ok(1),
+        1 => {
+            let names = snips_column_names(conn)?;
+            if !names.iter().any(|n| n == "ocr_blocks_json") {
+                conn.execute("ALTER TABLE snips ADD COLUMN ocr_blocks_json TEXT", [])?;
+            }
+            conn.execute(
+                "UPDATE snips SET ocr_blocks_json = blocks_json WHERE ocr_blocks_json IS NULL",
+                [],
+            )?;
+            Ok(2)
+        }
         other => Err(anyhow!("no migration from schema version {other}")),
     }
 }
@@ -494,7 +543,8 @@ const SNIPS_TABLE: &str = "
           thumb_jpeg BLOB NOT NULL,
           image_relpath TEXT NOT NULL,
           ocr_s REAL,
-          confidence REAL
+          confidence REAL,
+          ocr_blocks_json TEXT
         );
         ";
 
@@ -564,20 +614,21 @@ mod tests {
     fn sample_doc(text: &str, created: SystemTime) -> Document {
         let mut img = RgbaImage::from_pixel(8, 8, Rgba([10, 20, 30, 255]));
         img.put_pixel(0, 0, Rgba([1, 2, 3, 255]));
+        let blocks = vec![Block::new(
+            BlockKind::Formula,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 8,
+            },
+            text,
+        )];
         Document {
             id: Uuid::new_v4(),
             created_at: created,
             image: ImageSlot::Loaded(Arc::new(img)),
-            blocks: vec![Block::new(
-                BlockKind::Formula,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    w: 8,
-                    h: 8,
-                },
-                text,
-            )],
+            blocks: blocks.clone(),
             status: DocStatus::Ready,
             first_line: String::new(),
             thumb_jpeg: Vec::new(),
@@ -586,6 +637,7 @@ mod tests {
             ocr: None,
             ink: None,
             revision: 0,
+            ocr_blocks: blocks,
         }
     }
 
@@ -604,6 +656,15 @@ mod tests {
         let path = store.png_path(id).unwrap();
         assert_eq!(path, root.join(format!("snips/{id}.png")));
         assert!(path.is_file());
+        let (blocks, ocr) = store.load_block_pair(id).unwrap();
+        assert_eq!(blocks[0].text, "hello");
+        assert_eq!(ocr[0].text, "hello");
+        let mut edited = doc;
+        edited.blocks[0].text = "edited".into();
+        store.update_blocks(&edited).unwrap();
+        let (blocks, ocr) = store.load_block_pair(id).unwrap();
+        assert_eq!(blocks[0].text, "edited");
+        assert_eq!(ocr[0].text, "hello");
     }
 
     #[test]

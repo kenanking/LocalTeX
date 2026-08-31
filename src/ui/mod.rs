@@ -9,6 +9,7 @@ mod scroll;
 pub(crate) mod search_field;
 mod selectable;
 mod settings;
+pub(crate) mod source_editor;
 mod theme;
 mod widgets;
 
