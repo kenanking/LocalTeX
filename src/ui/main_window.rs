@@ -673,8 +673,13 @@ impl MainWindow {
                 _ => 0.0,
             };
             let max_h = max_strip_h(win_h, copy_h);
-            if self.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
-                cx.notify();
+            if let Some(next) = self.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
+                self.state.update(cx, |s, cx| {
+                    if (s.prefs.orig_strip_h - next).abs() > 0.5 {
+                        s.prefs.orig_strip_h = next;
+                        cx.notify();
+                    }
+                });
             }
             return;
         }
@@ -701,12 +706,14 @@ impl MainWindow {
     }
 
     fn end_split_drags(&mut self, cx: &mut Context<Self>) {
-        if self.orig_strip.drag.is_some() {
+        let strip_dragged = self.orig_strip.drag.is_some();
+        if strip_dragged {
             self.orig_strip.end_drag();
             cx.notify();
         }
         self.source_split_drag = None;
-        if self.sidebar_drag.take().is_some() {
+        let sidebar_dragged = self.sidebar_drag.take().is_some();
+        if strip_dragged || sidebar_dragged {
             self.state.update(cx, |s, _| s.persist_prefs());
         }
     }

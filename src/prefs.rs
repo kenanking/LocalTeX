@@ -54,6 +54,9 @@ pub struct Prefs {
     /// History sidebar width in px, user-draggable between SIDEBAR limits.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// Original-image strip height in px. Window-level, not per-snip.
+    #[serde(default = "default_orig_strip_h")]
+    pub orig_strip_h: f32,
     /// User clicked collapse. Stays collapsed until they click expand.
     #[serde(default)]
     pub sidebar_pinned_collapsed: bool,
@@ -70,6 +73,10 @@ fn default_sidebar_width() -> f32 {
     232.0
 }
 
+fn default_orig_strip_h() -> f32 {
+    160.0
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -81,6 +88,7 @@ impl Default for Prefs {
             inline_delim: InlineDelim::Dollar,
             block_delim: BlockDelim::Dollars,
             sidebar_width: default_sidebar_width(),
+            orig_strip_h: default_orig_strip_h(),
             sidebar_pinned_collapsed: false,
             shortcuts: keymap::Overrides::new(),
         }
@@ -159,6 +167,23 @@ mod tests {
     fn sidebar_pinned_collapsed_defaults_false_when_missing() {
         let p: Prefs = serde_json::from_str("{}").unwrap();
         assert!(!p.sidebar_pinned_collapsed);
+    }
+
+    #[test]
+    fn orig_strip_h_defaults_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.orig_strip_h, default_orig_strip_h());
+    }
+
+    #[test]
+    fn orig_strip_h_round_trips() {
+        let p = Prefs {
+            orig_strip_h: 180.0,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert_eq!(q.orig_strip_h, 180.0);
     }
 
     #[test]

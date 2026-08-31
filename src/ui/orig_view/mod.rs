@@ -7,7 +7,7 @@ mod strip;
 
 pub(crate) use chrome::{orig_action_capsule, orig_hud_disc};
 pub(crate) use geom::fit_scale;
-pub(crate) use strip::{max_strip_h, OrigStrip};
+pub(crate) use strip::{auto_strip_h, clamp_strip_h, max_strip_h, OrigStrip};
 
 use std::cell::RefCell;
 use std::rc::Rc;
