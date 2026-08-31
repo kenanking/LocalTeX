@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch OpenDoc + handwriting packs from the GitHub release and wire
-# ocr-pipeline-style current/ + compat links.
+# Fetch OpenDoc + handwriting packs from the GitHub release and point
+# current/opendoc and current/handwriting at the dated directories.
 # Override with LOCALTEX_MODELS, LOCALTEX_MODELS_REPO, LOCALTEX_MODELS_TAG.
 set -euo pipefail
 
@@ -73,17 +73,8 @@ download_assets "$WORKDIR"
 tar -xzf "$WORKDIR/$OPENDOC_TAR" -C "$DEST"
 tar -xzf "$WORKDIR/$HANDWRITING_TAR" -C "$DEST"
 
-# Drop the old flat / inktex-* layout so current/ is the only tree.
-rm -f "$DEST"/layout.onnx "$DEST"/encoder.onnx "$DEST"/decoder.onnx \
-  "$DEST"/unirec_tokenizer_mapping.json
-if [[ -d "$DEST/handwriting" && ! -L "$DEST/handwriting" ]]; then
-  rm -rf "$DEST/handwriting"
-fi
-
 link_rel "../$OPENDOC_DIR" "$DEST/current/opendoc"
 link_rel "../$HANDWRITING_DIR" "$DEST/current/handwriting"
-link_rel "$OPENDOC_DIR" "$DEST/ship"
-link_rel "$HANDWRITING_DIR" "$DEST/handwriting"
 
 cp -f "$WORKDIR/manifest.json" "$DEST/manifest.json"
 cp -f "$WORKDIR/$SUMS" "$DEST/$SUMS"

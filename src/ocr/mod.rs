@@ -16,7 +16,7 @@ mod unirec;
 use crate::doc::{Block, BlockKind, OcrMeta, Rect};
 use imgops::RgbImg;
 use inktex::{InkTex, INK_FILES};
-use pipeline::{Pipeline, SHIP_FILES};
+use pipeline::{Pipeline, OPENDOC_FILES};
 
 pub use pipeline::OcrResult;
 
@@ -46,23 +46,23 @@ struct Sessions {
 pub struct Engine {
     dir: PathBuf,
     inner: Mutex<Sessions>,
-    ship_ok: bool,
+    opendoc_ok: bool,
     ink_ok: bool,
 }
 
 impl Engine {
     pub fn load() -> Arc<Self> {
         let dir = models_dir();
-        let ship_ok = ship_present(&dir);
-        let ink_ok = ink_present(&dir);
-        if ship_ok {
+        let opendoc_ok = pack_present(&opendoc_dir(&dir), &OPENDOC_FILES);
+        let ink_ok = pack_present(&handwriting_dir(&dir), &INK_FILES);
+        if opendoc_ok {
             eprintln!(
                 "{APP_SLUG}: OpenDoc weights deferred until first snip ({})",
                 opendoc_dir(&dir).display()
             );
         } else {
             eprintln!(
-                "{APP_SLUG}: OpenDoc ship models missing in {}",
+                "{APP_SLUG}: OpenDoc models missing in {}",
                 opendoc_dir(&dir).display()
             );
         }
@@ -83,13 +83,13 @@ impl Engine {
                 page: None,
                 ink: None,
             }),
-            ship_ok,
+            opendoc_ok,
             ink_ok,
         })
     }
 
     pub fn status(&self) -> EngineStatus {
-        if self.ship_ok {
+        if self.opendoc_ok {
             EngineStatus::Ready
         } else {
             EngineStatus::MissingModels {
@@ -99,8 +99,11 @@ impl Engine {
     }
 
     pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
-        if !self.ship_ok {
-            bail!("OpenDoc ship models missing in {}", self.dir.display());
+        if !self.opendoc_ok {
+            bail!(
+                "OpenDoc models missing in {}",
+                opendoc_dir(&self.dir).display()
+            );
         }
         let mut guard = self.inner.lock().expect("ocr mutex");
         if guard.page.is_none() {
@@ -136,47 +139,23 @@ impl Engine {
     }
 }
 
-fn has_all(dir: &Path, files: &[&str]) -> bool {
+fn pack_present(dir: &Path, files: &[&str]) -> bool {
     files.iter().all(|name| dir.join(name).is_file())
 }
 
-fn first_pack(models: &Path, rels: &[&str], files: &[&str]) -> PathBuf {
-    for rel in rels {
-        let dir = if rel.is_empty() {
-            models.to_path_buf()
-        } else {
-            models.join(rel)
-        };
-        if has_all(&dir, files) {
-            return dir;
-        }
-    }
-    models.join(rels[0])
-}
-
-/// Prefer `current/opendoc`, then the `ship` compat link, then a flat root.
 fn opendoc_dir(models: &Path) -> PathBuf {
-    first_pack(models, &["current/opendoc", "ship", ""], &SHIP_FILES)
+    models.join("current").join("opendoc")
 }
 
-/// Prefer `current/handwriting`, then the `handwriting` compat link.
 fn handwriting_dir(models: &Path) -> PathBuf {
-    first_pack(models, &["current/handwriting", "handwriting"], &INK_FILES)
-}
-
-fn ship_present(dir: &Path) -> bool {
-    has_all(&opendoc_dir(dir), &SHIP_FILES)
-}
-
-fn ink_present(dir: &Path) -> bool {
-    has_all(&handwriting_dir(dir), &INK_FILES)
+    models.join("current").join("handwriting")
 }
 
 fn load_pipeline(dir: &Path) -> Result<Pipeline> {
     let intra = default_intra();
     let pack = opendoc_dir(dir);
     eprintln!(
-        "{APP_SLUG}: loading OpenDoc ship ({intra} intra-op threads, {})",
+        "{APP_SLUG}: loading OpenDoc ({intra} intra-op threads, {})",
         pack.display()
     );
     let pipeline = Pipeline::load(&pack, intra)?;
@@ -353,48 +332,11 @@ mod tests {
         );
     }
 
-    fn touch(path: &Path) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("mkdir");
-        }
-        std::fs::write(path, b"").expect("touch");
-    }
-
-    fn pack_fixture(rels: &[&str], files: &[&str]) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "localtex-models-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        for rel in rels {
-            let dir = if rel.is_empty() {
-                root.clone()
-            } else {
-                root.join(rel)
-            };
-            for name in files {
-                touch(&dir.join(name));
-            }
-        }
-        root
-    }
-
     #[test]
-    fn opendoc_dir_prefers_current_over_flat() {
-        let root = pack_fixture(&["current/opendoc", ""], &SHIP_FILES);
+    fn packs_live_under_current() {
+        let root = PathBuf::from("/models");
         assert_eq!(opendoc_dir(&root), root.join("current/opendoc"));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn handwriting_dir_prefers_current() {
-        let root = pack_fixture(&["current/handwriting", "handwriting"], &INK_FILES);
         assert_eq!(handwriting_dir(&root), root.join("current/handwriting"));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -405,7 +347,7 @@ mod tests {
                 page: None,
                 ink: None,
             }),
-            ship_ok: false,
+            opendoc_ok: false,
             ink_ok: false,
         };
         assert!(matches!(
@@ -444,7 +386,7 @@ mod tests {
     #[ignore]
     fn opendoc_smoke_if_weights_exist() {
         let dir = models_dir();
-        if !ship_present(&dir) {
+        if !pack_present(&opendoc_dir(&dir), &OPENDOC_FILES) {
             return;
         }
         let engine = Engine::load();
@@ -456,7 +398,7 @@ mod tests {
     #[ignore]
     fn inktex_smoke_if_weights_exist() {
         let dir = models_dir();
-        if !ink_present(&dir) {
+        if !pack_present(&handwriting_dir(&dir), &INK_FILES) {
             return;
         }
         let engine = Engine::load();
@@ -480,7 +422,7 @@ mod tests {
     fn inktex_e2e_dataset_dir() {
         let dir = std::env::var("INKTEX_E2E_DIR").expect("INKTEX_E2E_DIR");
         let dir = std::path::Path::new(&dir);
-        if !ink_present(&models_dir()) {
+        if !pack_present(&handwriting_dir(&models_dir()), &INK_FILES) {
             eprintln!("inktex e2e skipped: weights missing (set LOCALTEX_MODELS)");
             return;
         }

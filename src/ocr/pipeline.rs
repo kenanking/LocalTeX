@@ -24,7 +24,7 @@ pub const ENCODER_ONNX: &str = "encoder.onnx";
 pub const DECODER_ONNX: &str = "decoder.onnx";
 pub const TOKENIZER_JSON: &str = "unirec_tokenizer_mapping.json";
 
-pub const SHIP_FILES: [&str; 4] = [LAYOUT_ONNX, ENCODER_ONNX, DECODER_ONNX, TOKENIZER_JSON];
+pub const OPENDOC_FILES: [&str; 4] = [LAYOUT_ONNX, ENCODER_ONNX, DECODER_ONNX, TOKENIZER_JSON];
 
 #[derive(Clone)]
 pub struct OcrResult {

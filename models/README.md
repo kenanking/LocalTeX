@@ -15,13 +15,11 @@ Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Window
 models/
   current/opendoc      → ../opendoc_int8_20260827_45af38b
   current/handwriting  → ../handwriting_e10_20260831_cf27b99
-  ship                 → opendoc_int8_20260827_45af38b
-  handwriting          → handwriting_e10_20260831_cf27b99
   opendoc_int8_20260827_45af38b/
   handwriting_e10_20260831_cf27b99/
 ```
 
-The app loads `current/opendoc` and `current/handwriting`. `ship` and `handwriting` stay as compat links. Naming is `<name>_<form>_<YYYYMMDD>_<git-short>`.
+The app loads only `current/opendoc` and `current/handwriting`. Naming is `<name>_<form>_<YYYYMMDD>_<git-short>`.
 
 `manifest.json` on the release is the machine-readable copy of this card.
 
