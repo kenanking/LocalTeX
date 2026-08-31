@@ -27,7 +27,7 @@ Rust stable. On Linux you need X11 and the usual GPUI/Vulkan stack.
 ```bash
 git clone https://github.com/kenanking/LocalTeX.git
 cd LocalTeX
-./scripts/download-models.sh    # OpenDoc ship from GitHub release v0.0.0
+./scripts/download-models.sh    # OpenDoc + handwriting packs from GitHub release v0.0.0
 cargo build --profile dev-opt   # daily iteration (skips LTO)
 cargo build --release           # smaller/slower link for a ship binary
 ```
@@ -44,12 +44,9 @@ OpenDoc ship weights (~244 MB) and inktex handwriting weights (~23 MB) stay 
 ./scripts/download-models.sh
 ```
 
-That unpacks `opendoc-0.1b-ship.tar.gz` and `inktex-woq.tar.gz` into `$LOCALTEX_MODELS`, else:
+That unpacks dated packs into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) and points `current/opendoc` and `current/handwriting` at them. The layout matches ocr-pipeline.
 
-- Linux: `~/.local/share/localtex/models`
-- Windows: `%LOCALAPPDATA%\localtex\models`
-
-Printed snips need `layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`. Draw-a-formula needs `handwriting/inktex-encoder.onnx`, `handwriting/inktex-decoder-step.onnx`, `handwriting/inktex-vocab.json`. See [`models/README.md`](models/README.md). `manifest.json` is the same card in JSON. Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
+Printed snips load `current/opendoc` (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`). Draw-a-formula loads `current/handwriting` (`encoder.onnx`, `decoder_step.onnx`, `vocab.json`). See [`models/README.md`](models/README.md). Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
 
 The GitHub repo may be private: `download-models.sh` uses `gh` when you are logged in (`gh auth status`).
 
