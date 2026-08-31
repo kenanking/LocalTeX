@@ -14,6 +14,7 @@ use super::theme;
 use super::widgets::{
     icon_btn_sized, missing_image_slot, section_label, seg_item, segmented, IconBtnSize, IconKind,
 };
+use super::window_drag::WindowDrag;
 use crate::cache::{ROW_HEIGHT_PX, THUMB_VIEWPORT_MULT};
 use crate::doc::ImageSlot;
 use crate::library::DATE_PRESETS;
@@ -299,7 +300,10 @@ impl MainWindow {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                            this.sidebar_drag = Some((f32::from(ev.position.x), width));
+                            this.window_drag = Some(WindowDrag::Sidebar {
+                                start_x: f32::from(ev.position.x),
+                                start_w: width,
+                            });
                             cx.stop_propagation();
                         }),
                     ),

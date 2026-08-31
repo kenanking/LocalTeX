@@ -14,13 +14,14 @@ use uuid::Uuid;
 use super::chrome::chrome;
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
-use super::orig_view::{max_strip_h, OrigStrip, OrigView};
+use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsPane;
 use super::source_editor::SourceEditor;
 use super::theme;
+use super::window_drag::WindowDrag;
 use crate::actions::{
     Capture, CloseSheet, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp,
     RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource, UploadImage,
@@ -114,14 +115,13 @@ pub struct MainWindow {
     pub(crate) orig: OrigView,
     pub(crate) orig_strip: OrigStrip,
     pub(crate) preview: PreviewPane,
-    pub(crate) sidebar_drag: Option<(f32, f32)>,
+    pub(crate) window_drag: Option<WindowDrag>,
     pub(crate) history: HistoryPane,
     pub(crate) source_open: bool,
     pub(crate) source: Entity<SourceEditor>,
     pub(crate) source_bound: Option<Uuid>,
     pub(crate) source_last: String,
     pub(crate) source_split: f32,
-    pub(crate) source_split_drag: Option<(f32, f32, f32)>,
     source_epoch: u64,
 }
 
@@ -239,14 +239,13 @@ impl MainWindow {
             orig: OrigView::new(),
             orig_strip: OrigStrip::new(),
             preview: PreviewPane::new(),
-            sidebar_drag: None,
+            window_drag: None,
             history,
             source_open: false,
             source,
             source_bound: None,
             source_last: String::new(),
             source_split: 0.5,
-            source_split_drag: None,
             source_epoch: 0,
         };
         this.schedule_derived(window, cx);
@@ -660,20 +659,27 @@ impl MainWindow {
         .detach();
     }
 
-    fn apply_split_drags(
+    fn apply_window_drag(
         &mut self,
         ev: &MouseMoveEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.orig_strip.drag.is_some() {
-            let win_h: f32 = window.bounds().size.height.into();
-            let copy_h = match self.state.read(cx).selected_doc() {
-                Some(d) if matches!(d.status, DocStatus::Ready) => 72.0,
-                _ => 0.0,
-            };
-            let max_h = max_strip_h(win_h, copy_h);
-            if let Some(next) = self.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
+        match self.window_drag {
+            Some(WindowDrag::Strip { .. }) => {
+                let win_h: f32 = window.bounds().size.height.into();
+                let ready = self
+                    .state
+                    .read(cx)
+                    .selected_doc()
+                    .is_some_and(|d| matches!(d.status, DocStatus::Ready));
+                let max_h = max_strip_h(win_h, copy_reserve(ready));
+                let Some(drag) = self.window_drag.as_ref() else {
+                    return;
+                };
+                let Some(next) = drag.strip_h_for(f32::from(ev.position.y), max_h) else {
+                    return;
+                };
                 self.state.update(cx, |s, cx| {
                     if (s.prefs.orig_strip_h - next).abs() > 0.5 {
                         s.prefs.orig_strip_h = next;
@@ -681,39 +687,40 @@ impl MainWindow {
                     }
                 });
             }
-            return;
-        }
-        if let Some((start_x, start, work_w)) = self.source_split_drag {
-            if work_w > 1.0 {
-                let pct = start + (f32::from(ev.position.x) - start_x) / work_w;
-                self.source_split = pct.clamp(0.28, 0.72);
-                cx.notify();
+            Some(WindowDrag::Source {
+                start_x,
+                start_pct,
+                work_w,
+            }) => {
+                if work_w > 1.0 {
+                    let pct = start_pct + (f32::from(ev.position.x) - start_x) / work_w;
+                    self.source_split = pct.clamp(0.28, 0.72);
+                    cx.notify();
+                }
             }
-            return;
-        }
-        let Some((start_x, start_w)) = self.sidebar_drag else {
-            return;
-        };
-        let win_w: f32 = window.bounds().size.width.into();
-        let max = (win_w - 360.).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
-        let w = (start_w + f32::from(ev.position.x) - start_x).clamp(SIDEBAR_MIN, max);
-        self.state.update(cx, |s, cx| {
-            if (s.prefs.sidebar_width - w).abs() > 0.5 {
-                s.prefs.sidebar_width = w;
-                cx.notify();
+            Some(WindowDrag::Sidebar { start_x, start_w }) => {
+                let win_w: f32 = window.bounds().size.width.into();
+                let max = (win_w - 360.).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+                let w = (start_w + f32::from(ev.position.x) - start_x).clamp(SIDEBAR_MIN, max);
+                self.state.update(cx, |s, cx| {
+                    if (s.prefs.sidebar_width - w).abs() > 0.5 {
+                        s.prefs.sidebar_width = w;
+                        cx.notify();
+                    }
+                });
             }
-        });
+            None => {}
+        }
     }
 
-    fn end_split_drags(&mut self, cx: &mut Context<Self>) {
-        let strip_dragged = self.orig_strip.drag.is_some();
-        if strip_dragged {
-            self.orig_strip.end_drag();
+    fn end_window_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.window_drag.take() else {
+            return;
+        };
+        if drag.is_strip() {
             cx.notify();
         }
-        self.source_split_drag = None;
-        let sidebar_dragged = self.sidebar_drag.take().is_some();
-        if strip_dragged || sidebar_dragged {
+        if drag.persist_on_end() {
             self.state.update(cx, |s, _| s.persist_prefs());
         }
     }
@@ -931,16 +938,11 @@ impl Element for SplitDragCatcher {
                 if phase != DispatchPhase::Capture {
                     return;
                 }
-                let active = {
-                    let this = view.read(cx);
-                    this.orig_strip.drag.is_some()
-                        || this.source_split_drag.is_some()
-                        || this.sidebar_drag.is_some()
-                };
+                let active = view.read(cx).window_drag.is_some();
                 if !active {
                     return;
                 }
-                view.update(cx, |this, cx| this.apply_split_drags(event, window, cx));
+                view.update(cx, |this, cx| this.apply_window_drag(event, window, cx));
             }
         });
         window.on_mouse_event({
@@ -949,16 +951,11 @@ impl Element for SplitDragCatcher {
                 if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
                     return;
                 }
-                let active = {
-                    let this = view.read(cx);
-                    this.orig_strip.drag.is_some()
-                        || this.source_split_drag.is_some()
-                        || this.sidebar_drag.is_some()
-                };
+                let active = view.read(cx).window_drag.is_some();
                 if !active {
                     return;
                 }
-                view.update(cx, |this, cx| this.end_split_drags(cx));
+                view.update(cx, |this, cx| this.end_window_drag(cx));
             }
         });
     }

@@ -8,14 +8,15 @@ use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::orig_view::{
-    auto_strip_h, clamp_strip_h, max_strip_h, orig_action_capsule, orig_hud_disc, source_hud_bar,
-    source_hud_disc, source_hud_sep,
+    auto_strip_h, clamp_strip_h, copy_reserve, max_strip_h, orig_action_capsule, orig_hud_disc,
+    source_hud_bar, source_hud_disc, source_hud_sep,
 };
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
 use super::widgets::{
     btn, copy_chip, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
 };
+use super::window_drag::WindowDrag;
 use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta, SnipKind};
 use crate::state::AppState;
 
@@ -27,7 +28,11 @@ impl MainWindow {
         win_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        self.orig_strip.bind_doc(self.state.read(cx).selected());
+        if self.orig_strip.bind_doc(self.state.read(cx).selected()) {
+            if self.window_drag.as_ref().is_some_and(|d| d.is_strip()) {
+                self.window_drag = None;
+            }
+        }
         let snap = {
             let state = self.state.read(cx);
             let Some(doc) = state.selected_doc() else {
@@ -116,7 +121,7 @@ impl MainWindow {
                 (u32::from(s.width) as f32, u32::from(s.height) as f32)
             })
             .unwrap_or((0.0, 0.0));
-        let copy_h = if ready { 72.0 } else { 0.0 };
+        let copy_h = copy_reserve(ready);
         let max_h = max_strip_h(win_h, copy_h);
         let strip_h = clamp_strip_h(snap.orig_strip_h, max_h);
         let orig = self.render_orig_strip(
@@ -399,8 +404,11 @@ impl MainWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    this.source_split_drag =
-                        Some((f32::from(ev.position.x), start_split, pane_w.max(1.0)));
+                    this.window_drag = Some(WindowDrag::Source {
+                        start_x: f32::from(ev.position.x),
+                        start_pct: start_split,
+                        work_w: pane_w.max(1.0),
+                    });
                     cx.stop_propagation();
                     cx.notify();
                 }),
@@ -432,7 +440,8 @@ impl MainWindow {
         max_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let split_on = self.orig_strip.split_hover || self.orig_strip.drag.is_some();
+        let split_on =
+            self.orig_strip.split_hover || self.window_drag.as_ref().is_some_and(|d| d.is_strip());
         let card = if missing {
             missing_image_slot(px(720.), px(strip_h))
                 .id("orig-thumb")
@@ -597,8 +606,10 @@ impl MainWindow {
                             cx.notify();
                         });
                     } else {
-                        this.orig_strip
-                            .begin_drag(f32::from(ev.position.y), strip_h);
+                        this.window_drag = Some(WindowDrag::Strip {
+                            start_y: f32::from(ev.position.y),
+                            start_h: strip_h,
+                        });
                     }
                     cx.stop_propagation();
                     cx.notify();
