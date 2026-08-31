@@ -172,7 +172,6 @@ impl AppState {
                         this.copy_selected(cx);
                     }
                 }
-                this.restore_after_hide(cx);
                 if this.capture.take_reveal_on_main() {
                     this.dismiss_main_sheet(cx);
                 }

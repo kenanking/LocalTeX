@@ -19,7 +19,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                     &state,
                     "pref-hide",
                     "Hide window while snipping",
-                    "Restore when recognition finishes.",
+                    "Show the window as soon as you finish selecting.",
                     prefs.hide_on_capture,
                     |p, v| p.hide_on_capture = v,
                 ),
