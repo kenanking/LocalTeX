@@ -294,7 +294,7 @@ impl MainWindow {
         div()
             .id("source-panel")
             .relative()
-            .h_full()
+            .min_h_0()
             .w(px(src_w))
             .min_w_0()
             .flex_none()

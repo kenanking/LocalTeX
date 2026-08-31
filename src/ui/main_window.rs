@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, MouseButton, RenderImage, ScrollHandle, Timer, Window,
+    div, point, prelude::*, px, rgb, App, Bounds, ClipboardItem, Context, CursorStyle,
+    DispatchPhase, Element, Entity, FocusHandle, Focusable, GlobalElementId, Image, LayoutId,
+    MouseButton, MouseMoveEvent, MouseUpEvent, RenderImage, ScrollHandle, Style, Timer, Window,
 };
 use uuid::Uuid;
 
@@ -658,6 +659,57 @@ impl MainWindow {
         })
         .detach();
     }
+
+    fn apply_split_drags(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.orig_strip.drag.is_some() {
+            let win_h: f32 = window.bounds().size.height.into();
+            let copy_h = match self.state.read(cx).selected_doc() {
+                Some(d) if matches!(d.status, DocStatus::Ready) => 72.0,
+                _ => 0.0,
+            };
+            let max_h = max_strip_h(win_h, copy_h);
+            if self.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
+                cx.notify();
+            }
+            return;
+        }
+        if let Some((start_x, start, work_w)) = self.source_split_drag {
+            if work_w > 1.0 {
+                let pct = start + (f32::from(ev.position.x) - start_x) / work_w;
+                self.source_split = pct.clamp(0.28, 0.72);
+                cx.notify();
+            }
+            return;
+        }
+        let Some((start_x, start_w)) = self.sidebar_drag else {
+            return;
+        };
+        let win_w: f32 = window.bounds().size.width.into();
+        let max = (win_w - 360.).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        let w = (start_w + f32::from(ev.position.x) - start_x).clamp(SIDEBAR_MIN, max);
+        self.state.update(cx, |s, cx| {
+            if (s.prefs.sidebar_width - w).abs() > 0.5 {
+                s.prefs.sidebar_width = w;
+                cx.notify();
+            }
+        });
+    }
+
+    fn end_split_drags(&mut self, cx: &mut Context<Self>) {
+        if self.orig_strip.drag.is_some() {
+            self.orig_strip.end_drag();
+            cx.notify();
+        }
+        self.source_split_drag = None;
+        if self.sidebar_drag.take().is_some() {
+            self.state.update(cx, |s, _| s.persist_prefs());
+        }
+    }
 }
 
 impl Focusable for MainWindow {
@@ -735,7 +787,7 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::quit))
             .cursor(CursorStyle::Arrow)
-            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, window, cx| {
+            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
                 if this.orig.has_pointer() && !ev.dragging() {
                     this.orig.pointer_move(
                         f32::from(ev.position.x),
@@ -743,41 +795,7 @@ impl gpui::Render for MainWindow {
                         false,
                     );
                     cx.notify();
-                    return;
                 }
-                if this.orig_strip.drag.is_some() {
-                    let win_h: f32 = window.bounds().size.height.into();
-                    let copy_h = match this.state.read(cx).selected_doc() {
-                        Some(d) if matches!(d.status, DocStatus::Ready) => 72.0,
-                        _ => 0.0,
-                    };
-                    let max_h = max_strip_h(win_h, copy_h);
-                    if this.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
-                        cx.notify();
-                    }
-                    return;
-                }
-                if let Some((start_x, start, work_w)) = this.source_split_drag {
-                    if work_w > 1.0 {
-                        let pct = start + (f32::from(ev.position.x) - start_x) / work_w;
-                        this.source_split = pct.clamp(0.28, 0.72);
-                        cx.notify();
-                    }
-                    return;
-                }
-                // Sidebar resize drag: started by the "sidebar-resize" strip.
-                let Some((start_x, start_w)) = this.sidebar_drag else {
-                    return;
-                };
-                let win_w: f32 = window.bounds().size.width.into();
-                let max = (win_w - 360.).clamp(SIDEBAR_MIN, SIDEBAR_MAX);
-                let w = (start_w + f32::from(ev.position.x) - start_x).clamp(SIDEBAR_MIN, max);
-                this.state.update(cx, |s, cx| {
-                    if (s.prefs.sidebar_width - w).abs() > 0.5 {
-                        s.prefs.sidebar_width = w;
-                        cx.notify();
-                    }
-                });
             }))
             .on_mouse_up(
                 MouseButton::Left,
@@ -791,14 +809,6 @@ impl gpui::Render for MainWindow {
                         this.unzoom();
                         window.focus(&this.snip_list_focus);
                         cx.notify();
-                    }
-                    if this.orig_strip.drag.is_some() {
-                        this.orig_strip.end_drag();
-                        cx.notify();
-                    }
-                    this.source_split_drag = None;
-                    if this.sidebar_drag.take().is_some() {
-                        this.state.update(cx, |s, _| s.persist_prefs());
                     }
                     if this.board.is_gesturing() {
                         this.board.pointer_up();
@@ -820,6 +830,7 @@ impl gpui::Render for MainWindow {
                 ],
                 cx.entity_id(),
             ))
+            .child(SplitDragCatcher { view: cx.entity() })
             .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
             .child(
                 div()
@@ -846,5 +857,102 @@ impl gpui::Render for MainWindow {
             )
             .child(self.render_footer(status_kind, status_label))
             .into_any_element()
+    }
+}
+
+/// GPUI `on_mouse_move` on a 12px handle dies once the cursor leaves it.
+/// Capture-phase listeners on the window match `ThumbDragCatcher`.
+struct SplitDragCatcher {
+    view: Entity<MainWindow>,
+}
+
+impl IntoElement for SplitDragCatcher {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for SplitDragCatcher {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (window.request_layout(Style::default(), [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<gpui::Pixels>,
+        _state: &mut (),
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: Bounds<gpui::Pixels>,
+        _request: &mut (),
+        _prepaint: &mut (),
+        window: &mut Window,
+        _cx: &mut App,
+    ) {
+        let view = self.view.clone();
+        window.on_mouse_event({
+            let view = view.clone();
+            move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase != DispatchPhase::Capture {
+                    return;
+                }
+                let active = {
+                    let this = view.read(cx);
+                    this.orig_strip.drag.is_some()
+                        || this.source_split_drag.is_some()
+                        || this.sidebar_drag.is_some()
+                };
+                if !active {
+                    return;
+                }
+                view.update(cx, |this, cx| this.apply_split_drags(event, window, cx));
+            }
+        });
+        window.on_mouse_event({
+            let view = view.clone();
+            move |event: &MouseUpEvent, phase, _, cx| {
+                if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+                    return;
+                }
+                let active = {
+                    let this = view.read(cx);
+                    this.orig_strip.drag.is_some()
+                        || this.source_split_drag.is_some()
+                        || this.sidebar_drag.is_some()
+                };
+                if !active {
+                    return;
+                }
+                view.update(cx, |this, cx| this.end_split_drags(cx));
+            }
+        });
     }
 }
