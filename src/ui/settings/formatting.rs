@@ -17,7 +17,7 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
             "Export",
             vec![setting_row(
                 "Primary format",
-                "Used for Ctrl+C and auto-copy. Extra formats stay available on each snip.",
+                "Fallback for Ctrl+C and auto-copy when you have not picked a format for this kind of snip. Extra formats stay available on each snip.",
                 picker(
                     150.,
                     [

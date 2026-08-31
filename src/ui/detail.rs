@@ -659,6 +659,7 @@ impl MainWindow {
                 };
                 let is_copied = copied.is_some_and(|(_, k)| k == kind);
                 let entity = cx.entity();
+                let state = self.state.clone();
                 line = line.child(copy_chip(
                     SharedString::from(format!("copy-{}", kind.id())),
                     kind.label(),
@@ -667,7 +668,7 @@ impl MainWindow {
                     is_copied,
                     !text.is_empty(),
                     move |_, cx| {
-                        crate::state::AppState::copy_text(text.clone(), cx);
+                        state.update(cx, |s, cx| s.copy_chip(kind, cx));
                         entity.update(cx, |this, cx| {
                             this.flash_copied(doc_id, kind, cx);
                         });

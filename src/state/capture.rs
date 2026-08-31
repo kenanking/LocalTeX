@@ -90,6 +90,7 @@ impl AppState {
         self.capture.set_reveal_on_main(true);
         self.capture.set(Capture::Idle);
         self.ingest(IngestSource::Screen(crop), cx);
+        self.restore_after_hide(cx);
     }
 
     pub fn request_upload(&mut self, cx: &mut Context<Self>) {

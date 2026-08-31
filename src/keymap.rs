@@ -14,6 +14,7 @@ use crate::actions::{
 #[serde(rename_all = "snake_case")]
 pub enum ShortcutId {
     Capture,
+    Show,
     Upload,
     Paste,
     Draw,
@@ -27,6 +28,7 @@ impl ShortcutId {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Capture => "capture",
+            Self::Show => "show",
             Self::Upload => "upload",
             Self::Paste => "paste",
             Self::Draw => "draw",
@@ -45,6 +47,13 @@ pub enum Group {
     Window,
 }
 
+/// Catalog-facing OS commands. Tray Quit is not a shortcut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalCmd {
+    Capture,
+    Show,
+}
+
 pub struct Spec {
     pub id: ShortcutId,
     pub group: Group,
@@ -52,7 +61,13 @@ pub struct Spec {
     pub default: &'static str,
     pub context: Option<&'static str>,
     pub required: bool,
-    pub global: bool,
+    pub os: Option<GlobalCmd>,
+}
+
+impl Spec {
+    pub fn global(&self) -> bool {
+        self.os.is_some()
+    }
 }
 
 /// Missing key means catalog default. JSON `null` means unbound.
@@ -73,7 +88,16 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-shift-s",
         context: None,
         required: false,
-        global: true,
+        os: Some(GlobalCmd::Capture),
+    },
+    Spec {
+        id: ShortcutId::Show,
+        group: Group::Window,
+        label: "Show main window",
+        default: "ctrl-shift-a",
+        context: None,
+        required: false,
+        os: Some(GlobalCmd::Show),
     },
     Spec {
         id: ShortcutId::Upload,
@@ -82,7 +106,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-o",
         context: None,
         required: false,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::Paste,
@@ -91,7 +115,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-v",
         context: None,
         required: true,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::Draw,
@@ -100,7 +124,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-d",
         context: None,
         required: false,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::Copy,
@@ -109,7 +133,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-c",
         context: None,
         required: true,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::ToggleFormat,
@@ -118,7 +142,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-l",
         context: None,
         required: false,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::Delete,
@@ -127,7 +151,7 @@ pub const CATALOG: &[Spec] = &[
         default: "delete",
         context: Some("SnipList && !SearchField"),
         required: true,
-        global: false,
+        os: None,
     },
     Spec {
         id: ShortcutId::Settings,
@@ -136,7 +160,7 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-,",
         context: None,
         required: false,
-        global: false,
+        os: None,
     },
 ];
 
@@ -153,6 +177,17 @@ pub fn effective(over: &Overrides, id: ShortcutId) -> Option<String> {
         Some(Some(chord)) => Some(chord.clone()),
         None => Some(spec(id).default.to_string()),
     }
+}
+
+pub fn global_bindings(over: &Overrides) -> Vec<(ShortcutId, String, GlobalCmd)> {
+    CATALOG
+        .iter()
+        .filter_map(|s| {
+            let cmd = s.os?;
+            let chord = effective(over, s.id)?;
+            Some((s.id, chord, cmd))
+        })
+        .collect()
 }
 
 pub fn is_customized(over: &Overrides, id: ShortcutId) -> bool {
@@ -318,6 +353,7 @@ fn bind_catalog(cx: &mut App, spec: &Spec, chord: &str) {
         ShortcutId::Capture => {
             cx.bind_keys([KeyBinding::new(chord, Capture, spec.context)]);
         }
+        ShortcutId::Show => {}
         ShortcutId::Upload => {
             cx.bind_keys([KeyBinding::new(chord, UploadImage, spec.context)]);
         }
@@ -508,5 +544,36 @@ mod tests {
             effective(&over, ShortcutId::Draw).as_deref(),
             Some("ctrl-shift-d")
         );
+    }
+
+    #[test]
+    fn global_bindings_empty_overrides_capture_and_show() {
+        let over = Overrides::new();
+        let binds = global_bindings(&over);
+        assert_eq!(
+            binds
+                .iter()
+                .map(|(id, chord, cmd)| (*id, chord.as_str(), *cmd))
+                .collect::<Vec<_>>(),
+            vec![
+                (ShortcutId::Capture, "ctrl-shift-s", GlobalCmd::Capture),
+                (ShortcutId::Show, "ctrl-shift-a", GlobalCmd::Show),
+            ]
+        );
+    }
+
+    #[test]
+    fn catalog_os_rows_are_global() {
+        for spec in CATALOG {
+            assert_eq!(spec.global(), spec.os.is_some());
+            if let Some(cmd) = spec.os {
+                assert!(matches!(cmd, GlobalCmd::Capture | GlobalCmd::Show));
+            }
+        }
+        assert_eq!(spec(ShortcutId::Show).default, "ctrl-shift-a");
+        assert_eq!(spec(ShortcutId::Show).group, Group::Window);
+        let id: ShortcutId = serde_json::from_str("\"show\"").unwrap();
+        assert_eq!(id, ShortcutId::Show);
+        assert_eq!(id.as_str(), "show");
     }
 }

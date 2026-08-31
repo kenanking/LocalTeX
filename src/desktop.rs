@@ -1,6 +1,6 @@
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::RwLock;
 use std::thread;
 
 use global_hotkey::hotkey::HotKey;
@@ -30,11 +30,30 @@ pub enum DesktopCmd {
     Quit,
 }
 
+impl From<crate::keymap::GlobalCmd> for DesktopCmd {
+    fn from(cmd: crate::keymap::GlobalCmd) -> Self {
+        match cmd {
+            crate::keymap::GlobalCmd::Capture => Self::Capture,
+            crate::keymap::GlobalCmd::Show => Self::Show,
+        }
+    }
+}
+
+struct Grab {
+    chord: String,
+    hotkey: HotKey,
+    cmd: DesktopCmd,
+}
+
+struct GrabSet {
+    by_chord: Vec<Grab>,
+}
+
 /// Keeps OS handles alive on the GPUI UI thread (Windows needs a win32 loop
 /// on that thread; macOS needs the main thread).
 struct Services {
     hotkey: Option<GlobalHotKeyManager>,
-    current_capture: Option<HotKey>,
+    grabs: GrabSet,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     _tray: Option<tray_icon::TrayIcon>,
 }
@@ -43,7 +62,7 @@ thread_local! {
     static SERVICES: RefCell<Option<Services>> = const { RefCell::new(None) };
 }
 
-static CAPTURE_HOTKEY_ID: AtomicU32 = AtomicU32::new(0);
+static GRABS: RwLock<Vec<(u32, DesktopCmd)>> = RwLock::new(Vec::new());
 
 /// Register hotkey + tray. Must be called from the GPUI UI thread.
 pub fn spawn() -> Receiver<DesktopCmd> {
@@ -56,7 +75,9 @@ pub fn spawn() -> Receiver<DesktopCmd> {
     SERVICES.with(|slot| {
         *slot.borrow_mut() = Some(Services {
             hotkey,
-            current_capture: None,
+            grabs: GrabSet {
+                by_chord: Vec::new(),
+            },
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             _tray: tray,
         });
@@ -64,8 +85,9 @@ pub fn spawn() -> Receiver<DesktopCmd> {
     rx
 }
 
-/// Apply the Capture global hotkey. Call on the GPUI UI thread. `None` unregisters.
-pub fn rebind_capture(chord: Option<&str>) {
+/// Project catalog OS rows through Overrides onto the OS. Call on the GPUI UI thread.
+/// `None` effective chord ⇒ that id is not grabbed. On register failure, previous grabs remain.
+pub fn rebind_globals(over: &crate::keymap::Overrides) {
     SERVICES.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(svc) = slot.as_mut() else {
@@ -74,26 +96,70 @@ pub fn rebind_capture(chord: Option<&str>) {
         let Some(manager) = svc.hotkey.as_ref() else {
             return;
         };
-        if let Some(old) = svc.current_capture.take() {
-            if let Err(err) = manager.unregister(old) {
+
+        let desired: Vec<(String, DesktopCmd)> = crate::keymap::global_bindings(over)
+            .into_iter()
+            .filter_map(|(_, chord, cmd)| {
+                if crate::keymap::to_global_hotkey(&chord).is_none() {
+                    eprintln!("{APP_SLUG}: chord {chord:?} is not a global hotkey");
+                    return None;
+                }
+                Some((chord, DesktopCmd::from(cmd)))
+            })
+            .collect();
+
+        let mut added: Vec<Grab> = Vec::new();
+        for (chord, cmd) in &desired {
+            if svc.grabs.by_chord.iter().any(|g| &g.chord == chord) {
+                continue;
+            }
+            let Some(hotkey) = crate::keymap::to_global_hotkey(chord) else {
+                continue;
+            };
+            if let Err(err) = manager.register(hotkey) {
+                eprintln!("{APP_SLUG}: register global hotkey {chord}: {err}");
+                for g in &added {
+                    if let Err(err) = manager.unregister(g.hotkey) {
+                        eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
+                    }
+                }
+                return;
+            }
+            eprintln!("{APP_SLUG}: global hotkey {chord} registered");
+            added.push(Grab {
+                chord: chord.clone(),
+                hotkey,
+                cmd: *cmd,
+            });
+        }
+
+        let mut next = Vec::new();
+        for grab in svc.grabs.by_chord.drain(..) {
+            if let Some((_, cmd)) = desired.iter().find(|(c, _)| c == &grab.chord) {
+                next.push(Grab {
+                    chord: grab.chord,
+                    hotkey: grab.hotkey,
+                    cmd: *cmd,
+                });
+            } else if let Err(err) = manager.unregister(grab.hotkey) {
                 eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
             }
         }
-        CAPTURE_HOTKEY_ID.store(0, Ordering::Relaxed);
-        let Some(chord) = chord else {
-            return;
-        };
-        let Some(hotkey) = crate::keymap::to_global_hotkey(chord) else {
-            eprintln!("{APP_SLUG}: capture chord {chord:?} is not a global hotkey");
-            return;
-        };
-        if let Err(err) = manager.register(hotkey) {
-            eprintln!("{APP_SLUG}: register global hotkey {chord}: {err}");
-            return;
+        next.extend(added);
+        svc.grabs.by_chord = next;
+
+        let published: Vec<(u32, DesktopCmd)> = svc
+            .grabs
+            .by_chord
+            .iter()
+            .map(|g| (g.hotkey.id(), g.cmd))
+            .collect();
+        match GRABS.write() {
+            Ok(mut g) => *g = published,
+            Err(poisoned) => {
+                *poisoned.into_inner() = published;
+            }
         }
-        CAPTURE_HOTKEY_ID.store(hotkey.id(), Ordering::Relaxed);
-        svc.current_capture = Some(hotkey);
-        eprintln!("{APP_SLUG}: global hotkey {chord} registered");
     });
 }
 
@@ -108,12 +174,26 @@ fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     thread::spawn(move || {
         let receiver = GlobalHotKeyEvent::receiver();
         while let Ok(event) = receiver.recv() {
-            let id = CAPTURE_HOTKEY_ID.load(Ordering::Relaxed);
-            if id != 0 && event.id == id && event.state == HotKeyState::Pressed {
-                if let Err(err) = tx.send(DesktopCmd::Capture) {
-                    eprintln!("{APP_SLUG}: hotkey send: {err}");
-                    break;
-                }
+            if event.state != HotKeyState::Pressed {
+                continue;
+            }
+            let cmd = match GRABS.read() {
+                Ok(g) => g
+                    .iter()
+                    .find(|(id, _)| *id == event.id)
+                    .map(|(_, cmd)| *cmd),
+                Err(poisoned) => poisoned
+                    .into_inner()
+                    .iter()
+                    .find(|(id, _)| *id == event.id)
+                    .map(|(_, cmd)| *cmd),
+            };
+            let Some(cmd) = cmd else {
+                continue;
+            };
+            if let Err(err) = tx.send(cmd) {
+                eprintln!("{APP_SLUG}: hotkey send: {err}");
+                break;
             }
         }
     });

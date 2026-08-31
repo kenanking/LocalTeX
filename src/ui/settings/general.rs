@@ -19,7 +19,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                     &state,
                     "pref-hide",
                     "Hide window while snipping",
-                    "Restore when recognition finishes.",
+                    "Show the window as soon as you finish selecting.",
                     prefs.hide_on_capture,
                     |p, v| p.hide_on_capture = v,
                 ),
@@ -35,7 +35,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                     &state,
                     "pref-copy",
                     "Copy result automatically",
-                    "Copies the primary format for this snip (Ctrl+C).",
+                    "Copies the last text format you used for this kind of snip, or the primary format.",
                     prefs.autocopy,
                     |p, v| p.autocopy = v,
                 ),
@@ -47,7 +47,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                 &state,
                 "pref-close-min",
                 "Minimize on close",
-                "Keeps the tray and Ctrl+Shift+S. Off quits; Ctrl+Q always quits.",
+                "Keeps the tray, Ctrl+Shift+S, and Ctrl+Shift+A. Off quits; Ctrl+Q always quits.",
                 prefs.close_action == WindowCloseAction::Minimize,
                 |p, v| {
                     p.close_action = if v {

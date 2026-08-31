@@ -4,7 +4,7 @@ use gpui::{App, AppContext, ClipboardItem, Context};
 use image::RgbaImage;
 use uuid::Uuid;
 
-use crate::doc::{Block, DocStatus, Document, ImageSlot};
+use crate::doc::{Block, CopyKind, DocStatus, Document, ImageSlot, SnipKind};
 use crate::identity::APP_SLUG;
 use crate::ingest::IngestSource;
 
@@ -172,7 +172,6 @@ impl AppState {
                         this.copy_selected(cx);
                     }
                 }
-                this.restore_after_hide(cx);
                 if this.capture.take_reveal_on_main() {
                     this.dismiss_main_sheet(cx);
                 }
@@ -208,16 +207,37 @@ impl AppState {
         }
     }
 
-    pub fn copy_selected(&self, cx: &mut App) {
+    pub fn copy_selected(&mut self, cx: &mut App) {
         let Some(doc) = self.selected_doc() else {
             return;
         };
-        let text = doc.primary_copy(self.export_fmt, &self.prefs);
+        let snip = doc.snip_kind();
+        let kind = self.prefs.copy_habit.resolve(snip, self.export_fmt);
+        let text = doc.text_for(kind, &self.prefs);
+        if text.is_empty() {
+            return;
+        }
         Self::write_clipboard(text, cx);
+        self.record_copy_habit(snip, kind);
     }
 
-    pub fn copy_text(text: String, cx: &mut App) {
+    pub fn copy_chip(&mut self, kind: CopyKind, cx: &mut App) {
+        let Some(doc) = self.selected_doc() else {
+            return;
+        };
+        let snip = doc.snip_kind();
+        let text = doc.text_for(kind, &self.prefs);
+        if text.is_empty() {
+            return;
+        }
         Self::write_clipboard(text, cx);
+        self.record_copy_habit(snip, kind);
+    }
+
+    fn record_copy_habit(&mut self, snip: SnipKind, kind: CopyKind) {
+        if self.prefs.copy_habit.remember(snip, kind) {
+            self.persist_prefs();
+        }
     }
 
     pub fn open_docx_selected(&mut self, cx: &mut Context<Self>) {

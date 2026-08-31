@@ -243,7 +243,7 @@ fn shortcut_row(
                         .whitespace_normal()
                         .child(SharedString::from(spec.label.to_string())),
                 )
-                .when(spec.global, |d| {
+                .when(spec.global(), |d| {
                     d.child(
                         div()
                             .px_2()
