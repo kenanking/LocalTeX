@@ -7,6 +7,18 @@ pub const STRIP_DEFAULT: f32 = 96.0;
 pub const STRIP_AUTO_CAP: f32 = 280.0;
 pub const STRIP_MIN_PREVIEW: f32 = 80.0;
 
+/// Layout budget for the Copy chip row when the snip is Ready.
+/// Not `geom::FILM_H` (overlay filmstrip).
+pub const COPY_RESERVE_H: f32 = 72.0;
+
+pub fn copy_reserve(ready: bool) -> f32 {
+    if ready {
+        COPY_RESERVE_H
+    } else {
+        0.0
+    }
+}
+
 pub struct OrigStrip {
     doc: Option<Uuid>,
     pub drag: Option<(f32, f32)>,
@@ -126,8 +138,20 @@ mod tests {
 
     #[test]
     fn max_strip_h_short_window_stays_min() {
-        assert!(max_strip_h(200.0, 72.0) >= STRIP_MIN);
-        assert_eq!(max_strip_h(200.0, 72.0), STRIP_MIN);
+        assert!(max_strip_h(200.0, copy_reserve(true)) >= STRIP_MIN);
+        assert_eq!(max_strip_h(200.0, copy_reserve(true)), STRIP_MIN);
+    }
+
+    #[test]
+    fn copy_reserve_is_72_when_ready() {
+        assert!((copy_reserve(true) - COPY_RESERVE_H).abs() < 0.5);
+        assert!((copy_reserve(false) - 0.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn max_strip_h_uses_copy_reserve_constant() {
+        assert_eq!(max_strip_h(200.0, copy_reserve(true)), STRIP_MIN);
+        assert!(max_strip_h(200.0, copy_reserve(true)) >= STRIP_MIN);
     }
 
     #[test]
