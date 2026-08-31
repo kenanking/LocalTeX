@@ -49,6 +49,50 @@ pub(crate) fn orig_hud_disc(
         )
 }
 
+/// Compact light disc for the source-editor toolbar on paper, not the overlay HUD.
+pub(crate) fn source_hud_disc(
+    id: impl Into<SharedString>,
+    icon: IconKind,
+    tooltip: &'static str,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl gpui::IntoElement {
+    div()
+        .id(id.into())
+        .size(px(20.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .tooltip(Tooltip::text(tooltip))
+        .on_click(on_click)
+        .hover(|d| d.bg(rgb(theme::ACCENT_SOFT_FILL)))
+        .child(
+            svg()
+                .path(icon.asset_path())
+                .size(px(12.))
+                .text_color(rgb(theme::TEXT)),
+        )
+}
+
+pub(crate) fn source_hud_bar() -> gpui::Div {
+    div()
+        .h(px(24.))
+        .px(px(4.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .gap(px(0.))
+        .bg(rgb(theme::BG_RAISED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+}
+
+pub(crate) fn source_hud_sep() -> gpui::Div {
+    div().w(px(1.)).h(px(10.)).mx(px(2.)).bg(rgb(theme::BORDER))
+}
+
 pub(crate) fn orig_action_capsule(
     doc_id: Uuid,
     copy_flashed: bool,

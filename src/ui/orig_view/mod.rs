@@ -5,7 +5,9 @@ mod geom;
 mod overlay;
 mod strip;
 
-pub(crate) use chrome::{orig_action_capsule, orig_hud_disc};
+pub(crate) use chrome::{
+    orig_action_capsule, orig_hud_disc, source_hud_bar, source_hud_disc, source_hud_sep,
+};
 pub(crate) use geom::fit_scale;
 pub(crate) use strip::{auto_strip_h, clamp_strip_h, max_strip_h, OrigStrip};
 

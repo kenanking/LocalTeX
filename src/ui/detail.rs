@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use gpui::{
-    canvas, div, img, prelude::*, px, rgb, rgba, Context, Corners, CursorStyle, Entity,
-    MouseButton, MouseDownEvent, ObjectFit, RenderImage, SharedString,
+    canvas, div, img, prelude::*, px, rgb, Context, Corners, CursorStyle, Entity, MouseButton,
+    MouseDownEvent, ObjectFit, RenderImage, SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::orig_view::{
-    auto_strip_h, clamp_strip_h, max_strip_h, orig_action_capsule, orig_hud_disc,
+    auto_strip_h, clamp_strip_h, max_strip_h, orig_action_capsule, orig_hud_disc, source_hud_bar,
+    source_hud_disc, source_hud_sep,
 };
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
@@ -247,7 +248,7 @@ impl MainWindow {
                                     .is_some_and(|d| d.vertical),
                             ScrollbarTone::Subtle,
                         ))
-                        .when(ready && !source_open, |d| {
+                        .when(ready && !source_open && self.preview.hover, |d| {
                             d.child(div().absolute().top(px(8.)).right(px(8.)).child(
                                 orig_hud_disc("edit-source", IconKind::Draw, "Edit source", {
                                     let entity = entity.clone();
@@ -319,35 +320,37 @@ impl MainWindow {
             .child(
                 div()
                     .absolute()
-                    .bottom(px(8.))
+                    .bottom(px(6.))
                     .left_0()
                     .right_0()
                     .flex()
                     .justify_center()
                     .child(
-                        div()
-                            .h(px(36.))
-                            .px(px(8.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.))
-                            .bg(theme::hud_pill())
-                            .border_1()
-                            .border_color(rgba(0xffffff47))
+                        source_hud_bar()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(div().px_1().text_xs().text_color(rgb(0xc8c8d0)).child(lang))
-                            .child(div().w(px(1.)).h(px(12.)).mx_1().bg(rgba(0xffffff38)))
-                            .child(orig_hud_disc("src-hide", IconKind::Collapse, "Collapse", {
-                                let entity = entity.clone();
-                                move |_, window, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.set_source_open(false, window, cx);
-                                    });
-                                }
-                            }))
+                            .child(
+                                div()
+                                    .px_1()
+                                    .text_xs()
+                                    .text_color(rgb(theme::MUTED))
+                                    .child(lang),
+                            )
+                            .child(source_hud_sep())
+                            .child(source_hud_disc(
+                                "src-hide",
+                                IconKind::Collapse,
+                                "Collapse",
+                                {
+                                    let entity = entity.clone();
+                                    move |_, window, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.set_source_open(false, window, cx);
+                                        });
+                                    }
+                                },
+                            ))
                             .child(div().opacity(if edited { 1. } else { 0.38 }).child(
-                                orig_hud_disc("src-revert", IconKind::Reset, "Revert OCR", {
+                                source_hud_disc("src-revert", IconKind::Reset, "Revert OCR", {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
@@ -356,9 +359,9 @@ impl MainWindow {
                                     }
                                 }),
                             ))
-                            .child(div().w(px(1.)).h(px(12.)).mx_1().bg(rgba(0xffffff38)))
+                            .child(source_hud_sep())
                             .child(div().opacity(if can_undo { 1. } else { 0.38 }).child(
-                                orig_hud_disc("src-undo", IconKind::Undo, "Undo", {
+                                source_hud_disc("src-undo", IconKind::Undo, "Undo", {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
@@ -370,7 +373,7 @@ impl MainWindow {
                                 }),
                             ))
                             .child(div().opacity(if can_redo { 1. } else { 0.38 }).child(
-                                orig_hud_disc("src-redo", IconKind::Redo, "Redo", {
+                                source_hud_disc("src-redo", IconKind::Redo, "Redo", {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
