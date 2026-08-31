@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::chrome::chrome;
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
-use super::orig_view::OrigView;
+use super::orig_view::{max_strip_h, OrigStrip, OrigView};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
@@ -110,6 +110,7 @@ pub struct MainWindow {
     pub(crate) copied: Option<(Uuid, CopyKind)>,
     copied_epoch: u64,
     pub(crate) orig: OrigView,
+    pub(crate) orig_strip: OrigStrip,
     pub(crate) preview: PreviewPane,
     pub(crate) sidebar_drag: Option<(f32, f32)>,
     pub(crate) history: HistoryPane,
@@ -222,6 +223,7 @@ impl MainWindow {
             copied: None,
             copied_epoch: 0,
             orig: OrigView::new(),
+            orig_strip: OrigStrip::new(),
             preview: PreviewPane::new(),
             sidebar_drag: None,
             history,
@@ -550,7 +552,8 @@ impl gpui::Render for MainWindow {
             let win_w: f32 = window.bounds().size.width.into();
             (win_w - sidebar - 32.).max(112.)
         };
-        let detail = self.render_detail(capturing, copy_pane_w, cx);
+        let win_h: f32 = window.bounds().size.height.into();
+        let detail = self.render_detail(capturing, copy_pane_w, win_h, cx);
         let orig_open = self.orig.open;
         if orig_open && !self.orig_focus.is_focused(window) {
             window.focus(&self.orig_focus);
@@ -596,6 +599,18 @@ impl gpui::Render for MainWindow {
                     cx.notify();
                     return;
                 }
+                if this.orig_strip.drag.is_some() {
+                    let win_h: f32 = window.bounds().size.height.into();
+                    let copy_h = match this.state.read(cx).selected_doc() {
+                        Some(d) if matches!(d.status, DocStatus::Ready) => 72.0,
+                        _ => 0.0,
+                    };
+                    let max_h = max_strip_h(win_h, copy_h);
+                    if this.orig_strip.drag_to(f32::from(ev.position.y), max_h) {
+                        cx.notify();
+                    }
+                    return;
+                }
                 // Sidebar resize drag: started by the "sidebar-resize" strip.
                 let Some((start_x, start_w)) = this.sidebar_drag else {
                     return;
@@ -621,6 +636,10 @@ impl gpui::Render for MainWindow {
                     } else if this.orig.is_image_panning() && this.orig.end_drag() {
                         this.unzoom();
                         window.focus(&this.snip_list_focus);
+                        cx.notify();
+                    }
+                    if this.orig_strip.drag.is_some() {
+                        this.orig_strip.end_drag();
                         cx.notify();
                     }
                     if this.sidebar_drag.take().is_some() {

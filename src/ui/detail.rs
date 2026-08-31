@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, Context, Entity, MouseButton, RenderImage, SharedString,
+    div, img, prelude::*, px, rgb, Context, CursorStyle, Entity, MouseButton, MouseDownEvent,
+    RenderImage, SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
-use super::orig_view::{orig_action_capsule, orig_hud_disc};
+use super::orig_view::{fit_scale, max_strip_h, orig_action_capsule, orig_hud_disc};
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
 use super::widgets::{
@@ -20,8 +21,10 @@ impl MainWindow {
         &mut self,
         capturing: bool,
         copy_pane_w: f32,
+        win_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        self.orig_strip.bind_doc(self.state.read(cx).selected());
         let snap = {
             let state = self.state.read(cx);
             let Some(doc) = state.selected_doc() else {
@@ -65,6 +68,18 @@ impl MainWindow {
                 state.can_reveal_original(doc_id),
             )
         };
+        let (img_w, img_h) = full
+            .as_ref()
+            .map(|im| {
+                let s = im.size(0);
+                (u32::from(s.width) as f32, u32::from(s.height) as f32)
+            })
+            .unwrap_or((0.0, 0.0));
+        let copy_h = if ready { 72.0 } else { 0.0 };
+        let max_h = max_strip_h(win_h, copy_h);
+        let strip_h = self
+            .orig_strip
+            .displayed_h(img_w, img_h, copy_pane_w, max_h);
         let orig = self.render_orig_strip(
             doc_id,
             full,
@@ -72,6 +87,10 @@ impl MainWindow {
             orig_copied,
             reveal_enabled,
             image_missing,
+            img_w,
+            img_h,
+            copy_pane_w,
+            strip_h,
             cx,
         );
 
@@ -200,97 +219,172 @@ impl MainWindow {
         copied: bool,
         reveal_enabled: bool,
         missing: bool,
+        img_w: f32,
+        img_h: f32,
+        pane_w: f32,
+        strip_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if missing {
-            return div()
-                .px_4()
-                .pt_3()
-                .child(missing_image_slot(px(720.), px(ORIG_STRIP_H)).w_full())
-                .into_any();
-        }
-        let entity = cx.entity();
+        let split_on = self.orig_strip.split_hover || self.orig_strip.drag.is_some();
+        let card = if missing {
+            missing_image_slot(px(720.), px(strip_h))
+                .id("orig-thumb")
+                .absolute()
+                .inset_0()
+                .w_full()
+                .when(split_on, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(8.))
+                            .right(px(8.))
+                            .bottom_0()
+                            .h(px(2.))
+                            .rounded(px(2.))
+                            .bg(rgb(theme::ACCENT)),
+                    )
+                })
+                .child(self.orig_strip_handle(strip_h, cx))
+                .into_any()
+        } else {
+            let scale = fit_scale(img_w, img_h, pane_w, strip_h);
+            let draw_w = (img_w * scale).max(1.0);
+            let draw_h = (img_h * scale).max(1.0);
+            let entity = cx.entity();
+            div()
+                .id("orig-thumb")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .bg(rgb(theme::BG_SUNKEN))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .when_some(full.clone(), |d, img_data| {
+                    d.child(
+                        img(img_data)
+                            .w(px(draw_w))
+                            .h(px(draw_h))
+                            .object_fit(gpui::ObjectFit::Fill),
+                    )
+                })
+                .when(full.is_some(), |d| {
+                    d.child(
+                        div()
+                            .id("orig-hit")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .bottom(px(12.))
+                            .occlude()
+                            .cursor_pointer()
+                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                if this.orig.strip_hover != *hovered {
+                                    this.orig.strip_hover = *hovered;
+                                    cx.notify();
+                                }
+                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.zoom_original(doc_id, window, cx);
+                            }))
+                            .flex()
+                            .items_start()
+                            .justify_end()
+                            .pt(px(8.))
+                            .pr(px(8.))
+                            .when(hovered, |d| {
+                                d.child(
+                                    div()
+                                        .id("strip-actions")
+                                        .h(px(28.))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .child(orig_action_capsule(
+                                            doc_id,
+                                            copied,
+                                            reveal_enabled,
+                                            "strip",
+                                            cx,
+                                        ))
+                                        .child(orig_hud_disc(
+                                            "strip-zoom",
+                                            IconKind::Corners,
+                                            "Open original",
+                                            {
+                                                let entity = entity.clone();
+                                                move |_, window, cx| {
+                                                    entity.update(cx, |this, cx| {
+                                                        this.zoom_original(doc_id, window, cx);
+                                                    });
+                                                }
+                                            },
+                                        )),
+                                )
+                            }),
+                    )
+                })
+                .when(split_on, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(8.))
+                            .right(px(8.))
+                            .bottom_0()
+                            .h(px(2.))
+                            .rounded(px(2.))
+                            .bg(rgb(theme::ACCENT)),
+                    )
+                })
+                .child(self.orig_strip_handle(strip_h, cx))
+                .into_any()
+        };
+
+        div().px_4().pt_3().flex_shrink_0().child(
+            div()
+                .id("orig-wrap")
+                .relative()
+                .w_full()
+                .h(px(strip_h))
+                .child(card),
+        )
+    }
+
+    fn orig_strip_handle(&self, strip_h: f32, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .px_4()
-            .pt_3()
-            .child(
-                div()
-                    .id("orig-thumb")
-                    .relative()
-                    .w_full()
-                    .h(px(ORIG_STRIP_H))
-                    .rounded_md()
-                    .bg(rgb(theme::BG_SUNKEN))
-                    .border_1()
-                    .border_color(rgb(theme::BORDER))
-                    .overflow_hidden()
-                    .when_some(full.clone(), |d, img_data| {
-                        d.child(
-                            img(img_data)
-                                .w_full()
-                                .h(px(ORIG_STRIP_H))
-                                .object_fit(gpui::ObjectFit::Contain),
-                        )
-                    })
-                    .when(full.is_some(), |d| {
-                        d.child(
-                            div()
-                                .id("orig-hit")
-                                .absolute()
-                                .inset_0()
-                                .occlude()
-                                .cursor_pointer()
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    if this.orig.strip_hover != *hovered {
-                                        this.orig.strip_hover = *hovered;
-                                        cx.notify();
-                                    }
-                                }))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.zoom_original(doc_id, window, cx);
-                                }))
-                                .flex()
-                                .items_start()
-                                .justify_end()
-                                .pt(px(8.))
-                                .pr(px(8.))
-                                .when(hovered, |d| {
-                                    d.child(
-                                        div()
-                                            .id("strip-actions")
-                                            .h(px(28.))
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.))
-                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                cx.stop_propagation()
-                                            })
-                                            .child(orig_action_capsule(
-                                                doc_id,
-                                                copied,
-                                                reveal_enabled,
-                                                "strip",
-                                                cx,
-                                            ))
-                                            .child(orig_hud_disc(
-                                                "strip-zoom",
-                                                IconKind::Corners,
-                                                "Open original",
-                                                {
-                                                    let entity = entity.clone();
-                                                    move |_, window, cx| {
-                                                        entity.update(cx, |this, cx| {
-                                                            this.zoom_original(doc_id, window, cx);
-                                                        });
-                                                    }
-                                                },
-                                            )),
-                                    )
-                                }),
-                        )
-                    }),
+            .id("orig-strip-resize")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(12.))
+            .occlude()
+            .cursor(CursorStyle::ResizeUpDown)
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.orig_strip.split_hover != *hovered {
+                    this.orig_strip.split_hover = *hovered;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    if ev.click_count >= 2 {
+                        this.orig_strip.reset_auto();
+                    } else {
+                        this.orig_strip
+                            .begin_drag(f32::from(ev.position.y), strip_h);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
             )
-            .into_any()
     }
 
     fn render_copy_rows(
@@ -371,8 +465,6 @@ struct DetailSnap {
     revision: u64,
     ready: bool,
 }
-
-const ORIG_STRIP_H: f32 = 96.;
 
 fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
     div()

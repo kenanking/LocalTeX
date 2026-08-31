@@ -3,8 +3,11 @@
 mod chrome;
 mod geom;
 mod overlay;
+mod strip;
 
 pub(crate) use chrome::{orig_action_capsule, orig_hud_disc};
+pub(crate) use geom::fit_scale;
+pub(crate) use strip::{max_strip_h, OrigStrip};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,8 +18,8 @@ use uuid::Uuid;
 use super::scroll::ScrollThumbDrag;
 
 use geom::{
-    film_cell_w, film_pan_offset, film_scroll_to_show, film_thumb_left, fit_scale,
-    release_is_click, ZOOM_MAX, ZOOM_MIN,
+    film_cell_w, film_pan_offset, film_scroll_to_show, film_thumb_left, release_is_click, ZOOM_MAX,
+    ZOOM_MIN,
 };
 
 pub(crate) struct OrigDrag {
