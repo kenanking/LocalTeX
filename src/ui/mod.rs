@@ -12,5 +12,6 @@ mod settings;
 pub(crate) mod source_editor;
 mod theme;
 mod widgets;
+mod window_drag;
 
 pub use main_window::MainWindow;
