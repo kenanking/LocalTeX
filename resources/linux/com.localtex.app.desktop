@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=LocalTeX
+Comment=Screenshot to TeX and Markdown
+Exec=localtex
+Icon=com.localtex.app
+Terminal=false
+Categories=Utility;Graphics;Office;
+StartupWMClass=com.localtex.app
+StartupNotify=true

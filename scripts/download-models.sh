@@ -34,7 +34,9 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 download_assets() {
   local dest="$1"
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  if command -v gh >/dev/null 2>&1 && {
+    [[ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]] || gh auth status >/dev/null 2>&1
+  }; then
     gh release download "$TAG" --repo "$REPO" --dir "$dest" \
       --pattern "$OPENDOC_TAR" --pattern "$HANDWRITING_TAR" \
       --pattern "$SUMS" --pattern "manifest.json"
