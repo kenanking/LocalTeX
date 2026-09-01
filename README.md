@@ -7,7 +7,24 @@ Offline screenshot OCR for papers and notes: snip the screen, get Markdown or La
 - Mixed **text + formula** document model; Markdown / LaTeX export and copy
 - Local **PP-DocLayoutV2** layout + **UniRec-0.1B** recognition (text, formulas, tables; statically linked ONNX Runtime). Formula preview via RaTeX
 
-Models are **not** embedded in the binary (~44 MB release build + ~244 MB OpenDoc ship weights beside it). Without ship files the app still starts; the status bar shows missing models and a snip fails instead of inventing text.
+Models stay on disk next to the app (~44 MB binary + ~267 MB OpenDoc and handwriting packs). They are not compiled into the executable. GitHub Release packages already include the packs. Without them the app still starts; the status bar shows missing models and a snip fails instead of inventing text.
+
+## Install
+
+Tagged GitHub Releases attach four artifacts, each with the ship packs inside:
+
+| File | Use |
+|---|---|
+| `localtex_<ver>_amd64.deb` | Debian / Ubuntu |
+| `localtex-<ver>-x86_64-unknown-linux-gnu.tar.gz` | Unpack and run `bin/localtex` |
+| `LocalTeX-<ver>-x86_64-Setup.exe` | Windows installer (per-user, no admin) |
+| `localtex-<ver>-x86_64-pc-windows-msvc.zip` | Unpack and run `localtex.exe` |
+
+Linux tarball layout is `bin/localtex` plus `share/localtex/models/`. The Windows zip keeps `models/` next to the exe. The app looks in those places before `~/.local/share/localtex/models` or `%LOCALAPPDATA%\localtex\models`.
+
+To cut a release, bump `version` in `Cargo.toml`, commit, and push a matching `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds both OSes and publishes the artifacts.
+
+From source, install packs with `./scripts/download-models.sh` as before.
 
 ## Platforms
 
@@ -44,7 +61,7 @@ OpenDoc ship weights (~244 MB) and inktex handwriting weights (~23 MB) stay 
 ./scripts/download-models.sh
 ```
 
-That unpacks the dated release tarballs into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) as `opendoc/` and `handwriting/`. Pack versions live on the release card and in `manifest.json`.
+That unpacks the dated model tarballs from `v0.0.0` into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) as `opendoc/` and `handwriting/`. App packages already contain those directories. Pack versions live on the release card and in `manifest.json`.
 
 Printed snips load `opendoc/` (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`). Draw-a-formula loads `handwriting/` (`encoder.onnx`, `decoder_step.onnx`, `vocab.json`). See [`models/README.md`](models/README.md). Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
 
@@ -86,7 +103,7 @@ src/
   preview.rs        RaTeX → SVG
   ocr/              PP-DocLayoutV2 + UniRec-0.1B (OpenDoc)
   ui/               main window, theme
-scripts/            Linux desktop/SSH helpers
+scripts/            Linux desktop/SSH helpers, download-models, bundle-linux / bundle-windows
 ```
 
 Agent-oriented conventions: [AGENTS.md](./AGENTS.md).
