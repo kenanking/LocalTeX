@@ -23,16 +23,25 @@ pub(super) fn shortcuts_page(
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
                 .justify_between()
                 .gap_3()
                 .px_1()
+                .w_full()
+                .min_w_0()
                 .child(
-                    div().text_sm().text_color(rgb(theme::MUTED)).child(
-                        "Click a shortcut, then press the new keys. Esc cancels. × removes it.",
-                    ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(rgb(theme::MUTED))
+                        .whitespace_normal()
+                        .child(
+                            "Click a shortcut, then press the new keys. Esc cancels. × removes it.",
+                        ),
                 )
-                .child(btn(
+                .child(div().flex_shrink_0().child(btn(
                     "sc-reset-all",
                     "Reset all",
                     false,
@@ -40,7 +49,7 @@ pub(super) fn shortcuts_page(
                     move |_, cx| {
                         reset_state.update(cx, |s, cx| s.reset_shortcuts(cx));
                     },
-                )),
+                ))),
         )
         .child(shortcut_group(
             "Capture",
