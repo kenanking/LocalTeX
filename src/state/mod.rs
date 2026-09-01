@@ -215,12 +215,7 @@ pub fn pump_desktop_events(state: gpui::Entity<AppState>, rx: Receiver<DesktopCm
         let Some(cmd) = cmd else {
             break;
         };
-        if state
-            .update(cx, |state, cx| state.handle_desktop(cmd, cx))
-            .is_err()
-        {
-            break;
-        }
+        state.update(cx, |state, cx| state.handle_desktop(cmd, cx));
     })
     .detach();
 }

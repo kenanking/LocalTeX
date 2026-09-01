@@ -250,9 +250,9 @@ pub fn overlay_scrollbar(
 ) -> AnyElement {
     let vertical = matches!(axis, ScrollAxis::Vertical);
     let max: f32 = if vertical {
-        handle.max_offset().height.into()
+        handle.max_offset().y.into()
     } else {
-        handle.max_offset().width.into()
+        handle.max_offset().x.into()
     };
     let view: f32 = if vertical {
         handle.bounds().size.height.into()
@@ -389,7 +389,7 @@ pub fn h_scroll_pane(
         .w_full()
         .min_w_0()
         .overflow_x_hidden()
-        .track_scroll(handle)
+        .track_scroll(&handle)
         .when(center, |d| d.flex().justify_center())
         .on_scroll_wheel({
             let handle = handle.clone();
@@ -404,7 +404,7 @@ pub fn h_scroll_pane(
                 if !pan.is_finite() || pan.abs() < 0.5 {
                     return;
                 }
-                let max_x: f32 = handle.max_offset().width.into();
+                let max_x: f32 = handle.max_offset().x.into();
                 if !max_x.is_finite() || max_x <= 1.0 {
                     return;
                 }

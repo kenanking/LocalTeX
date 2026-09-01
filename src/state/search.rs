@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::{AppContext, Context, Timer};
+use gpui::{AppContext, Context};
 use uuid::Uuid;
 
 use crate::doc::{DocStatus, Document};
@@ -65,7 +65,9 @@ impl AppState {
             None
         };
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(120)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
             let ids = cx
                 .background_spawn(async move {
                     let persisted = if let Some(store) = store {

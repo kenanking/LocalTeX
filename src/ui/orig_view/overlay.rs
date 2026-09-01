@@ -108,7 +108,7 @@ impl MainWindow {
                     }
                     if this.orig.is_image_panning() && this.orig.end_drag() {
                         this.unzoom();
-                        window.focus(&this.snip_list_focus);
+                        window.focus(&this.snip_list_focus, cx);
                     }
                     cx.notify();
                 }),
@@ -269,7 +269,7 @@ impl MainWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                    window.focus(&this.orig_focus);
+                    window.focus(&this.orig_focus, cx);
                     this.orig
                         .begin_drag(f32::from(ev.position.x), f32::from(ev.position.y));
                     cx.notify();
@@ -327,7 +327,7 @@ impl MainWindow {
                 move |_, window, cx| {
                     entity.update(cx, |this, cx| {
                         this.unzoom();
-                        window.focus(&this.snip_list_focus);
+                        window.focus(&this.snip_list_focus, cx);
                         cx.notify();
                     });
                 }
@@ -445,7 +445,7 @@ impl MainWindow {
                         if !pan.is_finite() || pan.abs() < 0.5 {
                             return;
                         }
-                        let max_x: f32 = this.orig.film.max_offset().width.into();
+                        let max_x: f32 = this.orig.film.max_offset().x.into();
                         if !max_x.is_finite() || max_x <= 1.0 {
                             return;
                         }

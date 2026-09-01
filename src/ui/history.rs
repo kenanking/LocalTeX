@@ -127,8 +127,8 @@ impl MainWindow {
             .track_focus(&self.snip_list_focus)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, _| {
-                    window.focus(&this.snip_list_focus);
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.snip_list_focus, cx);
                 }),
             )
             .relative()
@@ -237,7 +237,7 @@ impl MainWindow {
                         .collect()
                 },
             )
-            .track_scroll(scroll)
+            .track_scroll(&scroll)
             .h_full()
             .into_any_element()
         };
@@ -395,7 +395,7 @@ fn history_row(
         .when(selected, |d| d.bg(theme::accent_soft()))
         .when(!selected, |d| d.hover(|d| d.bg(theme::row_hover())))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            window.focus(&list_focus);
+            window.focus(&list_focus, cx);
             state_ent.update(cx, |s, cx| s.select(id, cx));
         })
         .child(if missing {

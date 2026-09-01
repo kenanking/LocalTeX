@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{AppContext, AsyncApp, Context, Timer, WeakEntity};
+use gpui::{AppContext, AsyncApp, Context, WeakEntity};
 use image::RgbaImage;
 use uuid::Uuid;
 
@@ -143,7 +143,9 @@ impl AppState {
         let gen = self.orig_copy_flash_gen;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(1200)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(1200))
+                .await;
             let _ = this.update(cx, |this, cx| {
                 if this.orig_copy_flash_gen == gen {
                     this.orig_copy_flash = None;

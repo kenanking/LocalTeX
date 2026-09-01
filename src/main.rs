@@ -29,8 +29,7 @@ mod table;
 mod ui;
 
 use gpui::{
-    px, size, App, AppContext, Application, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions,
+    px, size, App, AppContext, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
 };
 
 use crate::actions::{
@@ -44,7 +43,7 @@ use crate::ui::MainWindow;
 fn main() {
     pin_display_vulkan();
     crate::icon::install_desktop_identity();
-    Application::new()
+    gpui_platform::application()
         .with_assets(crate::icon::Assets)
         .run(|cx: &mut App| {
             let prefs = crate::prefs::Prefs::load();
@@ -115,6 +114,7 @@ fn set_app_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu {
             name: APP_NAME.into(),
+            disabled: false,
             items: vec![
                 MenuItem::action("Snip", Capture),
                 MenuItem::action("Upload Image…", UploadImage),
@@ -130,6 +130,7 @@ fn set_app_menus(cx: &mut App) {
         },
         Menu {
             name: "Edit".into(),
+            disabled: false,
             items: vec![
                 MenuItem::action("Delete Snip", DeleteSelected),
                 MenuItem::action("Retry OCR", RetryOcr),
@@ -137,6 +138,7 @@ fn set_app_menus(cx: &mut App) {
         },
         Menu {
             name: "View".into(),
+            disabled: false,
             items: vec![MenuItem::action("Toggle Markdown / LaTeX", ToggleFormat)],
         },
     ]);
