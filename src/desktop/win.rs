@@ -31,7 +31,7 @@ pub(crate) fn set_os_cursor_visible(visible: bool) {
         return;
     }
     unsafe {
-        ShowCursor(BOOL::from(visible));
+        ShowCursor(visible);
     }
 }
 
