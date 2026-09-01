@@ -22,6 +22,16 @@ pub fn pixel_bytes(img: &RgbaImage) -> u64 {
     u64::from(img.width()).saturating_mul(u64::from(img.height())) * 4
 }
 
+/// Overlay film cells are every visible snip. A sidebar viewport must not
+/// drop those GPU thumbs while the gallery is open.
+pub fn thumb_retain_ids(overlay_open: bool, history_keep: &[Uuid], visible: &[Uuid]) -> Vec<Uuid> {
+    if overlay_open || history_keep.is_empty() {
+        visible.to_vec()
+    } else {
+        history_keep.to_vec()
+    }
+}
+
 fn svg_key(svg: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -174,6 +184,20 @@ impl Default for MediaCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_keeps_visible_thumbs_outside_history_viewport() {
+        let a = Uuid::nil();
+        let b = Uuid::from_u128(1);
+        let visible = vec![a, b];
+        let keep = thumb_retain_ids(true, &[a], &visible);
+        assert!(
+            keep.contains(&b),
+            "film thumbs outside the sidebar viewport must survive GC"
+        );
+        assert_eq!(thumb_retain_ids(false, &[a], &visible), vec![a]);
+        assert_eq!(thumb_retain_ids(false, &[], &visible), visible);
+    }
 
     #[test]
     fn pixel_bytes_is_rgba() {

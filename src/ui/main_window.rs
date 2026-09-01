@@ -26,7 +26,7 @@ use crate::actions::{
     PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource,
     UploadImage,
 };
-use crate::cache::MediaCache;
+use crate::cache::{thumb_retain_ids, MediaCache};
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
 use crate::preview::{
@@ -617,11 +617,7 @@ impl MainWindow {
                     let keep_fulls = state.gpu_full_ids();
                     let pin = state.selected();
                     let kept = this.thumb_keep.borrow().clone();
-                    let keep_thumbs = if kept.is_empty() {
-                        state.visible_ids().to_vec()
-                    } else {
-                        kept
-                    };
+                    let keep_thumbs = thumb_retain_ids(this.orig.open, &kept, state.visible_ids());
                     (keep_thumbs, keep_fulls, pin)
                 };
                 let mut media = this.media.borrow_mut();

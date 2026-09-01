@@ -195,11 +195,14 @@ impl Library {
         self.docs.get(&id).and_then(|d| d.image.pixels().cloned())
     }
 
-    pub fn select(&mut self, id: Uuid) {
-        if self.docs.contains_key(&id) {
-            self.selected = Some(id);
-            self.touch_lru(id);
+    /// Returns true when the selected id changed.
+    pub fn select(&mut self, id: Uuid) -> bool {
+        if self.selected == Some(id) || !self.docs.contains_key(&id) {
+            return false;
         }
+        self.selected = Some(id);
+        self.touch_lru(id);
+        true
     }
 
     /// Replace the filtered id list. If the current selection is not visible,
@@ -283,6 +286,27 @@ mod tests {
         assert_eq!(lib.selected(), Some(id_b));
         let changed = lib.set_visible(vec![id_a]);
         assert!(changed);
+        assert_eq!(lib.selected(), Some(id_a));
+    }
+
+    #[test]
+    fn select_reports_change_only() {
+        let mut lib = Library::new();
+        let a = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let b = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let id_a = a.id;
+        let id_b = b.id;
+        lib.insert_newest(a);
+        lib.insert_newest(b);
+        assert_eq!(lib.selected(), Some(id_b));
+        assert!(
+            !lib.select(id_b),
+            "re-selecting the current id is not a selection change"
+        );
+        assert!(lib.select(id_a));
+        assert_eq!(lib.selected(), Some(id_a));
+        assert!(!lib.select(id_a));
+        assert!(!lib.select(Uuid::nil()));
         assert_eq!(lib.selected(), Some(id_a));
     }
 

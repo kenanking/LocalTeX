@@ -242,7 +242,9 @@ impl AppState {
     }
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.library.select(id);
+        if !self.library.select(id) {
+            return;
+        }
         self.ensure_detail(id, cx);
         cx.notify();
     }
