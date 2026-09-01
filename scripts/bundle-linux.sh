@@ -56,7 +56,7 @@ install_app_tree() {
 
 install_app_tree "$PREFIX"
 install -Dm644 "$ROOT/LICENSE" "$PREFIX/share/licenses/localtex/LICENSE"
-"$ROOT/scripts/stage-models.sh" "$PREFIX/share/localtex/models"
+"$ROOT/scripts/download-models.sh" "$PREFIX/share/localtex/models"
 test -f "$PREFIX/share/localtex/models/opendoc/layout.onnx"
 test -f "$PREFIX/share/localtex/models/handwriting/encoder.onnx"
 

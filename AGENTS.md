@@ -15,11 +15,11 @@ LocalTeX is a single-crate, single-process Rust desktop app built with git `gpui
 cargo fmt --all -- --check
 cargo test
 cargo build --profile dev-opt
-./scripts/run-on-desktop.sh
-./scripts/desktop-ctl.sh shot /tmp/localtex-desktop.png
 ```
 
-Run checks relevant to the change and report what actually ran. For visible UI changes, inspect the running app when possible. Agent shells may have no `DISPLAY`; build first and use the desktop scripts instead of assuming `cargo run` opened a window.
+Run checks relevant to the change and report what actually ran. For visible UI changes, inspect the running app when possible.
+
+Agent shells usually have no `DISPLAY`. This host's GNOME session is X11 on `:1` (`/tmp/.X11-unix/X1`). Build first, then start `target/dev-opt/localtex` on that display with `systemd-run --user` so the window outlives the shell. Pass `DISPLAY` and `XAUTHORITY` from `gnome-shell`'s environ, or `DISPLAY=:1` plus `$XDG_RUNTIME_DIR/gdm/Xauthority`. Do not assume `cargo run` from this shell opened a window. To inspect the window, grab a PNG with `ffmpeg -f x11grab` on that display. That is an agent screenshot, not the app capture path.
 
 ## Rust and GPUI
 
@@ -51,6 +51,8 @@ Run checks relevant to the change and report what actually ran. For visible UI c
 ## Packaging
 
 - Linux artifacts come from `scripts/bundle-linux.sh` (tar.gz + deb). Windows artifacts come from `scripts/bundle-windows.ps1` (zip + Inno). Write them to `dist/` (gitignored). Do not add cargo-packager or a second crate.
+- `scripts/download-models.sh` installs `opendoc/` and `handwriting/` for a checkout. Pass a directory to fill a bundle tree. It reuses a local cache when one exists, otherwise it downloads. The two bundle scripts call it with a destination. If that directory already has a pack, the script exits. Delete the pack to re-fetch.
+- Model tarballs on the `v0.0.0` GitHub Release are packed outside this repo. From ocr-pipeline `current/opendoc` and `current/handwriting` (this host: `~/personal/ocr-pipeline/models/current/`), copy into the dated directory names in `download-models.sh`, tar those dirs, and publish with `models/manifest.json` plus a `SHA256SUMS` covering the two tarballs and the manifest. Keep dated names, file lists, and checksums in lockstep with `download-models.sh` and `models/README.md`.
 - Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
 

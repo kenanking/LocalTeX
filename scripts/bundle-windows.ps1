@@ -49,12 +49,12 @@ try {
     $Models = Join-Path $Payload "models"
     $Bash = Get-Command bash -ErrorAction SilentlyContinue
     if (-not $Bash) {
-        throw "localtex: bash is required to stage models (Git for Windows)"
+        throw "localtex: bash is required to install models (Git for Windows)"
     }
-    & bash (Join-Path $Root "scripts\stage-models.sh") $Models
-    if ($LASTEXITCODE -ne 0) { throw "localtex: stage-models.sh failed" }
+    & bash (Join-Path $Root "scripts\download-models.sh") $Models
+    if ($LASTEXITCODE -ne 0) { throw "localtex: download-models.sh failed" }
     if (-not (Test-Path (Join-Path $Models "opendoc\layout.onnx"))) {
-        throw "localtex: staged models missing opendoc/layout.onnx"
+        throw "localtex: models missing opendoc/layout.onnx"
     }
 
     $ZipName = "localtex-$Version-$Target.zip"

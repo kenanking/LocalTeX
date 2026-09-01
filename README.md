@@ -71,13 +71,6 @@ From a graphical session:
 ./target/release/localtex
 ```
 
-From SSH / an agent with no `DISPLAY` (this machine: GNOME on X11):
-
-```bash
-./scripts/run-on-desktop.sh          # systemd --user, survives the SSH shell
-./scripts/run-on-desktop.sh --stop
-```
-
 Hotkey **Ctrl+Shift+S** starts a capture. Overlay: drag to confirm; click or Esc cancels.
 
 ## Layout
@@ -100,7 +93,7 @@ src/
   ocr/              PP-DocLayoutV2 + UniRec-0.1B (OpenDoc)
   ui/               main window, theme
 resources/          linux .desktop, Windows Inno script
-scripts/            desktop/SSH helpers, download-models, bundle-linux / bundle-windows
+scripts/            download-models, bundle-linux / bundle-windows
 .github/workflows/  tag-triggered Linux and Windows packages
 ```
 
