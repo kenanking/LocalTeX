@@ -45,7 +45,8 @@ Run checks relevant to the change and report what actually ran. For visible UI c
 ## OCR
 
 - Do not replace or expand the current OCR pipeline unless explicitly requested.
-- Keep weights external and sessions lazy-loaded; missing weights must fail clearly instead of producing placeholder output.
+- Keep ONNX sessions lazy-loaded. Missing weights must fail clearly instead of producing placeholder output.
+- Do not compile weights into the Rust binary (`include_bytes!`, `rust-embed`, linking `.onnx` as objects). Release packages (deb, tar.gz, zip, Windows installer) may ship the on-disk `opendoc/` and `handwriting/` trees beside the executable.
 
 ## Hygiene
 
