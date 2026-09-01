@@ -1,7 +1,9 @@
-use gpui::{div, prelude::*, Entity};
+use gpui::{div, prelude::*, AnyElement, Entity};
 
 use super::super::widgets::settings_group;
 use super::bool_row;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use super::bool_row_apply;
 use crate::prefs::{Prefs, WindowCloseAction};
 use crate::state::AppState;
 
@@ -41,21 +43,33 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                 ),
             ],
         ))
-        .child(settings_group(
-            "Window",
-            vec![bool_row(
-                &state,
-                "pref-close-min",
-                "Minimize on close",
-                "Keeps the tray and global hotkeys. Off quits; Ctrl+Q always quits.",
-                prefs.close_action == WindowCloseAction::Minimize,
-                |p, v| {
-                    p.close_action = if v {
-                        WindowCloseAction::Minimize
-                    } else {
-                        WindowCloseAction::Quit
-                    };
-                },
-            )],
-        ))
+        .child(settings_group("Window", window_rows(&state, prefs)))
+}
+
+fn window_rows(state: &Entity<AppState>, prefs: &Prefs) -> Vec<AnyElement> {
+    let mut rows = vec![bool_row(
+        state,
+        "pref-close-min",
+        "Minimize on close",
+        "Hides to the tray with no taskbar icon. Off quits; Ctrl+Q always quits.",
+        prefs.close_action == WindowCloseAction::Minimize,
+        |p, v| {
+            p.close_action = if v {
+                WindowCloseAction::Minimize
+            } else {
+                WindowCloseAction::Quit
+            };
+        },
+    )];
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    rows.push(bool_row_apply(
+        state,
+        "pref-autostart",
+        "Launch at startup",
+        "Opens LocalTeX when you sign in to this account.",
+        prefs.launch_at_startup,
+        |p, v| p.launch_at_startup = v,
+        |p| crate::autostart::apply(p.launch_at_startup),
+    ));
+    rows
 }

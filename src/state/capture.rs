@@ -226,6 +226,25 @@ impl AppState {
         });
     }
 
+    pub(super) fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
+        crate::desktop::hide_main_to_tray();
+        #[cfg(not(target_os = "windows"))]
+        {
+            let handle = self.main_window;
+            cx.defer(move |cx| {
+                if let Some(handle) = handle {
+                    if let Err(err) = handle.update(cx, |_, window, _| {
+                        window.minimize_window();
+                    }) {
+                        eprintln!("{APP_SLUG}: hide to tray: {err}");
+                    }
+                }
+            });
+        }
+        #[cfg(target_os = "windows")]
+        let _ = cx;
+    }
+
     pub(super) fn dismiss_main_sheet(&self, cx: &mut Context<Self>) {
         let handle = self.main_window;
         cx.defer(move |cx| {

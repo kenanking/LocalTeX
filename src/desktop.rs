@@ -264,9 +264,20 @@ pub fn iconify_main_window() {
     linux::iconify_main_window();
 }
 
+/// Close-to-tray / tray toggle. Windows uses `SW_HIDE` so the taskbar button
+/// goes away; capture hide still uses [`iconify_main_window`] plus minimize.
+pub fn hide_main_to_tray() {
+    #[cfg(target_os = "linux")]
+    linux::iconify_main_window();
+    #[cfg(target_os = "windows")]
+    win::hide_main_window();
+}
+
 pub fn deiconify_main_window() {
     #[cfg(target_os = "linux")]
     linux::deiconify_main_window();
+    #[cfg(target_os = "windows")]
+    win::show_main_window();
 }
 
 pub fn wait_until_iconified() -> anyhow::Result<()> {

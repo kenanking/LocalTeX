@@ -172,7 +172,8 @@ impl AppState {
     pub fn handle_main_close(action: WindowCloseAction, window: &mut Window, cx: &mut App) -> bool {
         match action {
             WindowCloseAction::Minimize => {
-                crate::desktop::iconify_main_window();
+                crate::desktop::hide_main_to_tray();
+                #[cfg(not(target_os = "windows"))]
                 window.minimize_window();
                 false
             }
@@ -264,7 +265,7 @@ impl AppState {
                     .and_then(|handle| handle.is_active(cx))
                     .unwrap_or(false);
                 if active {
-                    self.iconify_main(cx);
+                    self.hide_to_tray(cx);
                 } else {
                     self.restore_main(cx);
                 }

@@ -28,7 +28,7 @@ pub enum BlockDelim {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowCloseAction {
-    /// Keep the process (tray + hotkey). Clicking X minimizes.
+    /// Keep the process (tray + hotkey). Clicking X hides to the tray.
     #[default]
     Minimize,
     /// Exit the app.
@@ -49,6 +49,8 @@ pub struct Prefs {
     pub hide_on_capture: bool,
     #[serde(default)]
     pub close_action: WindowCloseAction,
+    #[serde(default)]
+    pub launch_at_startup: bool,
     #[serde(default)]
     pub inline_delim: InlineDelim,
     #[serde(default)]
@@ -88,6 +90,7 @@ impl Default for Prefs {
             show_original: true,
             hide_on_capture: true,
             close_action: WindowCloseAction::Minimize,
+            launch_at_startup: false,
             inline_delim: InlineDelim::Dollar,
             block_delim: BlockDelim::Dollars,
             sidebar_width: default_sidebar_width(),
@@ -180,8 +183,26 @@ mod tests {
         assert_eq!(p.wrap_inline("x^2"), "$x^2$");
         assert_eq!(p.wrap_block("x^2"), "$$\nx^2\n$$");
         assert_eq!(p.close_action, WindowCloseAction::Minimize);
+        assert!(!p.launch_at_startup);
         assert!(p.hide_on_capture);
         assert!(p.autocopy);
+    }
+
+    #[test]
+    fn launch_at_startup_defaults_off_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(!p.launch_at_startup);
+    }
+
+    #[test]
+    fn launch_at_startup_round_trips() {
+        let p = Prefs {
+            launch_at_startup: true,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert!(q.launch_at_startup);
     }
 
     #[test]

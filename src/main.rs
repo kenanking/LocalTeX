@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod autostart;
 mod cache;
 mod capture;
 mod desktop;
@@ -48,6 +49,7 @@ fn main() {
         .with_assets(crate::icon::Assets)
         .run(|cx: &mut App| {
             let prefs = crate::prefs::Prefs::load();
+            crate::autostart::apply(prefs.launch_at_startup);
             crate::state::bind_keys(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
