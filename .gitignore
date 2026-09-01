@@ -6,7 +6,9 @@
 *.swp
 .DS_Store
 *.onnx
-# Dated packs and current/ links ship via GitHub release, not git.
+# Installed packs stay on disk, not in git.
+/models/opendoc/
+/models/handwriting/
 /models/opendoc_*/
 /models/handwriting*/
 /models/current/

@@ -1,7 +1,9 @@
 # LocalTeX model card
 
-Weights stay on disk, not in git. Layout matches ocr-pipeline: dated version
-directories plus `current/` links. Install from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
+Weights stay on disk, not in git. The app loads `opendoc/` and
+`handwriting/` under the install root. Dated pack names live on the
+[`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0)
+and in `manifest.json`.
 
 ```bash
 ./scripts/download-models.sh
@@ -13,19 +15,19 @@ Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Window
 
 ```
 models/
-  current/opendoc      → ../opendoc_int8_20260827_45af38b
-  current/handwriting  → ../handwriting_e10_20260831_cf27b99
-  opendoc_int8_20260827_45af38b/
-  handwriting_e10_20260831_cf27b99/
+  opendoc/
+  handwriting/
+  manifest.json
 ```
 
-The app loads only `current/opendoc` and `current/handwriting`. Naming is `<name>_<form>_<YYYYMMDD>_<git-short>`.
+ocr-pipeline keeps dated directories plus `current/` because it holds
+several pack versions. LocalTeX only installs the pair in use.
 
 `manifest.json` on the release is the machine-readable copy of this card.
 
 ## OpenDoc-0.1B (`opendoc_int8_20260827_45af38b`)
 
-Tarball: `opendoc_int8_20260827_45af38b.tar.gz` (~244 MB unpacked).
+Tarball: `opendoc_int8_20260827_45af38b.tar.gz` (~244 MB unpacked). Installed as `opendoc/`.
 
 | File | Role |
 |---|---|
@@ -38,7 +40,7 @@ Strategy: layout-freeze-fold + INT8 conv weights + WOQ INT8 MatMul + decoder GQA
 
 ## Handwriting (`handwriting_e10_20260831_cf27b99`)
 
-Tarball: `handwriting_e10_20260831_cf27b99.tar.gz` (~23 MB unpacked). Filenames match ocr-pipeline. The packs live in separate directories, so they do not collide with UniRec `encoder.onnx` / `decoder.onnx`.
+Tarball: `handwriting_e10_20260831_cf27b99.tar.gz` (~23 MB unpacked). Installed as `handwriting/`. Filenames match ocr-pipeline. The packs live in separate directories, so they do not collide with UniRec `encoder.onnx` / `decoder.onnx`.
 
 Rust/WOQ scores: MW 63.47 / C23 50.87.
 

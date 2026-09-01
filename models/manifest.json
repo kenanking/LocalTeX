@@ -3,7 +3,7 @@
   "strategy": "layout-freeze-fold + weight-int8-conv + WOQ-int8-matmul + decoder-emb8 + decoder-kv-v2 + decoder-gqa",
   "graph_opt": "conv-bn-fold + identity-elim",
   "decoder_contract": "gqa: per-layer cross_kt_{0..5}[b,6,128,seq]/cross_v_{0..5}[b,6,seq,128]; self-attn = com.microsoft.GroupQueryAttention, past/present [b,6,len,128]; seqlens_k[b]=past+s-1; total_seq_len[1]=past+s",
-  "current": {
+  "packs": {
     "opendoc": "opendoc_int8_20260827_45af38b",
     "handwriting": "handwriting_e10_20260831_cf27b99"
   },

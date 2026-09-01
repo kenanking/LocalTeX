@@ -144,11 +144,11 @@ fn pack_present(dir: &Path, files: &[&str]) -> bool {
 }
 
 fn opendoc_dir(models: &Path) -> PathBuf {
-    models.join("current").join("opendoc")
+    models.join("opendoc")
 }
 
 fn handwriting_dir(models: &Path) -> PathBuf {
-    models.join("current").join("handwriting")
+    models.join("handwriting")
 }
 
 fn load_pipeline(dir: &Path) -> Result<Pipeline> {
@@ -333,10 +333,10 @@ mod tests {
     }
 
     #[test]
-    fn packs_live_under_current() {
+    fn packs_live_beside_models_root() {
         let root = PathBuf::from("/models");
-        assert_eq!(opendoc_dir(&root), root.join("current/opendoc"));
-        assert_eq!(handwriting_dir(&root), root.join("current/handwriting"));
+        assert_eq!(opendoc_dir(&root), root.join("opendoc"));
+        assert_eq!(handwriting_dir(&root), root.join("handwriting"));
     }
 
     #[test]

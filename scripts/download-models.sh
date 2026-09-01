@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch OpenDoc + handwriting packs from the GitHub release and point
-# current/opendoc and current/handwriting at the dated directories.
+# Fetch OpenDoc + handwriting packs from the GitHub release and install
+# them as models/opendoc and models/handwriting.
 # Override with LOCALTEX_MODELS, LOCALTEX_MODELS_REPO, LOCALTEX_MODELS_TAG.
 set -euo pipefail
 
@@ -23,19 +23,6 @@ need() {
     echo "localtex: missing '$1'" >&2
     exit 1
   }
-}
-
-link_rel() {
-  local target="$1"
-  local link="$2"
-  mkdir -p "$(dirname "$link")"
-  rm -rf "$link"
-  if ln -sfn "$target" "$link" 2>/dev/null; then
-    return 0
-  fi
-  local dest
-  dest="$(cd "$(dirname "$link")" && pwd)/$target"
-  cp -a "$dest" "$link"
 }
 
 need tar
@@ -70,19 +57,31 @@ download_assets "$WORKDIR"
   sha256sum -c "$SUMS" --ignore-missing
 )
 
-tar -xzf "$WORKDIR/$OPENDOC_TAR" -C "$DEST"
-tar -xzf "$WORKDIR/$HANDWRITING_TAR" -C "$DEST"
+EXTRACT="$WORKDIR/extract"
+mkdir -p "$EXTRACT"
+tar -xzf "$WORKDIR/$OPENDOC_TAR" -C "$EXTRACT"
+tar -xzf "$WORKDIR/$HANDWRITING_TAR" -C "$EXTRACT"
 
-link_rel "../$OPENDOC_DIR" "$DEST/current/opendoc"
-link_rel "../$HANDWRITING_DIR" "$DEST/current/handwriting"
+test -d "$EXTRACT/$OPENDOC_DIR"
+test -d "$EXTRACT/$HANDWRITING_DIR"
+
+rm -rf "$DEST/opendoc" "$DEST/handwriting" "$DEST/current" "$DEST/ship" \
+  "$DEST/$OPENDOC_DIR" "$DEST/$HANDWRITING_DIR"
+rm -f "$DEST"/layout.onnx "$DEST"/encoder.onnx "$DEST"/decoder.onnx \
+  "$DEST"/unirec_tokenizer_mapping.json \
+  "$DEST"/inktex-encoder.onnx "$DEST"/inktex-decoder-step.onnx \
+  "$DEST"/inktex-vocab.json
+
+mv "$EXTRACT/$OPENDOC_DIR" "$DEST/opendoc"
+mv "$EXTRACT/$HANDWRITING_DIR" "$DEST/handwriting"
 
 cp -f "$WORKDIR/manifest.json" "$DEST/manifest.json"
 cp -f "$WORKDIR/$SUMS" "$DEST/$SUMS"
 
-echo "localtex: OpenDoc ready in $DEST/current/opendoc → $OPENDOC_DIR"
-ls -lh "$DEST/$OPENDOC_DIR"/layout.onnx "$DEST/$OPENDOC_DIR"/encoder.onnx \
-  "$DEST/$OPENDOC_DIR"/decoder.onnx "$DEST/$OPENDOC_DIR"/unirec_tokenizer_mapping.json
-echo "localtex: handwriting ready in $DEST/current/handwriting → $HANDWRITING_DIR"
-ls -lh "$DEST/$HANDWRITING_DIR"/encoder.onnx \
-  "$DEST/$HANDWRITING_DIR"/decoder_step.onnx \
-  "$DEST/$HANDWRITING_DIR"/vocab.json
+echo "localtex: OpenDoc ready in $DEST/opendoc ($OPENDOC_DIR)"
+ls -lh "$DEST/opendoc"/layout.onnx "$DEST/opendoc"/encoder.onnx \
+  "$DEST/opendoc"/decoder.onnx "$DEST/opendoc"/unirec_tokenizer_mapping.json
+echo "localtex: handwriting ready in $DEST/handwriting ($HANDWRITING_DIR)"
+ls -lh "$DEST/handwriting"/encoder.onnx \
+  "$DEST/handwriting"/decoder_step.onnx \
+  "$DEST/handwriting"/vocab.json

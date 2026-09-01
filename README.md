@@ -44,9 +44,9 @@ OpenDoc ship weights (~244 MB) and inktex handwriting weights (~23 MB) stay 
 ./scripts/download-models.sh
 ```
 
-That unpacks dated packs into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) and points `current/opendoc` and `current/handwriting` at them.
+That unpacks the dated release tarballs into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) as `opendoc/` and `handwriting/`. Pack versions live on the release card and in `manifest.json`.
 
-Printed snips load `current/opendoc` (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`). Draw-a-formula loads `current/handwriting` (`encoder.onnx`, `decoder_step.onnx`, `vocab.json`). See [`models/README.md`](models/README.md). Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
+Printed snips load `opendoc/` (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`). Draw-a-formula loads `handwriting/` (`encoder.onnx`, `decoder_step.onnx`, `vocab.json`). See [`models/README.md`](models/README.md). Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
 
 The GitHub repo may be private: `download-models.sh` uses `gh` when you are logged in (`gh auth status`).
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Pack ocr-pipeline current/ packs into dated tarballs for the LocalTeX release.
+# Pack ocr-pipeline current/ packs into dated tarballs for the LocalTeX
+# release. LocalTeX installs those tarballs as models/opendoc and
+# models/handwriting; version names stay on the tarball and in manifest.json.
 # Override OPENDOC_SRC, HANDWRITING_SRC, OUT.
 set -euo pipefail
 
