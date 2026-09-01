@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  LOCALTEX_MODELS_TAG: v0.0.0
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: resolve
+        name: Match tag to Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ -z "$version" ]; then
+            echo "::error::No version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
+              exit 1
+            fi
+          fi
+
+  linux-x86_64:
+    name: Linux x86_64
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang cmake pkg-config dpkg-dev \
+            libfontconfig-dev libgbm-dev \
+            libvulkan-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libxkbcommon-x11-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-x86_64
+
+      - name: Bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCALTEX_MODELS_TAG: ${{ env.LOCALTEX_MODELS_TAG }}
+        run: ./scripts/bundle-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: |
+            target/release/localtex-${{ needs.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+            target/release/localtex_${{ needs.version.outputs.version }}_amd64.deb
+          if-no-files-found: error
+
+  windows-x86_64:
+    name: Windows x86_64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Locate the Windows shader compiler
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $fxc) { throw 'fxc.exe was not found in the Windows SDK' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" | Add-Content $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows-x86_64
+
+      - name: Bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCALTEX_MODELS_TAG: ${{ env.LOCALTEX_MODELS_TAG }}
+        shell: pwsh
+        run: .\scripts\bundle-windows.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: |
+            target/release/localtex-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
+            target/release/LocalTeX-${{ needs.version.outputs.version }}-x86_64-Setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [version, linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*
