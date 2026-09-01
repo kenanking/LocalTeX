@@ -78,10 +78,7 @@ pub fn disk_sample() -> DiskSnapshot {
     let data = crate::identity::data_dir();
     let models_path = crate::identity::models_dir();
     let models = dir_size(&models_path);
-    let mut snips = dir_size(&data);
-    if models_path.starts_with(&data) {
-        snips = snips.saturating_sub(models);
-    }
+    let snips = snips_size(&data);
     let binary = std::env::current_exe()
         .ok()
         .and_then(|p| p.metadata().ok())
@@ -95,6 +92,22 @@ pub fn disk_sample() -> DiskSnapshot {
         snips,
         binary,
     }
+}
+
+/// Library bytes: `snips/` plus `snips.db` and its WAL sidecars.
+fn snips_size(data: &Path) -> u64 {
+    dir_size(&data.join("snips"))
+        + file_size(&data.join("snips.db"))
+        + file_size(&data.join("snips.db-wal"))
+        + file_size(&data.join("snips.db-shm"))
+}
+
+fn file_size(path: &Path) -> u64 {
+    path.metadata()
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .unwrap_or(0)
 }
 
 fn dir_size(path: &Path) -> u64 {
@@ -354,5 +367,28 @@ mod tests {
     fn disk_sample_runs() {
         let d = super::disk_sample();
         assert_eq!(d.app_footprint(), d.models + d.snips + d.binary);
+    }
+
+    #[test]
+    fn snips_size_ignores_unrelated_data_dir_files() {
+        let root = std::env::temp_dir().join(format!(
+            "localtex-disk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("snips")).unwrap();
+        std::fs::create_dir_all(root.join("models")).unwrap();
+        std::fs::write(root.join("snips/a.png"), vec![0u8; 1000]).unwrap();
+        std::fs::write(root.join("snips.db"), vec![0u8; 200]).unwrap();
+        std::fs::write(root.join("snips.db-wal"), vec![0u8; 50]).unwrap();
+        std::fs::write(root.join("snips.db-shm"), vec![0u8; 25]).unwrap();
+        std::fs::write(root.join("junk.log"), vec![0u8; 9999]).unwrap();
+        std::fs::write(root.join("models/x.bin"), vec![0u8; 8888]).unwrap();
+        let n = snips_size(&root);
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(n, 1000 + 200 + 50 + 25);
     }
 }
