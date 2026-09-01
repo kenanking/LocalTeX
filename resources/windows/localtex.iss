@@ -11,6 +11,9 @@
 #ifndef MyAppArch
   #define MyAppArch "x86_64"
 #endif
+#ifndef MyAppSetupIcon
+  #define MyAppSetupIcon "..\\..\\target\\localtex.ico"
+#endif
 
 [Setup]
 ; Keep AppId stable. A new GUID is a second Add/Remove Programs entry.
@@ -30,6 +33,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\localtex.exe
+SetupIconFile={#MyAppSetupIcon}
 SetupLogging=yes
 
 [Languages]

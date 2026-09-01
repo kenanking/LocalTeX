@@ -24,7 +24,7 @@ The Linux tarball keeps weights at `share/localtex/models/`. The Windows zip kee
 
 To publish a build, bump `version` in `Cargo.toml`, commit, and push a matching `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds Linux and Windows and attaches the files.
 
-To package from a checkout, run `./scripts/bundle-linux.sh` or `.\scripts\bundle-windows.ps1`. Artifacts land in `dist/` (gitignored). The release binary still comes from `target/release`.
+To package from a checkout, run `./scripts/bundle-linux.sh` or `.\scripts\bundle-windows.ps1`. Artifacts land in `dist/` (gitignored). The release binary still comes from `target/release`. The Windows bundle uses `download-models.ps1` (no bash / WSL) and Inno Setup 7 (`ISCC.exe`).
 
 ## Platforms
 
@@ -61,6 +61,12 @@ App packages already ship the packs. From a source checkout, install them from t
 ./scripts/download-models.sh
 ```
 
+Windows:
+
+```powershell
+.\scripts\download-models.ps1
+```
+
 That writes `opendoc/` and `handwriting/` under `$LOCALTEX_MODELS`, or `~/.local/share/localtex/models` on Linux, or `%LOCALAPPDATA%\localtex\models` on Windows. If the GitHub repo is private, log in with `gh` first. File names, graph contracts, and pack versions are in [`models/README.md`](models/README.md).
 
 ## Run
@@ -93,7 +99,7 @@ src/
   ocr/              PP-DocLayoutV2 + UniRec-0.1B (OpenDoc)
   ui/               main window, theme
 resources/          linux .desktop, Windows Inno script
-scripts/            download-models, bundle-linux / bundle-windows
+scripts/            download-models.sh / .ps1, bundle-linux / bundle-windows
 .github/workflows/  tag-triggered Linux and Windows packages
 ```
 

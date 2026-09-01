@@ -51,10 +51,12 @@ Agent shells usually have no `DISPLAY`. This host's GNOME session is X11 on `:1`
 ## Packaging
 
 - Linux artifacts come from `scripts/bundle-linux.sh` (tar.gz + deb). Windows artifacts come from `scripts/bundle-windows.ps1` (zip + Inno). Write them to `dist/` (gitignored). Do not add cargo-packager or a second crate.
-- `scripts/download-models.sh` installs `opendoc/` and `handwriting/` for a checkout. Pass a directory to fill a bundle tree. It reuses a local cache when one exists, otherwise it downloads. The two bundle scripts call it with a destination. If that directory already has a pack, the script exits. Delete the pack to re-fetch.
-- Model tarballs on the `v0.0.0` GitHub Release are packed outside this repo. From ocr-pipeline `current/opendoc` and `current/handwriting` (this host: `~/personal/ocr-pipeline/models/current/`), copy into the dated directory names in `download-models.sh`, tar those dirs, and publish with `models/manifest.json` plus a `SHA256SUMS` covering the two tarballs and the manifest. Keep dated names, file lists, and checksums in lockstep with `download-models.sh` and `models/README.md`.
+- `scripts/download-models.sh` (Linux) and `scripts/download-models.ps1` (Windows) install `opendoc/` and `handwriting/` for a checkout. Pass a directory to fill a bundle tree. They reuse a local cache when one exists, otherwise they download. The matching bundle script calls them with a destination. If that directory already has a pack, the script exits. Delete the pack to re-fetch. Do not call bash from `bundle-windows.ps1`; WindowsApps `bash.exe` is often a WSL stub.
+- Model tarballs on the `v0.0.0` GitHub Release are packed outside this repo. From ocr-pipeline `current/opendoc` and `current/handwriting` (this host: `~/personal/ocr-pipeline/models/current/`), copy into the dated directory names in `download-models.sh` / `download-models.ps1`, tar those dirs, and publish with `models/manifest.json` plus a `SHA256SUMS` covering the two tarballs and the manifest. Keep dated names, file lists, and checksums in lockstep with both download scripts and `models/README.md`.
 - Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
+- Windows packaging uses Inno Setup 7 (`ISCC.exe`). `bundle-windows.ps1` looks in `Inno Setup 7` first (machine `Program Files`, then per-user `%LOCALAPPDATA%\Programs`), then `Inno Setup 6`. A user-scope `winget install JRSoftware.InnoSetup.7` does not add `ISCC.exe` to PATH. CI installs the 64-bit 7.1.0 compiler from the jrsoftware GitHub release (Chocolatey `innosetup` is still 6.x).
+- `Setup.exe` in Explorer uses `SetupIconFile`. `build.rs` writes the same ICO it embeds in `localtex.exe` to `target/localtex.ico`; the bundle script passes that path to ISCC. Do not check the ICO into git.
 
 ## Hygiene
 

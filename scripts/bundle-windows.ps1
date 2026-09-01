@@ -47,12 +47,8 @@ try {
     Copy-Item $Bin (Join-Path $Payload "localtex.exe")
     Copy-Item (Join-Path $Root "LICENSE") (Join-Path $Payload "LICENSE")
     $Models = Join-Path $Payload "models"
-    $Bash = Get-Command bash -ErrorAction SilentlyContinue
-    if (-not $Bash) {
-        throw "localtex: bash is required to install models (Git for Windows)"
-    }
-    & bash (Join-Path $Root "scripts\download-models.sh") $Models
-    if ($LASTEXITCODE -ne 0) { throw "localtex: download-models.sh failed" }
+    & (Join-Path $Root "scripts\download-models.ps1") $Models
+    if ($LASTEXITCODE -ne 0) { throw "localtex: download-models.ps1 failed" }
     if (-not (Test-Path (Join-Path $Models "opendoc\layout.onnx"))) {
         throw "localtex: models missing opendoc/layout.onnx"
     }
@@ -68,20 +64,39 @@ try {
 
     $Iss = Join-Path $Root "resources\windows\localtex.iss"
     $Iscc = @(
+        "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $Iscc) {
         $found = Get-Command iscc -ErrorAction SilentlyContinue
         if ($found) { $Iscc = $found.Source }
     }
-    if (-not $Iscc) { throw "localtex: Inno Setup 6 ISCC.exe not found" }
+    if (-not $Iscc) { throw "localtex: Inno Setup ISCC.exe not found (install Inno Setup 7)" }
+    Write-Host "localtex: using $Iscc"
+
+    $SetupIcon = Join-Path $Root "target\localtex.ico"
+    if (-not (Test-Path -LiteralPath $SetupIcon -PathType Leaf)) {
+        $foundIco = Get-ChildItem -Path (Join-Path $Root "target") -Recurse -Filter "localtex.ico" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($foundIco) { $SetupIcon = $foundIco.FullName }
+    }
+    if (-not (Test-Path -LiteralPath $SetupIcon -PathType Leaf)) {
+        throw "localtex: missing target\localtex.ico (run a Windows cargo build once)"
+    }
+    $SetupIconDefine = $SetupIcon.Replace("\", "/")
+    Write-Host "localtex: setup icon $SetupIcon"
 
     & $Iscc $Iss `
         "/DMyAppVersion=$Version" `
         "/DMyAppOutputDir=$OutDir" `
         "/DMyAppSourceDir=$Payload" `
-        "/DMyAppArch=$Arch"
+        "/DMyAppArch=$Arch" `
+        "/DMyAppSetupIcon=$SetupIconDefine"
     if ($LASTEXITCODE -ne 0) { throw "localtex: ISCC failed with $LASTEXITCODE" }
     Write-Host "localtex: wrote $(Join-Path $OutDir "LocalTeX-$Version-$Arch-Setup.exe")"
 } finally {

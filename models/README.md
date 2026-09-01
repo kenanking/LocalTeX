@@ -9,6 +9,10 @@ source checkout, install the dated tarballs on the
 ./scripts/download-models.sh
 ```
 
+```powershell
+.\scripts\download-models.ps1
+```
+
 Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Windows: `%LOCALAPPDATA%\localtex\models`).
 
 ## Directory layout

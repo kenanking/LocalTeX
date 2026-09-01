@@ -18,6 +18,18 @@ fn embed_windows_icon() {
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let ico_path = out_dir.join("localtex.ico");
     write_ico(&ico_path);
+    // Inno SetupIconFile cannot see OUT_DIR. bundle-windows.ps1 reads this copy.
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+                .join("target")
+        });
+    let published = target_dir.join("localtex.ico");
+    if let Some(parent) = published.parent() {
+        std::fs::create_dir_all(parent).expect("create target dir for ICO");
+    }
+    std::fs::copy(&ico_path, &published).expect("publish ICO for Inno Setup");
 
     let icon = ico_path.to_string_lossy().replace('\\', "\\\\");
     let package_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
