@@ -114,6 +114,16 @@ pub struct UniRec {
     pub num_layers: usize,
     pub num_heads: usize,
     pub head_dim: usize,
+    layer_names: Vec<LayerNames>,
+}
+
+struct LayerNames {
+    cross_kt: String,
+    cross_v: String,
+    past_key: String,
+    past_value: String,
+    present_key: String,
+    present_value: String,
 }
 
 struct EncodedImage {
@@ -214,6 +224,16 @@ impl UniRec {
                 return Err(anyhow!("GQA decoder missing input {}", name));
             }
         }
+        let layer_names = (0..num_layers)
+            .map(|i| LayerNames {
+                cross_kt: format!("cross_kt_{i}"),
+                cross_v: format!("cross_v_{i}"),
+                past_key: format!("past_key_{i}"),
+                past_value: format!("past_value_{i}"),
+                present_key: format!("present_key_{i}"),
+                present_value: format!("present_value_{i}"),
+            })
+            .collect();
         Ok(Self {
             encoder,
             decoder,
@@ -221,6 +241,7 @@ impl UniRec {
             num_layers,
             num_heads,
             head_dim,
+            layer_names,
         })
     }
 
@@ -308,19 +329,19 @@ impl UniRec {
             "input_ids" => input_ids,
             "position_ids" => position_ids,
         };
-        for i in 0..self.num_layers {
+        for (i, names) in self.layer_names.iter().enumerate() {
             inputs.push((
-                Cow::from(format!("cross_kt_{}", i)),
+                Cow::Borrowed(names.cross_kt.as_str()),
                 (&enc.cross_kt[i]).into(),
             ));
             inputs.push((
-                Cow::from(format!("cross_v_{}", i)),
+                Cow::Borrowed(names.cross_v.as_str()),
                 (&enc.cross_v[i]).into(),
             ));
         }
-        for (i, (k, v)) in past.iter().enumerate() {
-            inputs.push((Cow::from(format!("past_key_{}", i)), k.into()));
-            inputs.push((Cow::from(format!("past_value_{}", i)), v.into()));
+        for ((k, v), names) in past.iter().zip(&self.layer_names) {
+            inputs.push((Cow::Borrowed(names.past_key.as_str()), k.into()));
+            inputs.push((Cow::Borrowed(names.past_value.as_str()), v.into()));
         }
         // s = 1 decode step: last-key index = past, total = past + 1.
         let seqlens_k = Tensor::from_array((vec![1i64], vec![past_len as i32]))?;
@@ -339,13 +360,13 @@ impl UniRec {
         };
 
         let mut new_past = Vec::with_capacity(self.num_layers);
-        for i in 0..self.num_layers {
+        for names in &self.layer_names {
             let pk = outputs
-                .remove(format!("present_key_{}", i))
-                .ok_or_else(|| anyhow!("missing present_key_{}", i))?;
+                .remove(&names.present_key)
+                .ok_or_else(|| anyhow!("missing {}", names.present_key))?;
             let pv = outputs
-                .remove(format!("present_value_{}", i))
-                .ok_or_else(|| anyhow!("missing present_value_{}", i))?;
+                .remove(&names.present_value)
+                .ok_or_else(|| anyhow!("missing {}", names.present_value))?;
             new_past.push((pk, pv));
         }
         Ok((next, new_past, step_s, p_top1))

@@ -214,7 +214,7 @@ mod tests {
             status: DocStatus::Ready,
             first_line: String::new(),
             thumb_jpeg: Vec::new(),
-            persisted: false,
+            persist: crate::doc::PersistState::New,
             blocks_loaded: true,
             ocr: None,
             ink: None,

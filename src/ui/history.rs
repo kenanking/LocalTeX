@@ -117,7 +117,7 @@ impl MainWindow {
             (
                 state.date_preset(),
                 width,
-                state.visible_ids().to_vec(),
+                state.visible_snapshot(),
                 state.selected(),
             )
         };

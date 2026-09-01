@@ -70,6 +70,8 @@ pub(crate) struct IngestPump {
     pub file_queue: VecDeque<PathBuf>,
     pub file_loading: bool,
     pub thumb_inflight: HashSet<Uuid>,
+    pub blocks_inflight: HashSet<Uuid>,
+    pub png_inflight: HashSet<Uuid>,
 }
 
 impl IngestPump {
@@ -79,6 +81,8 @@ impl IngestPump {
             file_queue: VecDeque::new(),
             file_loading: false,
             thumb_inflight: HashSet::new(),
+            blocks_inflight: HashSet::new(),
+            png_inflight: HashSet::new(),
         }
     }
 }
@@ -86,6 +90,7 @@ impl IngestPump {
 pub(crate) struct SearchFilter {
     pub query: String,
     pub gen: u64,
+    pub task: Option<gpui::Task<()>>,
 }
 
 impl SearchFilter {
@@ -93,6 +98,7 @@ impl SearchFilter {
         Self {
             query: String::new(),
             gen: 0,
+            task: None,
         }
     }
 

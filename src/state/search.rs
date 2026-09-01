@@ -28,46 +28,41 @@ impl AppState {
 
     pub(super) fn schedule_filter(&mut self, cx: &mut Context<Self>) {
         let gen = self.search.bump();
-        let query = self.search.query.clone();
-        let range = self
-            .library
-            .date_preset()
-            .to_range(CivilDate::today_local());
-        let store = self.store.clone();
-        let inflight: Vec<(Uuid, std::time::SystemTime, String)> = self
-            .library
-            .iter_all()
-            .filter(|d| !d.persisted)
-            .map(|d| {
-                let blob = if matches!(d.status, DocStatus::Ready) {
-                    Document::search_text_for_blocks(&d.blocks)
-                } else {
-                    d.first_line()
-                };
-                (d.id, d.created_at, blob)
-            })
-            .collect();
-        let ram_only: Option<Vec<(Uuid, std::time::SystemTime, String)>> = if store.is_none() {
-            Some(
-                self.library
-                    .iter_all()
-                    .filter(|d| d.persisted)
-                    .map(|d| {
-                        (
-                            d.id,
-                            d.created_at,
-                            Document::search_text_for_blocks(&d.blocks),
-                        )
-                    })
-                    .collect(),
-            )
-        } else {
-            None
-        };
-        cx.spawn(async move |this, cx| {
+        self.search.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
+            let snapshot = this
+                .update(cx, |this, _| {
+                    if this.search.gen != gen {
+                        return None;
+                    }
+                    let query = this.search.query.clone();
+                    let range = this
+                        .library
+                        .date_preset()
+                        .to_range(CivilDate::today_local());
+                    let store = this.store();
+                    let docs = this
+                        .library
+                        .iter_all()
+                        .filter(|d| store.is_none() || !d.is_persisted())
+                        .map(|d| {
+                            let blob = if matches!(d.status, DocStatus::Ready) {
+                                Document::search_text_for_blocks(&d.blocks)
+                            } else {
+                                d.first_line()
+                            };
+                            (d.id, d.created_at, blob)
+                        })
+                        .collect::<Vec<_>>();
+                    Some((query, range, store, docs))
+                })
+                .ok()
+                .flatten();
+            let Some((query, range, store, inflight)) = snapshot else {
+                return;
+            };
             let ids = cx
                 .background_spawn(async move {
                     let persisted = if let Some(store) = store {
@@ -76,15 +71,7 @@ impl AppState {
                             Vec::new()
                         })
                     } else {
-                        ram_only
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|(_, created, blob)| {
-                                store::instant_in_range(*created, range)
-                                    && text_matches(&query, blob)
-                            })
-                            .map(|(id, _, _)| id)
-                            .collect()
+                        Vec::new()
                     };
                     let inflight_hits: Vec<Uuid> = inflight
                         .into_iter()
@@ -109,8 +96,7 @@ impl AppState {
             }) {
                 eprintln!("{APP_SLUG}: filter task: {err}");
             }
-        })
-        .detach();
+        }));
     }
 }
 

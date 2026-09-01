@@ -11,7 +11,7 @@ use crate::keymap::{self, AssignError, ShortcutId};
 use crate::library::Library;
 use crate::ocr::Engine;
 use crate::prefs::{Prefs, WindowCloseAction};
-use crate::store::Store;
+use crate::store::{Store, StoreWriter};
 use crate::ui::MainWindow;
 
 mod capture;
@@ -26,12 +26,21 @@ use session::{CaptureSession, IngestPump, SearchFilter};
 
 pub use crate::library::DatePreset;
 
+enum PersistenceState {
+    Loading,
+    Ready {
+        store: Arc<Store>,
+        writer: StoreWriter,
+    },
+    RamOnly,
+}
+
 pub struct AppState {
     pub library: Library,
     export_fmt: ExportFmt,
     pub prefs: Prefs,
     engine: Arc<Engine>,
-    store: Option<Arc<Store>>,
+    persistence: PersistenceState,
     search: SearchFilter,
     ingest: IngestPump,
     capture: CaptureSession,
@@ -42,35 +51,69 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(prefs: Prefs) -> Self {
-        let store = match Store::open_default() {
-            Ok(store) => Some(Arc::new(store)),
-            Err(err) => {
-                eprintln!("{APP_SLUG}: snip store unavailable (RAM-only): {err}");
-                None
-            }
-        };
-        let library = match store.as_ref() {
-            Some(store) => match store.list() {
-                Ok(items) => Library::from_list(items),
-                Err(err) => {
-                    eprintln!("{APP_SLUG}: list snips: {err}");
-                    Library::new()
-                }
-            },
-            None => Library::new(),
-        };
         Self {
-            library,
+            library: Library::new(),
             export_fmt: prefs.default_fmt,
             prefs,
             engine: Engine::load(),
-            store,
+            persistence: PersistenceState::Loading,
             search: SearchFilter::new(),
             ingest: IngestPump::new(),
             capture: CaptureSession::new(),
             orig_copy_flash: None,
             orig_copy_flash_gen: 0,
             main_window: None,
+        }
+    }
+
+    pub fn bootstrap_store(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.persistence, PersistenceState::Loading) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let opened = cx
+                .background_spawn(async move {
+                    let store = Arc::new(Store::open_default()?);
+                    let items = store.list()?;
+                    let writer = StoreWriter::start(store.clone())?;
+                    anyhow::Ok((store, writer, items))
+                })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                match opened {
+                    Ok((store, writer, items)) => {
+                        this.library = Library::from_list(items);
+                        this.persistence = PersistenceState::Ready { store, writer };
+                        this.boot_selected(cx);
+                    }
+                    Err(err) => {
+                        eprintln!("{APP_SLUG}: snip store unavailable (RAM-only): {err:#}");
+                        this.persistence = PersistenceState::RamOnly;
+                    }
+                }
+                cx.notify();
+            }) {
+                eprintln!("{APP_SLUG}: store bootstrap task: {err}");
+            }
+        })
+        .detach();
+    }
+
+    pub fn is_bootstrapping(&self) -> bool {
+        matches!(self.persistence, PersistenceState::Loading)
+    }
+
+    fn store(&self) -> Option<Arc<Store>> {
+        match &self.persistence {
+            PersistenceState::Ready { store, .. } => Some(store.clone()),
+            PersistenceState::Loading | PersistenceState::RamOnly => None,
+        }
+    }
+
+    fn store_writer(&self) -> Option<StoreWriter> {
+        match &self.persistence {
+            PersistenceState::Ready { writer, .. } => Some(writer.clone()),
+            PersistenceState::Loading | PersistenceState::RamOnly => None,
         }
     }
 
@@ -158,6 +201,14 @@ impl AppState {
 
     pub fn visible_ids(&self) -> &[Uuid] {
         self.library.visible_ids()
+    }
+
+    pub fn visible_snapshot(&self) -> Arc<[Uuid]> {
+        self.library.visible_snapshot()
+    }
+
+    pub fn visible_len(&self) -> usize {
+        self.library.visible_len()
     }
 
     pub fn date_preset(&self) -> DatePreset {

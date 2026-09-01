@@ -93,7 +93,7 @@ pub(super) fn system_page(state: Entity<AppState>, snap: &SysSnapshot) -> impl I
                         let state = state.clone();
                         cx.spawn(async move |cx| {
                             if answer.await == Ok(1) {
-                                let _ = state.update(cx, |s, cx| s.wipe_library(cx));
+                                state.update(cx, |s, cx| s.wipe_library(cx));
                             }
                         })
                         .detach();

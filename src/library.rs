@@ -39,7 +39,7 @@ pub const DATE_PRESETS: [(&str, &str, DatePreset); 4] = [
 pub struct Library {
     docs: HashMap<Uuid, Document>,
     order: Vec<Uuid>,
-    visible_ids: Vec<Uuid>,
+    visible_ids: Arc<[Uuid]>,
     selected: Option<Uuid>,
     date_preset: DatePreset,
     loaded_lru: Vec<Uuid>,
@@ -50,7 +50,7 @@ impl Library {
         Self {
             docs: HashMap::new(),
             order: Vec::new(),
-            visible_ids: Vec::new(),
+            visible_ids: Arc::from([]),
             selected: None,
             date_preset: DatePreset::All,
             loaded_lru: Vec::new(),
@@ -65,7 +65,7 @@ impl Library {
             lib.docs.insert(doc.id, doc);
         }
         lib.selected = lib.order.first().copied();
-        lib.visible_ids = lib.order.clone();
+        lib.visible_ids = Arc::from(lib.order.clone());
         lib
     }
 
@@ -89,6 +89,14 @@ impl Library {
         &self.visible_ids
     }
 
+    pub fn visible_snapshot(&self) -> Arc<[Uuid]> {
+        self.visible_ids.clone()
+    }
+
+    pub fn visible_len(&self) -> usize {
+        self.visible_ids.len()
+    }
+
     pub fn date_preset(&self) -> DatePreset {
         self.date_preset
     }
@@ -103,7 +111,10 @@ impl Library {
         self.order.insert(0, id);
         self.selected = Some(id);
         if !self.visible_ids.contains(&id) {
-            self.visible_ids.insert(0, id);
+            let mut visible = Vec::with_capacity(self.visible_ids.len() + 1);
+            visible.push(id);
+            visible.extend_from_slice(&self.visible_ids);
+            self.visible_ids = Arc::from(visible);
         }
         self.touch_lru(id);
     }
@@ -111,17 +122,19 @@ impl Library {
     pub fn remove(&mut self, id: Uuid) {
         self.docs.remove(&id);
         self.order.retain(|x| *x != id);
-        self.visible_ids.retain(|x| *x != id);
+        self.visible_ids = Arc::from(
+            self.visible_ids
+                .iter()
+                .copied()
+                .filter(|x| *x != id)
+                .collect::<Vec<_>>(),
+        );
         self.loaded_lru.retain(|x| *x != id);
         self.selected = self
             .visible_ids
             .first()
             .copied()
             .or_else(|| self.order.first().copied());
-    }
-
-    pub fn visible_docs(&self) -> impl Iterator<Item = &Document> {
-        self.visible_ids.iter().filter_map(|id| self.docs.get(id))
     }
 
     pub fn iter_all(&self) -> impl Iterator<Item = &Document> {
@@ -139,42 +152,39 @@ impl Library {
     }
 
     pub fn touch_lru(&mut self, id: Uuid) {
+        if !self
+            .docs
+            .get(&id)
+            .is_some_and(|d| matches!(d.image, ImageSlot::Loaded(_)))
+        {
+            return;
+        }
         self.loaded_lru.retain(|x| *x != id);
         self.loaded_lru.push(id);
         loop {
-            let loaded: Vec<Uuid> = self
+            let (loaded_n, bytes) = self
                 .loaded_lru
                 .iter()
-                .copied()
-                .filter(|x| {
-                    self.docs
-                        .get(x)
-                        .is_some_and(|d| matches!(d.image, ImageSlot::Loaded(_)))
-                })
-                .collect();
-            let bytes: u64 = loaded
-                .iter()
-                .filter_map(|x| {
-                    self.docs
-                        .get(x)
-                        .and_then(|d| d.image.pixels().map(|p| pixel_bytes(p)))
-                })
-                .sum();
-            let over_n = loaded.len() > PIXEL_MAX_ENTRIES;
+                .filter_map(|x| self.docs.get(x)?.image.pixels())
+                .fold((0usize, 0u64), |(n, bytes), pixels| {
+                    (n + 1, bytes.saturating_add(pixel_bytes(pixels)))
+                });
+            let over_n = loaded_n > PIXEL_MAX_ENTRIES;
             let over_b = bytes > PIXEL_BUDGET;
             if !over_n && !over_b {
                 break;
             }
-            let Some(pos) = self
-                .loaded_lru
-                .iter()
-                .position(|x| Some(*x) != self.selected)
-            else {
+            let Some(pos) = self.loaded_lru.iter().position(|x| {
+                Some(*x) != self.selected
+                    && self.docs.get(x).is_some_and(|d| {
+                        d.is_persisted() && matches!(d.image, ImageSlot::Loaded(_))
+                    })
+            }) else {
                 break;
             };
             let evict = self.loaded_lru.remove(pos);
             if let Some(doc) = self.docs.get_mut(&evict) {
-                if doc.persisted && matches!(doc.image, ImageSlot::Loaded(_)) {
+                if doc.is_persisted() && matches!(doc.image, ImageSlot::Loaded(_)) {
                     doc.image = ImageSlot::OnDisk;
                 }
             }
@@ -195,7 +205,7 @@ impl Library {
     /// Replace the filtered id list. If the current selection is not visible,
     /// select the first visible id. Returns true when selection changed.
     pub fn set_visible(&mut self, ids: Vec<Uuid>) -> bool {
-        self.visible_ids = ids;
+        self.visible_ids = Arc::from(ids);
         let next = if self.selected.is_some_and(|s| self.visible_ids.contains(&s)) {
             self.selected
         } else {
@@ -217,14 +227,15 @@ impl Library {
     pub fn clear(&mut self) {
         self.docs.clear();
         self.order.clear();
-        self.visible_ids.clear();
+        self.visible_ids = Arc::from([]);
         self.selected = None;
         self.loaded_lru.clear();
     }
 }
 
 pub fn merge_visible(inflight_hits: Vec<Uuid>, mut persisted: Vec<Uuid>) -> Vec<Uuid> {
-    persisted.retain(|id| !inflight_hits.contains(id));
+    let inflight_set: std::collections::HashSet<Uuid> = inflight_hits.iter().copied().collect();
+    persisted.retain(|id| !inflight_set.contains(id));
     let mut out = inflight_hits;
     out.append(&mut persisted);
     out

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use gpui::SharedString;
 use ratex_layout::layout_options::LayoutOptions;
 use ratex_layout::{layout, to_display_list};
 use ratex_parser::parser::parse;
@@ -6,10 +7,11 @@ use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
 use ratex_types::math_style::MathStyle;
 
 use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, MathRun, SnipKind};
-use crate::export::CopyRow;
+use crate::export::CopyKind;
 use crate::math::ScriptKind;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::table;
+use std::sync::Arc;
 use uuid::Uuid;
 
 mod table_layout;
@@ -119,7 +121,32 @@ pub struct DocDerived {
     pub inline_delim: InlineDelim,
     pub block_delim: BlockDelim,
     pub preview: Vec<PreviewBlock>,
-    pub copy_rows: Vec<CopyRow>,
+    pub copy_rows: Vec<DerivedCopyRow>,
+}
+
+#[derive(Clone)]
+pub struct DerivedCopyRow {
+    pub kind: CopyKind,
+    pub payload: Arc<str>,
+    pub hint: SharedString,
+}
+
+pub fn derived_copy_rows(blocks: &[Block], prefs: &Prefs) -> Vec<DerivedCopyRow> {
+    crate::export::visible_copy_rows(&crate::export::copy_rows(blocks, prefs))
+        .into_iter()
+        .map(|row| {
+            let hint = if row.kind == CopyKind::MsWord {
+                SharedString::from("Paste as Word equation")
+            } else {
+                SharedString::from(row.text.split_whitespace().collect::<Vec<_>>().join(" "))
+            };
+            DerivedCopyRow {
+                kind: row.kind,
+                payload: Arc::from(row.text),
+                hint,
+            }
+        })
+        .collect()
 }
 
 impl DocDerived {

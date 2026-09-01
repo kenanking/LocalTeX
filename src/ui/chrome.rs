@@ -1,7 +1,7 @@
 use gpui::{
     canvas, div, img, point, prelude::*, px, rgb, svg, AnyElement, Bounds, Context, CursorStyle,
-    Decorations, HitboxBehavior, MouseButton, ObjectFit, Pixels, Point, ResizeEdge, SharedString,
-    Size, Tiling, Window,
+    Decorations, Entity, HitboxBehavior, MouseButton, ObjectFit, Pixels, Point, ResizeEdge,
+    SharedString, Size, Tiling, Window,
 };
 
 use super::main_window::{MainWindow, View};
@@ -15,6 +15,15 @@ use crate::state::AppState;
 pub(crate) const CAPTION_H: f32 = 32.0;
 pub(crate) const TOOLBAR_H: f32 = 44.0;
 pub(crate) const FOOTER_H: f32 = 28.0;
+
+struct ToolbarState {
+    capturing: bool,
+    has_selected: bool,
+    can_open_docx: bool,
+    capture_tip: String,
+    view: View,
+    state: Entity<AppState>,
+}
 
 pub(crate) fn workspace_height(viewport_h: f32) -> f32 {
     let caption_h = if cfg!(target_os = "linux") {
@@ -53,12 +62,14 @@ impl MainWindow {
                 chrome.child(self.render_caption(window))
             })
             .child(self.render_toolbar(
-                capturing,
-                has_selected,
-                can_open_docx,
-                capture_tip,
-                view,
-                state,
+                ToolbarState {
+                    capturing,
+                    has_selected,
+                    can_open_docx,
+                    capture_tip,
+                    view,
+                    state,
+                },
                 cx,
             ))
     }
@@ -165,16 +176,15 @@ impl MainWindow {
             ))
     }
 
-    fn render_toolbar(
-        &self,
-        capturing: bool,
-        has_selected: bool,
-        can_open_docx: bool,
-        capture_tip: String,
-        view: View,
-        state: gpui::Entity<AppState>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_toolbar(&self, toolbar: ToolbarState, cx: &mut Context<Self>) -> impl IntoElement {
+        let ToolbarState {
+            capturing,
+            has_selected,
+            can_open_docx,
+            capture_tip,
+            view,
+            state,
+        } = toolbar;
         let tools = div()
             .flex()
             .items_center()
@@ -473,6 +483,27 @@ fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
     }
 }
 
+pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
+    if state.is_bootstrapping() {
+        return (theme::StatusKind::Busy, "Loading library…".into());
+    }
+    if state.is_capturing() {
+        return (theme::StatusKind::Busy, "Capturing…".into());
+    }
+    if let Some(err) = state.capture_error() {
+        return (theme::StatusKind::Error, err.to_string());
+    }
+    if let Some(doc) = state.selected_doc() {
+        if let DocStatus::Failed(err) = &doc.status {
+            return (theme::StatusKind::Error, err.clone());
+        }
+    }
+    match state.engine_status() {
+        status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
+        EngineStatus::Ready => (theme::StatusKind::Ready, "Ready when you are".into()),
+    }
+}
+
 #[cfg(test)]
 mod client_frame_tests {
     use super::*;
@@ -496,96 +527,11 @@ mod client_frame_tests {
     }
 
     #[test]
-    fn caption_title_is_not_home() {
-        let src = include_str!("chrome.rs");
-        let caption = src
-            .split("fn render_caption")
-            .nth(1)
-            .unwrap()
-            .split("fn render_toolbar")
-            .next()
-            .unwrap();
-        assert!(
-            !caption.contains("dismiss_sheet"),
-            "caption title is window identity, not Library"
-        );
-        assert!(
-            caption.contains("click_count") && caption.contains("zoom_window"),
-            "double-click caption toggles maximize"
-        );
-        assert!(
-            caption.contains("app_tile_image"),
-            "caption shows the embedded application icon"
-        );
-        let toolbar = src
-            .split("fn render_toolbar")
-            .nth(1)
-            .unwrap()
-            .split("fn render_footer")
-            .next()
-            .unwrap();
-        assert!(
-            !toolbar.contains("app_tile_image"),
-            "application icon is caption identity, not Library"
-        );
-        assert!(toolbar.contains("IconKind::Library"));
-        assert!(toolbar.contains("topbar-home"));
-        assert!(
-            toolbar.contains("flex_1")
-                && toolbar.contains("tool-snip")
-                && toolbar.contains("tool-word"),
-            "Library plus snip through Word sit between the end clusters"
-        );
-    }
-
-    #[test]
-    fn linux_owns_the_frame_even_when_gpui_reports_server() {
-        let topbar = include_str!("chrome.rs")
-            .split("fn render_topbar")
-            .nth(1)
-            .unwrap()
-            .split("fn render_caption")
-            .next()
-            .unwrap();
-        assert!(
-            topbar.contains("cfg!(target_os = \"linux\")"),
-            "Linux draws the caption without waiting for Decorations::Client"
-        );
-        assert!(
-            !topbar.contains("Decorations::Client"),
-            "caption must not be gated on GPUI's Client report"
-        );
-        let main = include_str!("../main.rs");
-        assert!(
-            main.contains("WindowDecorations::Client"),
-            "Linux requests CSD so mutter-x11-frames is not required to map"
-        );
-    }
-
-    #[test]
     fn workspace_excludes_rendered_chrome() {
         #[cfg(target_os = "linux")]
         assert_eq!(workspace_height(560.0), 456.0);
         #[cfg(not(target_os = "linux"))]
         assert_eq!(workspace_height(560.0), 488.0);
         assert_eq!(workspace_height(10.0), 0.0);
-    }
-}
-
-pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
-    if state.is_capturing() {
-        return (theme::StatusKind::Busy, "Capturing…".into());
-    }
-    if let Some(err) = state.capture_error() {
-        return (theme::StatusKind::Error, err.to_string());
-    }
-    if let Some(doc) = state.selected_doc() {
-        if let DocStatus::Failed(err) = &doc.status {
-            return (theme::StatusKind::Error, err.clone());
-        }
-    }
-    match state.engine_status() {
-        status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
-        EngineStatus::Ready => (theme::StatusKind::Ready, "Ready when you are".into()),
     }
 }

@@ -149,6 +149,13 @@ pub enum ImageSlot {
     Missing,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PersistState {
+    New,
+    InsertPending { revision: u64 },
+    Stored,
+}
+
 impl ImageSlot {
     pub fn pixels(&self) -> Option<&Arc<RgbaImage>> {
         match self {
@@ -173,7 +180,7 @@ pub struct Document {
     pub status: DocStatus,
     pub first_line: String,
     pub thumb_jpeg: Vec<u8>,
-    pub persisted: bool,
+    pub persist: PersistState,
     pub blocks_loaded: bool,
     pub ocr: Option<OcrMeta>,
     pub ink: Option<Arc<Vec<Vec<[f32; 3]>>>>,
@@ -192,7 +199,7 @@ impl Document {
             status: DocStatus::Recognizing,
             first_line: String::new(),
             thumb_jpeg: Vec::new(),
-            persisted: false,
+            persist: PersistState::New,
             blocks_loaded: true,
             ocr: None,
             ink: None,
@@ -205,16 +212,12 @@ impl Document {
         Self {
             id: item.id,
             created_at: item.created_at,
-            image: if item.png_missing {
-                ImageSlot::Missing
-            } else {
-                ImageSlot::OnDisk
-            },
+            image: ImageSlot::OnDisk,
             blocks: Vec::new(),
             status: DocStatus::Ready,
             first_line: item.first_line,
             thumb_jpeg: item.thumb_jpeg,
-            persisted: true,
+            persist: PersistState::Stored,
             blocks_loaded: false,
             ocr: item.ocr,
             ink: None,
@@ -225,6 +228,17 @@ impl Document {
 
     pub fn bump_revision(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn is_persisted(&self) -> bool {
+        matches!(self.persist, PersistState::Stored)
+    }
+
+    pub fn insert_pending_revision(&self) -> Option<u64> {
+        match self.persist {
+            PersistState::InsertPending { revision } => Some(revision),
+            PersistState::New | PersistState::Stored => None,
+        }
     }
 
     pub fn first_line(&self) -> String {

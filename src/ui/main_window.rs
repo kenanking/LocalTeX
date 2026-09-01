@@ -29,7 +29,9 @@ use crate::actions::{
 use crate::cache::MediaCache;
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
-use crate::preview::{document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived};
+use crate::preview::{
+    derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived,
+};
 use crate::state::AppState;
 
 #[derive(Clone)]
@@ -124,7 +126,7 @@ pub struct MainWindow {
     pub(crate) source_bound: Option<Uuid>,
     pub(crate) source_last: String,
     pub(crate) source_split: f32,
-    source_epoch: u64,
+    source_flush_task: Option<gpui::Task<()>>,
     pub(crate) source_lang: &'static str,
     thumb_inflight: Rc<RefCell<HashSet<Uuid>>>,
 }
@@ -257,7 +259,7 @@ impl MainWindow {
             source_bound: None,
             source_last: String::new(),
             source_split: 0.5,
-            source_epoch: 0,
+            source_flush_task: None,
             source_lang: "LaTeX",
             thumb_inflight: Rc::new(RefCell::new(HashSet::new())),
         };
@@ -484,6 +486,7 @@ impl MainWindow {
     }
 
     pub(crate) fn close_source(&mut self, cx: &mut Context<Self>) {
+        self.source_flush_task.take();
         if self.source_open {
             self.flush_source(cx);
         }
@@ -540,21 +543,15 @@ impl MainWindow {
         if !self.source_open {
             return;
         }
-        self.source_epoch = self.source_epoch.wrapping_add(1);
-        let epoch = self.source_epoch;
-        cx.spawn(async move |this, cx| {
+        self.source_flush_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(280))
                 .await;
             this.update(cx, |this, cx| {
-                if this.source_epoch != epoch {
-                    return;
-                }
                 this.flush_source(cx);
             })
             .ok();
-        })
-        .detach();
+        }));
     }
 
     fn flush_source(&mut self, cx: &mut Context<Self>) {
@@ -760,9 +757,7 @@ impl MainWindow {
             let built = cx
                 .background_spawn(async move {
                     let preview = document_preview_with_dpr(&blocks, dpr);
-                    let rows = crate::export::visible_copy_rows(&crate::export::copy_rows(
-                        &blocks, &prefs,
-                    ));
+                    let rows = derived_copy_rows(&blocks, &prefs);
                     DocDerived {
                         id,
                         revision,
@@ -878,9 +873,9 @@ impl gpui::Render for MainWindow {
             (
                 status_kind,
                 status_label,
-                state.is_capturing(),
+                state.is_capturing() || state.is_bootstrapping(),
                 !state.is_empty(),
-                state.library.visible_docs().count(),
+                state.visible_len(),
                 close_orig,
             )
         };

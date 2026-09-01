@@ -13,9 +13,11 @@ use crate::imgutil;
 
 mod date;
 mod migrate;
+mod writer;
 
 pub use date::{CivilDate, DateRange};
 use migrate::migrate;
+pub use writer::{StoreWriter, WriteResult};
 
 #[derive(Clone)]
 pub struct SnipListItem {
@@ -23,7 +25,6 @@ pub struct SnipListItem {
     pub created_at: SystemTime,
     pub first_line: String,
     pub thumb_jpeg: Vec<u8>,
-    pub png_missing: bool,
     pub ocr: Option<OcrMeta>,
 }
 
@@ -55,7 +56,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<SnipListItem>> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, first_line, ocr_s, confidence, image_relpath
+            "SELECT id, created_at, first_line, ocr_s, confidence
              FROM snips ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -65,12 +66,11 @@ impl Store {
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<f64>>(3)?,
                 row.get::<_, Option<f64>>(4)?,
-                row.get::<_, String>(5)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id_s, ms, first_line, ocr_s, confidence, rel) = row?;
+            let (id_s, ms, first_line, ocr_s, confidence) = row?;
             let id = Uuid::parse_str(&id_s).map_err(|e| anyhow!("uuid: {e}"))?;
             let ocr = match (ocr_s, confidence) {
                 (Some(elapsed_s), Some(confidence)) => Some(OcrMeta {
@@ -84,7 +84,6 @@ impl Store {
                 created_at: system_time_from_ms(ms),
                 first_line,
                 thumb_jpeg: Vec::new(),
-                png_missing: !self.root.join(rel).is_file(),
                 ocr,
             });
         }
@@ -426,7 +425,7 @@ mod tests {
             status: DocStatus::Ready,
             first_line: String::new(),
             thumb_jpeg: Vec::new(),
-            persisted: false,
+            persist: crate::doc::PersistState::New,
             blocks_loaded: true,
             ocr: None,
             ink: None,
@@ -513,7 +512,11 @@ mod tests {
         std::fs::remove_file(root.join(format!("snips/{id}.png"))).unwrap();
         let list = store.list().unwrap();
         assert!(store.png_missing(id).unwrap());
-        assert!(list[0].png_missing, "boot list must surface a missing PNG");
+        assert_eq!(
+            list.len(),
+            1,
+            "missing PNGs are detected on lazy image load"
+        );
         assert_eq!(store.load_blocks(id).unwrap()[0].text, "hello");
     }
 

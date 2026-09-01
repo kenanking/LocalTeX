@@ -25,7 +25,7 @@ impl MainWindow {
         self.ensure_selected_full(cx);
         let (ids, selected, age, idx, copy_flashed, reveal_enabled) = {
             let state = self.state.read(cx);
-            let ids = state.visible_ids().to_vec();
+            let ids = state.visible_snapshot();
             let selected = state.selected();
             let age = state
                 .selected_doc()

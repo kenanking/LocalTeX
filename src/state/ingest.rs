@@ -5,9 +5,10 @@ use gpui::{App, AppContext, ClipboardItem, Context};
 use image::RgbaImage;
 use uuid::Uuid;
 
-use crate::doc::{Block, DocStatus, Document, ImageSlot, SnipKind};
+use crate::doc::{Block, DocStatus, Document, ImageSlot, PersistState, SnipKind};
 use crate::export::CopyKind;
 use crate::identity::APP_SLUG;
+use crate::store::WriteResult;
 
 use super::session::Capture;
 use super::AppState;
@@ -20,6 +21,9 @@ pub enum IngestSource {
 
 impl AppState {
     pub fn ingest(&mut self, source: IngestSource, cx: &mut Context<Self>) {
+        if self.is_bootstrapping() {
+            return;
+        }
         match source {
             IngestSource::Screen(image) => self.ingest_pixels(image, cx),
             IngestSource::Files(paths) => {
@@ -156,7 +160,7 @@ impl AppState {
         let ink = self.library.get(id).and_then(|d| d.ink.clone());
         let size = (image.width(), image.height());
         let engine = self.engine.clone();
-        let store = self.store.clone();
+        let store = self.store();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -243,12 +247,11 @@ impl AppState {
         Some((id, kind))
     }
 
-    pub fn copy_chip(&mut self, kind: CopyKind, cx: &mut App) {
+    pub fn copy_chip_payload(&mut self, kind: CopyKind, text: String, cx: &mut App) {
         let Some(doc) = self.selected_doc() else {
             return;
         };
         let snip = doc.snip_kind();
-        let text = doc.text_for(kind, &self.prefs);
         if text.is_empty() {
             return;
         }
@@ -310,12 +313,15 @@ impl AppState {
         self.ingest.ocr.remove(id);
         self.library.remove(id);
         self.ingest.thumb_inflight.remove(&id);
+        self.ingest.blocks_inflight.remove(&id);
+        self.ingest.png_inflight.remove(&id);
         if self.library.is_empty() {
             self.ingest.ocr.cancel_remaining();
         }
-        if let Some(store) = self.store.clone() {
+        if let Some(writer) = self.store_writer() {
+            let reply = writer.delete(id);
             cx.background_spawn(async move {
-                if let Err(err) = store.delete(id) {
+                if let Err(err) = recv_write(reply) {
                     eprintln!("{APP_SLUG}: delete snip: {err}");
                 }
             })
@@ -335,11 +341,14 @@ impl AppState {
         }
         self.ingest.file_queue.clear();
         self.ingest.thumb_inflight.clear();
+        self.ingest.blocks_inflight.clear();
+        self.ingest.png_inflight.clear();
         self.search.bump();
         self.library.clear();
-        if let Some(store) = self.store.clone() {
+        if let Some(writer) = self.store_writer() {
+            let reply = writer.wipe();
             cx.background_spawn(async move {
-                if let Err(err) = store.wipe() {
+                if let Err(err) = recv_write(reply) {
                     eprintln!("{APP_SLUG}: wipe library: {err}");
                 }
             })
@@ -355,10 +364,10 @@ impl AppState {
         let Some(doc) = self.library.get(id) else {
             return;
         };
-        if !doc.thumb_jpeg.is_empty() || !doc.persisted {
+        if !doc.thumb_jpeg.is_empty() || !doc.is_persisted() {
             return;
         }
-        let Some(store) = self.store.clone() else {
+        let Some(store) = self.store() else {
             return;
         };
         self.ingest.thumb_inflight.insert(id);
@@ -385,38 +394,62 @@ impl AppState {
     }
 
     fn persist_ready(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+        let Some(writer) = self.store_writer() else {
             return;
         };
-        let Some(doc) = self.library.get(id).cloned() else {
+        let Some(doc) = self.library.get(id) else {
             return;
         };
         if !matches!(doc.status, DocStatus::Ready) || doc.image.pixels().is_none() {
             return;
         }
-        let already = doc.persisted;
+        let revision = doc.revision;
+        let stored = match doc.persist {
+            PersistState::New => false,
+            PersistState::InsertPending { .. } => return,
+            PersistState::Stored => true,
+        };
+        if !stored {
+            if let Some(doc) = self.library.get_mut(id) {
+                doc.persist = PersistState::InsertPending { revision };
+            }
+        }
+        let Some(doc) = self.library.get(id).cloned() else {
+            return;
+        };
+        let reply = if stored {
+            writer.update_ocr(doc)
+        } else {
+            writer.insert(doc)
+        };
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    if already {
-                        store.update_ocr(&doc)?;
-                        Ok::<Option<Vec<u8>>, anyhow::Error>(None)
-                    } else {
-                        Ok(Some(store.insert_ready(&doc)?))
-                    }
-                })
-                .await;
+            let result = cx.background_spawn(async move { recv_write(reply) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
                 match result {
-                    Ok(Some(thumb)) => {
+                    Ok(WriteResult::Inserted(thumb)) => {
+                        let mut changed_during_insert = false;
                         if let Some(d) = this.library.get_mut(id) {
-                            d.persisted = true;
-                            d.thumb_jpeg = thumb;
+                            if d.insert_pending_revision() == Some(revision) {
+                                changed_during_insert = d.revision != revision;
+                                d.persist = PersistState::Stored;
+                                d.thumb_jpeg = thumb;
+                            }
+                        }
+                        this.library.touch_lru(id);
+                        if changed_during_insert {
+                            this.persist_edits(id, cx);
                         }
                         this.schedule_filter(cx);
                     }
-                    Ok(None) => {}
-                    Err(err) => eprintln!("{APP_SLUG}: persist snip: {err}"),
+                    Ok(WriteResult::Done) => {}
+                    Err(err) => {
+                        if let Some(d) = this.library.get_mut(id) {
+                            if d.insert_pending_revision() == Some(revision) {
+                                d.persist = PersistState::New;
+                            }
+                        }
+                        eprintln!("{APP_SLUG}: persist snip: {err}");
+                    }
                 }
                 cx.notify();
             }) {
@@ -456,19 +489,18 @@ impl AppState {
     }
 
     fn persist_edits(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+        let Some(writer) = self.store_writer() else {
             return;
         };
         let Some(doc) = self.library.get(id).cloned() else {
             return;
         };
-        if !doc.persisted || !matches!(doc.status, DocStatus::Ready) {
+        if !doc.is_persisted() || !matches!(doc.status, DocStatus::Ready) {
             return;
         }
+        let reply = writer.update_blocks(doc);
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { store.update_blocks(&doc) })
-                .await;
+            let result = cx.background_spawn(async move { recv_write(reply) }).await;
             if let Err(err) = this.update(cx, |_, cx| {
                 if let Err(err) = result {
                     eprintln!("{APP_SLUG}: persist edits: {err}");
@@ -482,7 +514,7 @@ impl AppState {
     }
 
     fn load_png_then_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+        let Some(store) = self.store() else {
             return;
         };
         if let Some(doc) = self.library.get_mut(id) {
@@ -524,7 +556,7 @@ impl AppState {
         let Some(doc) = self.library.get(id) else {
             return;
         };
-        let need_blocks = doc.persisted && !doc.blocks_loaded;
+        let need_blocks = doc.is_persisted() && !doc.blocks_loaded;
         let need_png = matches!(doc.image, ImageSlot::OnDisk);
         if need_blocks {
             self.load_blocks(id, cx);
@@ -535,7 +567,11 @@ impl AppState {
     }
 
     fn load_blocks(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+        if !self.ingest.blocks_inflight.insert(id) {
+            return;
+        }
+        let Some(store) = self.store() else {
+            self.ingest.blocks_inflight.remove(&id);
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -543,6 +579,7 @@ impl AppState {
                 .background_spawn(async move { store.load_block_pair(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
+                this.ingest.blocks_inflight.remove(&id);
                 match result {
                     Ok((blocks, ocr_blocks)) => {
                         if let Some(doc) = this.library.get_mut(id) {
@@ -570,12 +607,17 @@ impl AppState {
     }
 
     fn load_png(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+        if !self.ingest.png_inflight.insert(id) {
+            return;
+        }
+        let Some(store) = self.store() else {
+            self.ingest.png_inflight.remove(&id);
             return;
         };
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { store.load_png(id) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
+                this.ingest.png_inflight.remove(&id);
                 if this.library.selected() != Some(id) {
                     return;
                 }
@@ -600,6 +642,14 @@ impl AppState {
         })
         .detach();
     }
+}
+
+fn recv_write(
+    reply: std::sync::mpsc::Receiver<anyhow::Result<WriteResult>>,
+) -> anyhow::Result<WriteResult> {
+    reply
+        .recv()
+        .map_err(|_| anyhow::anyhow!("store writer stopped"))?
 }
 
 #[derive(Debug, PartialEq, Eq)]

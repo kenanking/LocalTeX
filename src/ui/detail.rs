@@ -14,8 +14,9 @@ use super::theme;
 use super::widgets::{btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, IconKind};
 use super::window_drag::WindowDrag;
 use crate::doc::{DocStatus, ImageSlot, OcrMeta};
-use crate::export::{CopyKind, CopyRow};
+use crate::export::CopyKind;
 use crate::keymap::{self, ShortcutId};
+use crate::preview::DerivedCopyRow;
 use crate::state::AppState;
 
 impl MainWindow {
@@ -397,7 +398,7 @@ impl MainWindow {
     fn render_copy_rows(
         &self,
         doc_id: Uuid,
-        rows: &[CopyRow],
+        rows: &[DerivedCopyRow],
         copied: Option<(Uuid, CopyKind)>,
         ocr: Option<OcrMeta>,
         pane_w: f32,
@@ -426,13 +427,11 @@ impl MainWindow {
             let mut line = div().flex().w_full().gap(px(CHIP_GAP));
             for row in chunk {
                 let kind = row.kind;
-                let text = row.text.clone();
+                let text = row.payload.clone();
                 let hint = if copied.is_some_and(|(_, k)| k == kind) {
                     SharedString::from("Copied")
-                } else if kind == CopyKind::MsWord {
-                    SharedString::from("Paste as Word equation")
                 } else {
-                    SharedString::from(row.text.split_whitespace().collect::<Vec<_>>().join(" "))
+                    row.hint.clone()
                 };
                 let is_copied = copied.is_some_and(|(_, k)| k == kind);
                 let entity = cx.entity();
@@ -445,7 +444,7 @@ impl MainWindow {
                     is_copied,
                     !text.is_empty(),
                     move |_, cx| {
-                        state.update(cx, |s, cx| s.copy_chip(kind, cx));
+                        state.update(cx, |s, cx| s.copy_chip_payload(kind, text.to_string(), cx));
                         entity.update(cx, |this, cx| {
                             this.flash_copied(doc_id, kind, cx);
                         });

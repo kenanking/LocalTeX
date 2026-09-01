@@ -37,6 +37,9 @@ impl AppState {
     }
 
     pub fn request_capture(&mut self, cx: &mut Context<Self>) {
+        if self.is_bootstrapping() {
+            return;
+        }
         if self.capture.is_grabbing() {
             return;
         }
@@ -100,6 +103,9 @@ impl AppState {
     }
 
     pub fn request_upload(&mut self, cx: &mut Context<Self>) {
+        if self.is_bootstrapping() {
+            return;
+        }
         if self.is_capturing() {
             return;
         }
@@ -122,6 +128,9 @@ impl AppState {
     }
 
     pub fn request_paste(&mut self, cx: &mut Context<Self>) {
+        if self.is_bootstrapping() {
+            return;
+        }
         if self.is_capturing() {
             return;
         }

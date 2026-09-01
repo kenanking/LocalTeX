@@ -80,6 +80,7 @@ fn main() {
             state.update(cx, |state, _| {
                 state.main_window = Some(handle);
             });
+            state.update(cx, |state, cx| state.bootstrap_store(cx));
 
             // Hotkey manager must be created on this GPUI UI thread (Windows
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.

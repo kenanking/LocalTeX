@@ -27,7 +27,7 @@ impl AppState {
     }
 
     pub fn can_reveal_original(&self, id: Uuid) -> bool {
-        self.store.is_some() && self.library.get(id).is_some_and(|d| d.persisted)
+        self.store().is_some() && self.library.get(id).is_some_and(|d| d.is_persisted())
     }
 
     pub fn copy_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -93,7 +93,7 @@ impl AppState {
             self.flash_capture_error("Image isn't saved yet", cx);
             return;
         }
-        let Some(store) = self.store.clone() else {
+        let Some(store) = self.store() else {
             self.flash_capture_error("Image isn't saved yet", cx);
             return;
         };
@@ -117,14 +117,14 @@ impl AppState {
         let doc = self.library.get(id)?;
         match &doc.image {
             ImageSlot::Missing => None,
-            ImageSlot::OnDisk => self.store.clone().map(|store| OrigPng::File {
+            ImageSlot::OnDisk => self.store().map(|store| OrigPng::File {
                 store,
                 id,
                 fallback: None,
             }),
             ImageSlot::Loaded(img) => {
-                if doc.persisted {
-                    if let Some(store) = self.store.clone() {
+                if doc.is_persisted() {
+                    if let Some(store) = self.store() {
                         return Some(OrigPng::File {
                             store,
                             id,

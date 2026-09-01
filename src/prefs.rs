@@ -101,10 +101,18 @@ impl Default for Prefs {
 impl Prefs {
     pub fn load() -> Self {
         let path = prefs_path();
-        let Ok(raw) = fs::read_to_string(&path) else {
-            return Self::default();
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(err) => {
+                eprintln!("{APP_SLUG}: read prefs: {err}");
+                return Self::default();
+            }
         };
-        serde_json::from_str(&raw).unwrap_or_default()
+        serde_json::from_str(&raw).unwrap_or_else(|err| {
+            eprintln!("{APP_SLUG}: parse prefs: {err}");
+            Self::default()
+        })
     }
 
     pub fn save(&self) {
@@ -117,8 +125,13 @@ impl Prefs {
         }
         match serde_json::to_string_pretty(self) {
             Ok(raw) => {
-                if let Err(err) = fs::write(&path, raw) {
+                let tmp = path.with_extension("json.tmp");
+                if let Err(err) = fs::write(&tmp, raw) {
                     eprintln!("{APP_SLUG}: write prefs: {err}");
+                    return;
+                }
+                if let Err(err) = replace_file(&tmp, &path) {
+                    eprintln!("{APP_SLUG}: replace prefs: {err}");
                 }
             }
             Err(err) => eprintln!("{APP_SLUG}: encode prefs: {err}"),
@@ -138,6 +151,18 @@ impl Prefs {
             BlockDelim::Brackets => format!("\\[\n{body}\n\\]"),
             BlockDelim::Equation => format!("\\begin{{equation*}}\n{body}\n\\end{{equation*}}"),
         }
+    }
+}
+
+fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    match fs::rename(tmp, path) {
+        Ok(()) => Ok(()),
+        #[cfg(target_os = "windows")]
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(path)?;
+            fs::rename(tmp, path)
+        }
+        Err(err) => Err(err),
     }
 }
 
