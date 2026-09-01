@@ -1,4 +1,3 @@
-# Build Windows zip and Inno Setup installer, both with ship models.
 param(
     [string]$Version = "",
     [string]$OutDir = "",

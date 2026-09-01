@@ -1,10 +1,9 @@
 # LocalTeX model card
 
 Weights stay on disk, not in git and not inside the Rust binary. Release
-packages (deb, tar.gz, zip, Windows installer) ship `opendoc/` and
-`handwriting/` beside the executable. From source, install the dated
-tarballs on the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0).
-Dated pack names also live in `manifest.json`.
+packages ship `opendoc/` and `handwriting/` beside the executable. From a
+source checkout, install the dated tarballs on the
+[`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0).
 
 ```bash
 ./scripts/download-models.sh

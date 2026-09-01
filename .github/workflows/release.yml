@@ -71,7 +71,6 @@ jobs:
       - name: Bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCALTEX_MODELS_TAG: ${{ env.LOCALTEX_MODELS_TAG }}
         run: ./scripts/bundle-linux.sh
 
       - uses: actions/upload-artifact@v4
@@ -111,7 +110,6 @@ jobs:
       - name: Bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          LOCALTEX_MODELS_TAG: ${{ env.LOCALTEX_MODELS_TAG }}
         shell: pwsh
         run: .\scripts\bundle-windows.ps1
 

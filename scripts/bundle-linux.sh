@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Build Linux release artifacts: prefix tar.gz and a .deb, both with ship models.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,11 +45,16 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf -- "$STAGE"' EXIT
 PREFIX="$STAGE/$PACKAGE"
 
-install -Dm755 "$BIN" "$PREFIX/bin/localtex"
-install -Dm644 "$ROOT/resources/linux/com.localtex.app.desktop" \
-  "$PREFIX/share/applications/com.localtex.app.desktop"
-install -Dm644 "$ROOT/assets/icon.svg" \
-  "$PREFIX/share/icons/hicolor/scalable/apps/com.localtex.app.svg"
+install_app_tree() {
+  local dest="$1"
+  install -Dm755 "$BIN" "$dest/bin/localtex"
+  install -Dm644 "$ROOT/resources/linux/com.localtex.app.desktop" \
+    "$dest/share/applications/com.localtex.app.desktop"
+  install -Dm644 "$ROOT/assets/icon.svg" \
+    "$dest/share/icons/hicolor/scalable/apps/com.localtex.app.svg"
+}
+
+install_app_tree "$PREFIX"
 install -Dm644 "$ROOT/LICENSE" "$PREFIX/share/licenses/localtex/LICENSE"
 "$ROOT/scripts/stage-models.sh" "$PREFIX/share/localtex/models"
 test -f "$PREFIX/share/localtex/models/opendoc/layout.onnx"
@@ -62,11 +66,7 @@ echo "localtex: wrote $ARCHIVE"
 
 need dpkg-deb
 DEB_ROOT="$STAGE/deb"
-install -Dm755 "$BIN" "$DEB_ROOT/usr/bin/localtex"
-install -Dm644 "$ROOT/resources/linux/com.localtex.app.desktop" \
-  "$DEB_ROOT/usr/share/applications/com.localtex.app.desktop"
-install -Dm644 "$ROOT/assets/icon.svg" \
-  "$DEB_ROOT/usr/share/icons/hicolor/scalable/apps/com.localtex.app.svg"
+install_app_tree "$DEB_ROOT/usr"
 install -Dm644 "$ROOT/LICENSE" "$DEB_ROOT/usr/share/doc/localtex/copyright"
 mkdir -p "$DEB_ROOT/usr/share/localtex"
 cp -a "$PREFIX/share/localtex/models" "$DEB_ROOT/usr/share/localtex/models"

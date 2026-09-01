@@ -19,9 +19,7 @@ pub fn config_dir() -> PathBuf {
         .join(APP_SLUG)
 }
 
-/// Ship weights live on disk, never inside the binary.
-///
-/// Search order:
+/// Search order for on-disk ship packs:
 /// 1. `$LOCALTEX_MODELS` when set and non-empty (always wins, even if files are missing)
 /// 2. `<exe_dir>/models` when it looks like a ship root (Windows zip / installer)
 /// 3. `<exe_dir>/../share/localtex/models` when it looks like a ship root (Linux prefix / deb)

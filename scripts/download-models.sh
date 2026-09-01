@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Fetch OpenDoc + handwriting packs from the GitHub release and install
-# them as models/opendoc and models/handwriting.
-# Override with LOCALTEX_MODELS, LOCALTEX_MODELS_REPO, LOCALTEX_MODELS_TAG.
 set -euo pipefail
 
 REPO="${LOCALTEX_MODELS_REPO:-kenanking/LocalTeX}"
@@ -15,7 +12,14 @@ SUMS="SHA256SUMS"
 if [[ -n "${LOCALTEX_MODELS:-}" ]]; then
   DEST="$LOCALTEX_MODELS"
 else
-  DEST="${XDG_DATA_HOME:-$HOME/.local/share}/localtex/models"
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      DEST="${LOCALAPPDATA:-$HOME/AppData/Local}/localtex/models"
+      ;;
+    *)
+      DEST="${XDG_DATA_HOME:-$HOME/.local/share}/localtex/models"
+      ;;
+  esac
 fi
 
 need() {

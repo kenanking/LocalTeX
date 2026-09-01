@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Copy ship packs into DEST as opendoc/ and handwriting/.
-# Prefer an already-installed tree (LOCALTEX_MODELS_SRC, then LOCALTEX_MODELS,
-# then the XDG default). Otherwise download from GitHub via download-models.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,13 +26,17 @@ if is_ship_root "$DEST"; then
 fi
 
 CANDIDATES=()
-if [[ -n "${LOCALTEX_MODELS_SRC:-}" ]]; then
-  CANDIDATES+=("$LOCALTEX_MODELS_SRC")
-fi
 if [[ -n "${LOCALTEX_MODELS:-}" ]]; then
   CANDIDATES+=("$LOCALTEX_MODELS")
 fi
-CANDIDATES+=("${XDG_DATA_HOME:-$HOME/.local/share}/localtex/models")
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    CANDIDATES+=("${LOCALAPPDATA:-$HOME/AppData/Local}/localtex/models")
+    ;;
+  *)
+    CANDIDATES+=("${XDG_DATA_HOME:-$HOME/.local/share}/localtex/models")
+    ;;
+esac
 
 for src in "${CANDIDATES[@]}"; do
   if is_ship_root "$src"; then

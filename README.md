@@ -7,11 +7,11 @@ Offline screenshot OCR for papers and notes: snip the screen, get Markdown or La
 - Mixed **text + formula** document model; Markdown / LaTeX export and copy
 - Local **PP-DocLayoutV2** layout + **UniRec-0.1B** recognition (text, formulas, tables; statically linked ONNX Runtime). Formula preview via RaTeX
 
-Models stay on disk next to the app (~44 MB binary + ~267 MB OpenDoc and handwriting packs). They are not compiled into the executable. GitHub Release packages already include the packs. Without them the app still starts; the status bar shows missing models and a snip fails instead of inventing text.
+Release packages include the ONNX packs on disk (~44 MB binary + ~267 MB weights). The packs are not compiled into the executable. Without them the app still starts; the status bar shows missing models and a snip fails instead of inventing text.
 
 ## Install
 
-Tagged GitHub Releases attach four artifacts, each with the ship packs inside:
+GitHub Releases attach four artifacts. Each one already contains `opendoc/` and `handwriting/`.
 
 | File | Use |
 |---|---|
@@ -20,11 +20,9 @@ Tagged GitHub Releases attach four artifacts, each with the ship packs inside:
 | `LocalTeX-<ver>-x86_64-Setup.exe` | Windows installer (per-user, no admin) |
 | `localtex-<ver>-x86_64-pc-windows-msvc.zip` | Unpack and run `localtex.exe` |
 
-Linux tarball layout is `bin/localtex` plus `share/localtex/models/`. The Windows zip keeps `models/` next to the exe. The app looks in those places before `~/.local/share/localtex/models` or `%LOCALAPPDATA%\localtex\models`.
+The Linux tarball keeps weights at `share/localtex/models/`. The Windows zip keeps them in `models/` next to the exe. The app searches those locations before `~/.local/share/localtex/models` or `%LOCALAPPDATA%\localtex\models`.
 
-To cut a release, bump `version` in `Cargo.toml`, commit, and push a matching `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds both OSes and publishes the artifacts.
-
-From source, install packs with `./scripts/download-models.sh` as before.
+To publish a build, bump `version` in `Cargo.toml`, commit, and push a matching `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds Linux and Windows and attaches the files.
 
 ## Platforms
 
@@ -55,17 +53,13 @@ If linking fails on `-lgbm` (Linux), see `.cargo/config.toml.example` (unversion
 
 ## Models
 
-OpenDoc ship weights (~244 MB) and inktex handwriting weights (~23 MB) stay on disk, not in git. Install both from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
+App packages already ship the packs. From a source checkout, install them from the [`v0.0.0` GitHub Release](https://github.com/kenanking/LocalTeX/releases/tag/v0.0.0):
 
 ```bash
 ./scripts/download-models.sh
 ```
 
-That unpacks the dated model tarballs from `v0.0.0` into `$LOCALTEX_MODELS` (else `~/.local/share/localtex/models` on Linux, `%LOCALAPPDATA%\localtex\models` on Windows) as `opendoc/` and `handwriting/`. App packages already contain those directories. Pack versions live on the release card and in `manifest.json`.
-
-Printed snips load `opendoc/` (`layout.onnx`, `encoder.onnx`, `decoder.onnx`, `unirec_tokenizer_mapping.json`). Draw-a-formula loads `handwriting/` (`encoder.onnx`, `decoder_step.onnx`, `vocab.json`). See [`models/README.md`](models/README.md). Layout is image-only (boxes in 800-space); the UniRec decoder must expose `cross_kt_0` and `seqlens_k`. Without those files the app still starts; OCR errors until the weights are in place.
-
-The GitHub repo may be private: `download-models.sh` uses `gh` when you are logged in (`gh auth status`).
+That writes `opendoc/` and `handwriting/` under `$LOCALTEX_MODELS`, or `~/.local/share/localtex/models` on Linux, or `%LOCALAPPDATA%\localtex\models` on Windows. If the GitHub repo is private, log in with `gh` first. File names, graph contracts, and pack versions are in [`models/README.md`](models/README.md).
 
 ## Run
 
@@ -91,19 +85,21 @@ Single crate (`localtex`). Product name / app id / data dir live in `src/identit
 ```
 src/
   main.rs           entry, native menus, main window
-  identity.rs       LocalTeX / localtex / com.localtex.app
+  identity.rs       LocalTeX / localtex / com.localtex.app / models_dir
   actions.rs        GPUI actions (namespace `localtex`)
-  state.rs          documents, capture lifecycle, OCR jobs
+  state/            documents, capture lifecycle, OCR jobs
   doc.rs            Block / Document / export
   capture.rs        xcap grab + virtual-desktop stitch
   desktop.rs        DesktopCmd; hotkey on the UI thread
   desktop/linux.rs  ksni tray
   desktop/x11_snip.rs  override-redirect freeze-frame overlay
   desktop/other.rs  tray-icon (Windows / macOS)
-  preview.rs        RaTeX → SVG
+  preview/          RaTeX → SVG
   ocr/              PP-DocLayoutV2 + UniRec-0.1B (OpenDoc)
   ui/               main window, theme
-scripts/            Linux desktop/SSH helpers, download-models, bundle-linux / bundle-windows
+resources/          linux .desktop, Windows Inno script
+scripts/            desktop/SSH helpers, download-models, bundle-linux / bundle-windows
+.github/workflows/  tag-triggered Linux and Windows packages
 ```
 
 Agent-oriented conventions: [AGENTS.md](./AGENTS.md).
