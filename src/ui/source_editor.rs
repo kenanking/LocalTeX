@@ -208,7 +208,7 @@ impl SourceEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -697,7 +697,7 @@ impl Element for FieldElement {
         let line_height = window.line_height();
         for (i, (_, line)) in prepaint.lines.iter().enumerate() {
             let origin = point(bounds.origin.x, bounds.origin.y + line_height * (i as f32));
-            let _ = line.paint(origin, line_height, window, cx);
+            let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
         }
         if focus_handle.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {

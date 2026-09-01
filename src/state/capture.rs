@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{App, AppContext, Context, Timer, WindowHandle};
+use gpui::{App, AppContext, Context, WindowHandle};
 use image::RgbaImage;
 
 use crate::identity::APP_SLUG;
@@ -26,7 +26,7 @@ impl AppState {
         let gen = self.capture.gen();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_secs(4)).await;
+            cx.background_executor().timer(Duration::from_secs(4)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.capture.should_clear_flash(gen) {
                     this.capture.set(Capture::Idle);

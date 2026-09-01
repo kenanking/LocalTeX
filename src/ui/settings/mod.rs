@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, ScrollHandle, Timer, Window,
+    div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, ScrollHandle, Window,
 };
 
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
@@ -122,7 +122,9 @@ impl SettingsPane {
                     });
                 }
                 ticks += 1;
-                Timer::after(crate::sysmon::SAMPLE_INTERVAL).await;
+                cx.background_executor()
+                    .timer(crate::sysmon::SAMPLE_INTERVAL)
+                    .await;
             }
             let _ = this.update(cx, |this, _| {
                 this.sysmon_on = false;

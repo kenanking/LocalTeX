@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use gpui::{
     div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, MouseButton, MouseMoveEvent, RenderImage, ScrollHandle, Timer, Window,
+    Focusable, Image, MouseButton, MouseMoveEvent, RenderImage, ScrollHandle, Window,
 };
 use uuid::Uuid;
 
@@ -130,7 +130,7 @@ impl MainWindow {
         let snip_list_focus = cx.focus_handle();
         let orig_focus = cx.focus_handle();
         let draw_focus = cx.focus_handle();
-        window.focus(&snip_list_focus);
+        window.focus(&snip_list_focus, cx);
         let state_for_close = state.clone();
         window.on_window_should_close(cx, move |window, cx| {
             let action = state_for_close.read(cx).prefs.close_action;
@@ -268,7 +268,7 @@ impl MainWindow {
     pub(crate) fn toggle_draw(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.view, View::Draw) {
             self.dismiss_sheet(cx);
-            window.focus(&self.snip_list_focus);
+            window.focus(&self.snip_list_focus, cx);
             return;
         }
         self.unzoom();
@@ -276,7 +276,7 @@ impl MainWindow {
             self.settings.update(cx, |pane, _| pane.hide());
         }
         self.view = View::Draw;
-        window.focus(&self.draw_focus);
+        window.focus(&self.draw_focus, cx);
         cx.notify();
     }
 
@@ -299,7 +299,7 @@ impl MainWindow {
         }
         if self.orig.open {
             self.unzoom();
-            window.focus(&self.snip_list_focus);
+            window.focus(&self.snip_list_focus, cx);
             cx.notify();
             return;
         }
@@ -347,7 +347,7 @@ impl MainWindow {
     pub(crate) fn zoom_original(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         let _ = id;
         self.orig.open_view();
-        window.focus(&self.orig_focus);
+        window.focus(&self.orig_focus, cx);
         cx.notify();
     }
 
@@ -364,7 +364,9 @@ impl MainWindow {
         self.copied_epoch = self.copied_epoch.wrapping_add(1);
         let epoch = self.copied_epoch;
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(1200)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(1200))
+                .await;
             this.update(cx, |this, cx| {
                 if this.copied_epoch == epoch {
                     this.copied = None;
@@ -424,17 +426,17 @@ impl MainWindow {
         if on == self.source_open {
             if on {
                 self.bind_source(cx);
-                window.focus(&self.source.focus_handle(cx));
+                window.focus(&self.source.focus_handle(cx), cx);
             }
             return;
         }
         if on {
             self.source_open = true;
             self.bind_source(cx);
-            window.focus(&self.source.focus_handle(cx));
+            window.focus(&self.source.focus_handle(cx), cx);
         } else {
             self.close_source(cx);
-            window.focus(&self.snip_list_focus);
+            window.focus(&self.snip_list_focus, cx);
         }
         cx.notify();
     }
@@ -481,7 +483,9 @@ impl MainWindow {
         self.source_epoch = self.source_epoch.wrapping_add(1);
         let epoch = self.source_epoch;
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(280)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(280))
+                .await;
             this.update(cx, |this, cx| {
                 if this.source_epoch != epoch {
                     return;
@@ -520,7 +524,7 @@ impl MainWindow {
         self.state.update(cx, |state, cx| state.revert_ocr(id, cx));
         self.source_bound = None;
         self.bind_source(cx);
-        window.focus(&self.source.focus_handle(cx));
+        window.focus(&self.source.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -766,10 +770,10 @@ impl gpui::Render for MainWindow {
         let detail = self.render_detail(capturing, copy_pane_w, win_h, cx);
         let orig_open = self.orig.open;
         if orig_open && !self.orig_focus.is_focused(window) {
-            window.focus(&self.orig_focus);
+            window.focus(&self.orig_focus, cx);
         }
         if matches!(self.view, View::Draw) && !self.draw_focus.is_focused(window) {
-            window.focus(&self.draw_focus);
+            window.focus(&self.draw_focus, cx);
         }
         let view = self.view.clone();
         let (has_selected, can_open_docx) = {
@@ -820,7 +824,7 @@ impl gpui::Render for MainWindow {
                         cx.notify();
                     } else if this.orig.is_image_panning() && this.orig.end_drag() {
                         this.unzoom();
-                        window.focus(&this.snip_list_focus);
+                        window.focus(&this.snip_list_focus, cx);
                         cx.notify();
                     }
                     if this.board.is_gesturing() {

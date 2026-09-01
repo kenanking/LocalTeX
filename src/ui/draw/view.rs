@@ -34,7 +34,7 @@ impl MainWindow {
         let has_ink = self.board.has_ink();
         let cursor = match tool {
             DrawTool::Pen => CursorStyle::Crosshair,
-            DrawTool::Eraser => CursorStyle::None,
+            DrawTool::Eraser => CursorStyle::Arrow,
         };
         let eraser_at = (tool == DrawTool::Eraser)
             .then_some(self.board.hover)

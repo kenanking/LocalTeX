@@ -478,7 +478,14 @@ impl MainWindow {
                                 let fitted =
                                     ObjectFit::Contain.get_bounds(bounds, img_data.size(0));
                                 window
-                                    .paint_image(fitted, Corners::default(), img_data, 0, false)
+                                    .paint_image(
+                                        fitted,
+                                        fitted,
+                                        Corners::default(),
+                                        img_data,
+                                        0,
+                                        false,
+                                    )
                                     .ok();
                             },
                         )

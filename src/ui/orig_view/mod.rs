@@ -269,7 +269,7 @@ impl OrigView {
         };
         let dx = x - pan.origin_x;
         pan.dist = dx.abs();
-        let max: f32 = self.film.max_offset().width.into();
+        let max: f32 = self.film.max_offset().x.into();
         let new_off = film_pan_offset(pan.start_off, dx, max);
         let mut off = self.film.offset();
         off.x = px(new_off);
@@ -320,7 +320,7 @@ impl OrigView {
         if view_w <= 1.0 {
             return;
         }
-        let max: f32 = self.film.max_offset().width.into();
+        let max: f32 = self.film.max_offset().x.into();
         let cur: f32 = self.film.offset().x.into();
         let next = film_scroll_to_show(cur, max, view_w, film_thumb_left(i), film_cell_w());
         if (next - cur).abs() > 0.5 {

@@ -1,6 +1,6 @@
 # LocalTeX agent guide
 
-LocalTeX is a single-crate, single-process Rust desktop app built with crates.io `gpui 0.2`. Read the code for architecture; this file only records constraints that are easy to violate.
+LocalTeX is a single-crate, single-process Rust desktop app built with git `gpui` and `gpui_platform` pinned to Zed `c8e44cfa7bda9b2e22c8d6934d78969352e7f61a` (v1.17.2), `gpui_platform` features `x11` only. Read the code for architecture; this file only records constraints that are easy to violate.
 
 ## Scope
 
@@ -30,7 +30,7 @@ Run checks relevant to the change and report what actually ran. For visible UI c
 - `cx.spawn` runs on the UI thread. Put OCR, capture, image work, and disk access in `cx.background_spawn`.
 - GPUI tasks are cancelled when dropped; await, store, or explicitly detach work that must continue.
 - Render paths use prepared in-memory state: no I/O, model loading, subprocesses, blocking locks, or full-library scans.
-- Use APIs available in `gpui 0.2`; current Zed and Waku may use newer APIs. Here, `svg().path(...)` also requires `text_color` to paint.
+- Use APIs available at the pinned Zed rev; do not chase later Zed or Waku APIs. Here, `svg().path(...)` also requires `text_color` to paint.
 - Focusable mouse-down targets inside the history sidebar must stop propagation or the sidebar steals focus.
 
 ## Platform traps
