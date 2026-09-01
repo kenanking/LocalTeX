@@ -101,4 +101,4 @@ Agent-oriented conventions: [AGENTS.md](./AGENTS.md).
 
 ## License
 
-Apache-2.0. GPUI is part of the Zed project.
+MIT. GPUI is part of the Zed project.

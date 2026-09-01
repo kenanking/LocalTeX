@@ -2,9 +2,14 @@
 name = "localtex"
 version = "0.1.0"
 edition = "2021"
-description = "LocalTeX — screenshot to TeX and Markdown"
-license = "Apache-2.0"
+authors = ["Yan Tang"]
+description = "Offline screenshot OCR: snip the screen, get Markdown or LaTeX"
+license = "MIT"
 readme = "README.md"
+homepage = "https://github.com/kenanking/LocalTeX"
+repository = "https://github.com/kenanking/LocalTeX"
+keywords = ["ocr", "latex", "markdown", "screenshot", "gpui"]
+categories = ["gui", "text-processing"]
 publish = false
 
 [dependencies]
