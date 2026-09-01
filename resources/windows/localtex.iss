@@ -3,7 +3,7 @@
   #define MyAppVersion "0.1.0"
 #endif
 #ifndef MyAppOutputDir
-  #define MyAppOutputDir "..\\..\\target\\release"
+  #define MyAppOutputDir "..\\..\\dist"
 #endif
 #ifndef MyAppSourceDir
   #define MyAppSourceDir "payload"

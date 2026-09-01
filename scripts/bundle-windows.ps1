@@ -24,7 +24,7 @@ $Arch = switch ($osArch) {
 }
 $Target = "$Arch-pc-windows-msvc"
 
-if (-not $OutDir) { $OutDir = Join-Path $Root "target\release" }
+if (-not $OutDir) { $OutDir = Join-Path $Root "dist" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 if ($env:LOCALTEX_SKIP_BUILD -eq "1") { $SkipBuild = $true }

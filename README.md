@@ -24,6 +24,8 @@ The Linux tarball keeps weights at `share/localtex/models/`. The Windows zip kee
 
 To publish a build, bump `version` in `Cargo.toml`, commit, and push a matching `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) builds Linux and Windows and attaches the files.
 
+To package from a checkout, run `./scripts/bundle-linux.sh` or `.\scripts\bundle-windows.ps1`. Artifacts land in `dist/` (gitignored). The release binary still comes from `target/release`.
+
 ## Platforms
 
 | Target | Capture | Snip UI | Hotkey | Tray | Notes |

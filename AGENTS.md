@@ -50,7 +50,7 @@ Run checks relevant to the change and report what actually ran. For visible UI c
 
 ## Packaging
 
-- Linux artifacts come from `scripts/bundle-linux.sh` (tar.gz + deb). Windows artifacts come from `scripts/bundle-windows.ps1` (zip + Inno). Do not add cargo-packager or a second crate.
+- Linux artifacts come from `scripts/bundle-linux.sh` (tar.gz + deb). Windows artifacts come from `scripts/bundle-windows.ps1` (zip + Inno). Write them to `dist/` (gitignored). Do not add cargo-packager or a second crate.
 - Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
 

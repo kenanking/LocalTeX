@@ -77,8 +77,8 @@ jobs:
         with:
           name: linux-x86_64
           path: |
-            target/release/localtex-${{ needs.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
-            target/release/localtex_${{ needs.version.outputs.version }}_amd64.deb
+            dist/localtex-${{ needs.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+            dist/localtex_${{ needs.version.outputs.version }}_amd64.deb
           if-no-files-found: error
 
   windows-x86_64:
@@ -117,8 +117,8 @@ jobs:
         with:
           name: windows-x86_64
           path: |
-            target/release/localtex-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
-            target/release/LocalTeX-${{ needs.version.outputs.version }}-x86_64-Setup.exe
+            dist/localtex-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
+            dist/LocalTeX-${{ needs.version.outputs.version }}-x86_64-Setup.exe
           if-no-files-found: error
 
   publish:

@@ -28,7 +28,7 @@ case "$ARCH" in
     ;;
 esac
 
-OUT="${LOCALTEX_BUNDLE_OUT:-$ROOT/target/release}"
+OUT="${LOCALTEX_BUNDLE_OUT:-$ROOT/dist}"
 BIN="${LOCALTEX_BUNDLE_BIN:-$ROOT/target/release/localtex}"
 PACKAGE="localtex-${VERSION}-${TARGET}"
 mkdir -p "$OUT"
