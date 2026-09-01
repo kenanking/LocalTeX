@@ -5,7 +5,7 @@ use gpui::{
 
 use super::{DrawPaper, DrawTool};
 use crate::actions::{DrawEraser, DrawPen, DrawRedo, DrawUndo};
-use crate::ingest::IngestSource;
+use crate::state::IngestSource;
 use crate::ui::main_window::{MainWindow, View};
 use crate::ui::theme;
 use crate::ui::widgets::{

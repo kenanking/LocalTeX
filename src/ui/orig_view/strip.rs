@@ -1,5 +1,16 @@
+use std::sync::Arc;
+
+use gpui::{
+    canvas, div, prelude::*, px, rgb, Context, Corners, CursorStyle, MouseButton, MouseDownEvent,
+    ObjectFit, RenderImage,
+};
 use uuid::Uuid;
 
+use super::super::main_window::MainWindow;
+use super::super::theme;
+use super::super::widgets::{missing_image_slot, IconKind};
+use super::super::window_drag::WindowDrag;
+use super::chrome::{orig_action_capsule, orig_hud_disc};
 use super::geom::{FOOTER_H, TOPBAR_H};
 
 pub const STRIP_MIN: f32 = 64.0;
@@ -39,6 +50,224 @@ impl OrigStrip {
         }
         self.doc = id;
         true
+    }
+}
+
+pub(crate) struct OrigStripFrame {
+    pub doc_id: Uuid,
+    pub full: Option<Arc<RenderImage>>,
+    pub hovered: bool,
+    pub copied: bool,
+    pub reveal_enabled: bool,
+    pub missing: bool,
+    pub img_w: f32,
+    pub img_h: f32,
+    pub pane_w: f32,
+    pub strip_h: f32,
+    pub max_h: f32,
+}
+
+impl MainWindow {
+    pub(crate) fn render_orig_strip(
+        &self,
+        frame: OrigStripFrame,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let OrigStripFrame {
+            doc_id,
+            full,
+            hovered,
+            copied,
+            reveal_enabled,
+            missing,
+            img_w,
+            img_h,
+            pane_w,
+            strip_h,
+            max_h,
+        } = frame;
+        let split_on =
+            self.orig_strip.split_hover || self.window_drag.as_ref().is_some_and(|d| d.is_strip());
+        let card = if missing {
+            missing_image_slot(px(720.), px(strip_h))
+                .id("orig-thumb")
+                .size_full()
+                .when(split_on, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(8.))
+                            .right(px(8.))
+                            .bottom_0()
+                            .h(px(2.))
+                            .rounded(px(2.))
+                            .bg(rgb(theme::ACCENT)),
+                    )
+                })
+                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
+                .into_any()
+        } else {
+            let entity = cx.entity();
+            div()
+                .id("orig-thumb")
+                .size_full()
+                .overflow_hidden()
+                .rounded_md()
+                .bg(rgb(theme::BG_SUNKEN))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .when_some(full.clone(), |d, img_data| {
+                    d.child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                let fitted =
+                                    ObjectFit::Contain.get_bounds(bounds, img_data.size(0));
+                                window
+                                    .paint_image(
+                                        fitted,
+                                        fitted,
+                                        Corners::default(),
+                                        img_data,
+                                        0,
+                                        false,
+                                    )
+                                    .ok();
+                            },
+                        )
+                        .size_full(),
+                    )
+                })
+                .when(full.is_some(), |d| {
+                    d.child(
+                        div()
+                            .id("orig-hit")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .bottom(px(12.))
+                            .occlude()
+                            .cursor_pointer()
+                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                if this.orig.strip_hover != *hovered {
+                                    this.orig.strip_hover = *hovered;
+                                    cx.notify();
+                                }
+                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.zoom_original(doc_id, window, cx);
+                            }))
+                            .flex()
+                            .items_start()
+                            .justify_end()
+                            .pt(px(8.))
+                            .pr(px(8.))
+                            .when(hovered, |d| {
+                                d.child(
+                                    div()
+                                        .id("strip-actions")
+                                        .h(px(28.))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .child(orig_action_capsule(
+                                            doc_id,
+                                            copied,
+                                            reveal_enabled,
+                                            "strip",
+                                            cx,
+                                        ))
+                                        .child(orig_hud_disc(
+                                            "strip-zoom",
+                                            IconKind::Corners,
+                                            "Open original",
+                                            {
+                                                let entity = entity.clone();
+                                                move |_, window, cx| {
+                                                    entity.update(cx, |this, cx| {
+                                                        this.zoom_original(doc_id, window, cx);
+                                                    });
+                                                }
+                                            },
+                                        )),
+                                )
+                            }),
+                    )
+                })
+                .when(split_on, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .left(px(8.))
+                            .right(px(8.))
+                            .bottom_0()
+                            .h(px(2.))
+                            .rounded(px(2.))
+                            .bg(rgb(theme::ACCENT)),
+                    )
+                })
+                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
+                .into_any()
+        };
+
+        div()
+            .id("orig-wrap")
+            .px_4()
+            .pt_3()
+            .flex_none()
+            .h(px(strip_h))
+            .overflow_hidden()
+            .child(card)
+    }
+
+    fn orig_strip_handle(
+        &self,
+        strip_h: f32,
+        img_w: f32,
+        img_h: f32,
+        pane_w: f32,
+        max_h: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id("orig-strip-resize")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(12.))
+            .occlude()
+            .cursor(CursorStyle::ResizeUpDown)
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.orig_strip.split_hover != *hovered {
+                    this.orig_strip.split_hover = *hovered;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    if ev.click_count >= 2 {
+                        let next = auto_strip_h(img_w, img_h, pane_w, max_h);
+                        this.state.update(cx, |s, cx| {
+                            s.prefs.orig_strip_h = next;
+                            s.persist_prefs();
+                            cx.notify();
+                        });
+                    } else {
+                        this.window_drag = Some(WindowDrag::Strip {
+                            start_y: f32::from(ev.position.y),
+                            start_h: strip_h,
+                        });
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
     }
 }
 

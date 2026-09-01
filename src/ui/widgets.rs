@@ -65,9 +65,6 @@ pub enum IconKind {
     Save,
     Folder,
     Check,
-    /// Magnifier asset is still bundled; the strip chip uses `Corners`.
-    #[allow(dead_code)]
-    Zoom,
     Reset,
     Collapse,
     Expand,
@@ -92,7 +89,6 @@ impl IconKind {
             Self::Save => "icons/save.svg",
             Self::Folder => "icons/folder.svg",
             Self::Check => "icons/check.svg",
-            Self::Zoom => "icons/zoom.svg",
             Self::Reset => "icons/reset.svg",
             Self::Collapse => "icons/collapse.svg",
             Self::Expand => "icons/expand.svg",
@@ -102,7 +98,7 @@ impl IconKind {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 20] = [
+    const ALL: [Self; 19] = [
         Self::Snip,
         Self::Upload,
         Self::Paste,
@@ -117,7 +113,6 @@ impl IconKind {
         Self::Save,
         Self::Folder,
         Self::Check,
-        Self::Zoom,
         Self::Reset,
         Self::Collapse,
         Self::Expand,

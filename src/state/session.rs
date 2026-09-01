@@ -14,8 +14,7 @@ pub(crate) enum Capture {
 pub(crate) struct CaptureSession {
     status: Capture,
     gen: u64,
-    hide_depth: u32,
-    reveal_on_main: bool,
+    hidden: bool,
 }
 
 impl CaptureSession {
@@ -23,8 +22,7 @@ impl CaptureSession {
         Self {
             status: Capture::Idle,
             gen: 0,
-            hide_depth: 0,
-            reveal_on_main: false,
+            hidden: false,
         }
     }
 
@@ -53,29 +51,17 @@ impl CaptureSession {
     }
 
     pub fn push_hide(&mut self) {
-        self.hide_depth = self.hide_depth.saturating_add(1);
+        self.hidden = true;
     }
 
     pub fn pop_hide(&mut self) -> bool {
-        if self.hide_depth == 0 {
-            return false;
-        }
-        self.hide_depth -= 1;
-        self.hide_depth == 0
+        let was = self.hidden;
+        self.hidden = false;
+        was
     }
 
     pub fn force_show(&mut self) {
-        self.hide_depth = 0;
-    }
-
-    pub fn set_reveal_on_main(&mut self, v: bool) {
-        self.reveal_on_main = v;
-    }
-
-    pub fn take_reveal_on_main(&mut self) -> bool {
-        let v = self.reveal_on_main;
-        self.reveal_on_main = false;
-        v
+        self.hidden = false;
     }
 }
 
@@ -132,11 +118,12 @@ mod tests {
     }
 
     #[test]
-    fn hide_depth_restores_only_at_zero() {
+    fn hide_restores_when_hidden() {
         let mut c = CaptureSession::new();
-        c.push_hide();
-        c.push_hide();
         assert!(!c.pop_hide());
+        c.push_hide();
+        c.push_hide();
         assert!(c.pop_hide());
+        assert!(!c.pop_hide());
     }
 }

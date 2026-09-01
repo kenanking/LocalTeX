@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use image::RgbaImage;
+use ort::session::builder::GraphOptimizationLevel;
+use ort::session::Session;
 
 use crate::identity::{models_dir, APP_SLUG};
 
@@ -130,7 +132,9 @@ impl Engine {
             guard.ink = Some(load_ink(&self.dir)?);
         }
         let ink = guard.ink.as_mut().expect("inktex just loaded");
-        let out = ink.recognize(traces)?;
+        let mut traces = traces.to_vec();
+        inktex::deburst(&mut traces);
+        let out = ink.recognize(&traces)?;
         Ok(ink_formula_result(
             out.text,
             image_size,
@@ -141,6 +145,37 @@ impl Engine {
 
 fn pack_present(dir: &Path, files: &[&str]) -> bool {
     files.iter().all(|name| dir.join(name).is_file())
+}
+
+fn ensure_ort() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        ort::init().with_name("localtex").commit();
+    });
+}
+
+pub(crate) fn build_session(path: &Path, intra: usize, spinning: bool) -> Result<Session> {
+    ensure_ort();
+    fn e<E: std::fmt::Display>(err: E) -> anyhow::Error {
+        anyhow!("{}", err)
+    }
+    Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(e)?
+        .with_intra_threads(intra)
+        .map_err(e)?
+        .with_inter_threads(1)
+        .map_err(e)?
+        .with_parallel_execution(false)
+        .map_err(e)?
+        .with_flush_to_zero()
+        .map_err(e)?
+        .with_intra_op_spinning(spinning)
+        .map_err(e)?
+        .with_inter_op_spinning(spinning)
+        .map_err(e)?
+        .commit_from_file(path)
+        .with_context(|| format!("commit session {}", path.display()))
 }
 
 fn opendoc_dir(models: &Path) -> PathBuf {
@@ -171,7 +206,6 @@ fn load_ink(dir: &Path) -> Result<InkTex> {
         "{APP_SLUG}: loading handwriting inktex ({intra} intra-op threads, {})",
         ink_dir.display()
     );
-    ort::init().with_name("localtex").commit();
     let ink = InkTex::load(&ink_dir, intra, spinning)?;
     eprintln!("{APP_SLUG}: loaded inktex encoder + decoder-step");
     Ok(ink)

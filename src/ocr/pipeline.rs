@@ -8,10 +8,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
-use ort::session::builder::GraphOptimizationLevel;
+use anyhow::{anyhow, Result};
 use ort::session::Session;
 
+use super::build_session;
 use super::imgops::{self, RgbImg};
 use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
@@ -37,37 +37,12 @@ pub struct Pipeline {
     unirec: UniRec,
 }
 
-fn build_session(path: &Path, intra: usize, spinning: bool) -> Result<Session> {
-    // Builder errors carry the builder for recovery (not Send/Sync); stringify.
-    fn e<E: std::fmt::Display>(err: E) -> anyhow::Error {
-        anyhow!("{}", err)
-    }
-    Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(e)?
-        .with_intra_threads(intra)
-        .map_err(e)?
-        .with_inter_threads(1)
-        .map_err(e)?
-        .with_parallel_execution(false)
-        .map_err(e)?
-        .with_flush_to_zero()
-        .map_err(e)?
-        .with_intra_op_spinning(spinning)
-        .map_err(e)?
-        .with_inter_op_spinning(spinning)
-        .map_err(e)?
-        .commit_from_file(path)
-        .with_context(|| format!("commit session {}", path.display()))
-}
-
 fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| v != "0")
 }
 
 impl Pipeline {
     pub fn load(dir: &Path, intra: usize) -> Result<Self> {
-        ort::init().with_name("localtex").commit();
         let spinning = env_flag("LOCALTEX_SPINNING");
         eprintln!(
             "{APP_SLUG}: intra_op_threads={intra} spinning={}",

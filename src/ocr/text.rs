@@ -8,24 +8,30 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-fn re_static(pattern: &str) -> &'static Regex {
-    static CACHE: std::sync::Mutex<Option<Vec<(String, &'static Regex)>>> =
-        std::sync::Mutex::new(None);
-    let mut guard = CACHE.lock().unwrap();
-    let vec = guard.get_or_insert_with(Vec::new);
-    if let Some((_, r)) = vec.iter().find(|(p, _)| p == pattern) {
-        return r;
-    }
-    let r: &'static Regex = Box::leak(Box::new(Regex::new(pattern).unwrap()));
-    vec.push((pattern.to_string(), r));
-    r
+fn cached_re(cell: &'static OnceLock<Regex>, pattern: &'static str) -> &'static Regex {
+    cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
 }
 
-fn sub(pattern: &str, replacement: &str, text: &str) -> String {
-    re_static(pattern)
+fn sub(
+    cell: &'static OnceLock<Regex>,
+    pattern: &'static str,
+    replacement: &str,
+    text: &str,
+) -> String {
+    cached_re(cell, pattern)
         .replace_all(text, regex::NoExpand(replacement))
         .into_owned()
 }
+
+static RE_UNDERSCORES: OnceLock<Regex> = OnceLock::new();
+static RE_DOTS: OnceLock<Regex> = OnceLock::new();
+static RE_TABLE_TAGS: OnceLock<Regex> = OnceLock::new();
+static RE_BLANK_LINES: OnceLock<Regex> = OnceLock::new();
+static RE_TRIPLE_NL: OnceLock<Regex> = OnceLock::new();
+static RE_TD_COLSPAN: OnceLock<Regex> = OnceLock::new();
+static RE_TD_ROWSPAN: OnceLock<Regex> = OnceLock::new();
+static RE_TH_ROWSPAN: OnceLock<Regex> = OnceLock::new();
+static RE_TH_COLSPAN: OnceLock<Regex> = OnceLock::new();
 
 /// infer_unirec_onnx.py clean_special_tokens.
 pub(super) fn clean_special_tokens(text: &str) -> String {
@@ -41,8 +47,8 @@ pub(super) fn clean_special_tokens(text: &str) -> String {
     text = text.replace("<s>", "");
     text = text.replace("</s>", "");
     text = text.replace('\u{ffff}', "");
-    text = sub(r"_{4,}", "___", &text);
-    text = sub(r"\.{4,}", "...", &text);
+    text = sub(&RE_UNDERSCORES, r"_{4,}", "___", &text);
+    text = sub(&RE_DOTS, r"\.{4,}", "...", &text);
     text
 }
 
@@ -106,17 +112,18 @@ pub(super) fn handle_text(text: &str) -> String {
     text = text.replace("<|sn|>", "");
     text = text.replace("<|unk|>", "");
     text = text.replace('\u{ffff}', "");
-    text = sub(r"_{4,}", "___", &text);
-    text = sub(r"\.{4,}", "...", &text);
+    text = sub(&RE_UNDERSCORES, r"_{4,}", "___", &text);
+    text = sub(&RE_DOTS, r"\.{4,}", "...", &text);
     text = process_formulas_in_text(&text);
     text = text.replace("$\\bullet$", "•");
     if text.contains("<table>") {
         text = sub(
+            &RE_TABLE_TAGS,
             r"(?i)</?(table|tr|th|td|thead|tbody|tfoot)[^>]*>",
             "",
             &text,
         );
-        text = sub(r"\n\s*\n+", "\n", &text);
+        text = sub(&RE_BLANK_LINES, r"\n\s*\n+", "\n", &text);
     }
     normalize_text(&text)
 }
@@ -140,7 +147,7 @@ pub(super) fn normalize_text(text: &str) -> String {
             _ => out.push(ch),
         }
     }
-    sub(r"\n{3,}", "\n\n", &out)
+    sub(&RE_TRIPLE_NL, r"\n{3,}", "\n\n", &out)
 }
 
 /// When the text still carries \(\)/\[\] pairs, strip $ and rewrite them as $/$$.
@@ -171,7 +178,7 @@ pub(super) fn handle_formula(text: &str) -> String {
     result = result.replace("<|sn|>", "");
     result = result.replace("<|unk|>", "");
     result = result.replace('\u{ffff}', "");
-    result = sub(r"_{4,}", "___", &result);
+    result = sub(&RE_UNDERSCORES, r"_{4,}", "___", &result);
     // Literal str.replace calls (note: "\]\n*\[" is literal, not regex).
     result = result.replace("\\]\n*\\[", "\\\\");
     result = result.replace("\n\n\\[", "");
@@ -281,24 +288,28 @@ pub(super) fn handle_table(text: &str) -> String {
     table_content = table_content.replace("<|sn|>", "");
     table_content = table_content.replace("<|unk|>", "");
     table_content = table_content.replace('\u{ffff}', "");
-    table_content = sub(r"_{4,}", "___", &table_content);
-    table_content = sub(r"\.{4,}", "...", &table_content);
+    table_content = sub(&RE_UNDERSCORES, r"_{4,}", "___", &table_content);
+    table_content = sub(&RE_DOTS, r"\.{4,}", "...", &table_content);
     table_content = sub(
+        &RE_TD_COLSPAN,
         "(?i)</td\\s+colspan=\"[^\"]*\"\\s*>",
         "</td>",
         &table_content,
     );
     table_content = sub(
+        &RE_TD_ROWSPAN,
         "(?i)</td\\s+rowspan=\"[^\"]*\"\\s*>",
         "</td>",
         &table_content,
     );
     table_content = sub(
+        &RE_TH_ROWSPAN,
         "(?i)</th\\s+rowspan=\"[^\"]*\"\\s*>",
         "</th>",
         &table_content,
     );
     table_content = sub(
+        &RE_TH_COLSPAN,
         "(?i)</th\\s+colspan=\"[^\"]*\"\\s*>",
         "</th>",
         &table_content,

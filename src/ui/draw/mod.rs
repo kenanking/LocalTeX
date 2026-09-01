@@ -196,7 +196,7 @@ impl DrawBoard {
     }
 
     pub(crate) fn traces(&self) -> Vec<Vec<[f32; 3]>> {
-        let mut traces: Vec<Vec<[f32; 3]>> = self
+        let traces: Vec<Vec<[f32; 3]>> = self
             .lines
             .iter()
             .filter(|line| line.len() >= 2)
@@ -206,7 +206,6 @@ impl DrawBoard {
                     .collect()
             })
             .collect();
-        crate::ocr::inktex::deburst(&mut traces);
         traces
     }
 }

@@ -269,13 +269,14 @@ pub fn deiconify_main_window() {
     linux::deiconify_main_window();
 }
 
-pub fn wait_until_iconified() {
+pub fn wait_until_iconified() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
-    linux::wait_until_iconified();
+    linux::wait_until_iconified()?;
     #[cfg(target_os = "windows")]
     {
         win::wait_until_main_iconified();
     }
+    Ok(())
 }
 
 /// Call from the GPUI thread before a snip so the overlay can become

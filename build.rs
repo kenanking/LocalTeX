@@ -22,8 +22,10 @@ fn embed_windows_icon() {
     let target_dir = std::env::var_os("CARGO_TARGET_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
-                .join("target")
+            std::path::PathBuf::from(
+                std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"),
+            )
+            .join("target")
         });
     let published = target_dir.join("localtex.ico");
     if let Some(parent) = published.parent() {

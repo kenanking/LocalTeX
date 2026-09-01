@@ -99,18 +99,7 @@ impl MainWindow {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| {
-                    if this.orig.is_film_panning() {
-                        if let Some(id) = this.orig.end_film_pan() {
-                            this.state.update(cx, |s, cx| s.select(id, cx));
-                        }
-                        cx.notify();
-                        return;
-                    }
-                    if this.orig.is_image_panning() && this.orig.end_drag() {
-                        this.unzoom();
-                        window.focus(&this.snip_list_focus, cx);
-                    }
-                    cx.notify();
+                    this.orig_pointer_up(window, cx);
                 }),
             )
             .child(self.render_orig_stage(full, at_start, at_end, cx))
@@ -154,34 +143,7 @@ impl MainWindow {
         if need.is_empty() {
             return;
         }
-        let entity = cx.entity();
-        cx.defer(move |cx| {
-            entity.update(cx, |this, cx| {
-                let mut request = Vec::new();
-                {
-                    let state = this.state.read(cx);
-                    for id in need {
-                        let Some(doc) = state.library.get(id) else {
-                            continue;
-                        };
-                        if !doc.thumb_jpeg.is_empty() || doc.image.pixels().is_some() {
-                            this.media.borrow_mut().ensure_thumb(
-                                id,
-                                &doc.thumb_jpeg,
-                                doc.image.pixels().map(|p| p.as_ref()),
-                            );
-                        } else {
-                            request.push(id);
-                        }
-                    }
-                }
-                for id in request {
-                    this.state.update(cx, |s, cx| s.request_thumb(id, cx));
-                }
-                this.schedule_media_gc(cx);
-                cx.notify();
-            });
-        });
+        self.ensure_thumbs(&need, cx);
     }
 
     fn render_orig_stage(

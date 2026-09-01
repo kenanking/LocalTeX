@@ -26,7 +26,8 @@ use crate::actions::{
     RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource, UploadImage,
 };
 use crate::cache::MediaCache;
-use crate::doc::{CopyKind, DocStatus};
+use crate::doc::DocStatus;
+use crate::export::CopyKind;
 use crate::preview::{document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived};
 use crate::state::AppState;
 
@@ -122,6 +123,8 @@ pub struct MainWindow {
     pub(crate) source_last: String,
     pub(crate) source_split: f32,
     source_epoch: u64,
+    pub(crate) source_lang: &'static str,
+    thumb_inflight: Rc<RefCell<HashSet<Uuid>>>,
 }
 
 impl MainWindow {
@@ -140,6 +143,10 @@ impl MainWindow {
             this.ensure_selected_full(cx);
             this.schedule_derived_from_app(cx);
             this.schedule_media_gc(cx);
+            let entity = cx.entity();
+            cx.defer(move |cx| {
+                entity.update(cx, |this, cx| this.sync_source_for_selection(cx));
+            });
             cx.notify();
         })
         .detach();
@@ -212,7 +219,7 @@ impl MainWindow {
             });
         })
         .detach();
-        let source = cx.new(|cx| SourceEditor::new(cx));
+        let source = cx.new(SourceEditor::new);
         cx.observe(&source, |this, _, cx| {
             this.on_source_edit(cx);
         })
@@ -246,6 +253,8 @@ impl MainWindow {
             source_last: String::new(),
             source_split: 0.5,
             source_epoch: 0,
+            source_lang: "LaTeX",
+            thumb_inflight: Rc::new(RefCell::new(HashSet::new())),
         };
         this.schedule_derived(window, cx);
         this
@@ -280,7 +289,11 @@ impl MainWindow {
         cx.notify();
     }
 
-    fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_settings(window, cx);
+    }
+
+    pub(crate) fn toggle_settings(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.view, View::Draw) {
             self.board.leave_canvas();
             crate::desktop::set_os_cursor_visible(true);
@@ -351,10 +364,25 @@ impl MainWindow {
     }
 
     pub(crate) fn zoom_original(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = id;
+        self.state.update(cx, |state, cx| state.select(id, cx));
         self.orig.open_view();
         window.focus(&self.orig_focus, cx);
         cx.notify();
+    }
+
+    pub(crate) fn orig_pointer_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.orig.is_film_panning() {
+            if let Some(id) = self.orig.end_film_pan() {
+                self.state.update(cx, |s, cx| s.select(id, cx));
+            }
+            cx.notify();
+            return;
+        }
+        if self.orig.is_image_panning() && self.orig.end_drag() {
+            self.unzoom();
+            window.focus(&self.snip_list_focus, cx);
+            cx.notify();
+        }
     }
 
     fn copy(&mut self, _: &CopyExport, _: &mut Window, cx: &mut Context<Self>) {
@@ -477,9 +505,27 @@ impl MainWindow {
             (state.prefs.clone(), doc.blocks.clone())
         };
         let text = crate::source::blocks_to_source(&blocks, &prefs);
+        self.source_lang = crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
         self.source_last = text.clone();
         self.source_bound = Some(id);
         self.source.update(cx, |ed, cx| ed.set_text(text, cx));
+    }
+
+    fn sync_source_for_selection(&mut self, cx: &mut Context<Self>) {
+        if !self.source_open {
+            return;
+        }
+        let ready = self
+            .state
+            .read(cx)
+            .selected_doc()
+            .is_some_and(|d| matches!(d.status, DocStatus::Ready) && d.blocks_loaded);
+        if !ready {
+            self.close_source(cx);
+            cx.notify();
+            return;
+        }
+        self.bind_source(cx);
     }
 
     fn on_source_edit(&mut self, cx: &mut Context<Self>) {
@@ -518,6 +564,7 @@ impl MainWindow {
         let Some(id) = self.source_bound else {
             return;
         };
+        self.source_lang = crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
         self.source_last = text;
         self.state
             .update(cx, |state, cx| state.apply_parsed_source(id, blocks, cx));
@@ -573,6 +620,65 @@ impl MainWindow {
                 media.trim_math(cx);
             });
         });
+    }
+
+    pub(crate) fn ensure_thumbs(&self, ids: &[Uuid], cx: &mut Context<Self>) {
+        let mut request = Vec::new();
+        let mut jobs = Vec::new();
+        {
+            let state = self.state.read(cx);
+            let media = self.media.borrow();
+            let mut inflight = self.thumb_inflight.borrow_mut();
+            for &id in ids {
+                if media.thumb(id).is_some() || inflight.contains(&id) {
+                    continue;
+                }
+                let Some(doc) = state.library.get(id) else {
+                    continue;
+                };
+                if matches!(doc.image, crate::doc::ImageSlot::Missing) {
+                    continue;
+                }
+                if !doc.thumb_jpeg.is_empty() {
+                    inflight.insert(id);
+                    jobs.push((id, doc.thumb_jpeg.clone(), None));
+                } else if let Some(px) = doc.image.pixels() {
+                    inflight.insert(id);
+                    jobs.push((id, Vec::new(), Some(px.clone())));
+                } else {
+                    request.push(id);
+                }
+            }
+        }
+        if !request.is_empty() {
+            let entity = cx.entity();
+            cx.defer(move |cx| {
+                entity.update(cx, |this, cx| {
+                    for id in request {
+                        this.state.update(cx, |s, cx| s.request_thumb(id, cx));
+                    }
+                });
+            });
+        }
+        for (id, jpeg, pixels) in jobs {
+            cx.spawn(async move |this, cx| {
+                let render = cx
+                    .background_spawn(async move {
+                        crate::cache::MediaCache::decode_thumb(&jpeg, pixels.as_deref())
+                    })
+                    .await;
+                if let Err(err) = this.update(cx, |this, cx| {
+                    this.thumb_inflight.borrow_mut().remove(&id);
+                    if let Some(render) = render {
+                        this.media.borrow_mut().put_thumb(id, render);
+                        cx.notify();
+                    }
+                }) {
+                    eprintln!("thumb decode: {err}");
+                }
+            })
+            .detach();
+        }
     }
 
     pub(crate) fn ensure_selected_full(&self, cx: &App) {
@@ -743,11 +849,9 @@ impl Focusable for MainWindow {
 
 impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (status_kind, status_label, capturing, has_docs, n_docs) = {
+        let (status_kind, status_label, capturing, has_docs, n_docs, close_orig) = {
             let state = self.state.read(cx);
-            if self.orig.open && state.selected().is_none() {
-                self.orig.close();
-            }
+            let close_orig = self.orig.open && state.selected().is_none();
             let (status_kind, status_label) = chrome(state);
             let status_label = if !matches!(
                 status_kind,
@@ -764,8 +868,20 @@ impl gpui::Render for MainWindow {
                 state.is_capturing(),
                 !state.is_empty(),
                 state.library.visible_docs().count(),
+                close_orig,
             )
         };
+        if close_orig {
+            let entity = cx.entity();
+            cx.defer(move |cx| {
+                entity.update(cx, |this, cx| {
+                    if this.orig.open && this.state.read(cx).selected().is_none() {
+                        this.orig.close();
+                        cx.notify();
+                    }
+                });
+            });
+        }
         let history = self.render_history(n_docs, cx);
         let copy_pane_w = {
             let sidebar = self.current_sidebar_width(has_docs, cx);
@@ -776,10 +892,18 @@ impl gpui::Render for MainWindow {
         let detail = self.render_detail(capturing, copy_pane_w, win_h, cx);
         let orig_open = self.orig.open;
         if orig_open && !self.orig_focus.is_focused(window) {
-            window.focus(&self.orig_focus, cx);
+            cx.on_next_frame(window, |this, window, cx| {
+                if this.orig.open && !this.orig_focus.is_focused(window) {
+                    window.focus(&this.orig_focus, cx);
+                }
+            });
         }
         if matches!(self.view, View::Draw) && !self.draw_focus.is_focused(window) {
-            window.focus(&self.draw_focus, cx);
+            cx.on_next_frame(window, |this, window, cx| {
+                if matches!(this.view, View::Draw) && !this.draw_focus.is_focused(window) {
+                    window.focus(&this.draw_focus, cx);
+                }
+            });
         }
         let view = self.view.clone();
         let (has_selected, can_open_docx) = {
@@ -823,16 +947,7 @@ impl gpui::Render for MainWindow {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    if this.orig.is_film_panning() {
-                        if let Some(id) = this.orig.end_film_pan() {
-                            this.state.update(cx, |s, cx| s.select(id, cx));
-                        }
-                        cx.notify();
-                    } else if this.orig.is_image_panning() && this.orig.end_drag() {
-                        this.unzoom();
-                        window.focus(&this.snip_list_focus, cx);
-                        cx.notify();
-                    }
+                    this.orig_pointer_up(window, cx);
                     if this.board.is_gesturing() {
                         this.board.pointer_up();
                         cx.notify();

@@ -5,7 +5,8 @@ use ratex_parser::parser::parse;
 use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
 use ratex_types::math_style::MathStyle;
 
-use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, CopyRow, MathRun, SnipKind};
+use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, MathRun, SnipKind};
+use crate::export::CopyRow;
 use crate::math::ScriptKind;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::table;

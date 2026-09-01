@@ -28,58 +28,6 @@ fn unit_rect() -> Rect {
 }
 
 pub fn blocks_to_source(blocks: &[Block], prefs: &Prefs) -> String {
-    match crate::doc::snip_kind(blocks) {
-        SnipKind::Formula => formula_source(blocks, prefs),
-        SnipKind::Table => table_source(blocks, prefs),
-        SnipKind::Mixed => mixed_source(blocks, prefs),
-    }
-}
-
-fn formula_source(blocks: &[Block], prefs: &Prefs) -> String {
-    let mut parts = Vec::new();
-    for b in blocks {
-        if b.kind != BlockKind::Formula || b.text.trim().is_empty() {
-            continue;
-        }
-        let (body, display) = unwrap_formula(&b.text);
-        if body.is_empty() {
-            continue;
-        }
-        if b.display || display || is_display_body(&body) {
-            parts.push(prefs.wrap_block(&body));
-        } else {
-            parts.push(prefs.wrap_inline(&body));
-        }
-    }
-    parts.join("\n\n")
-}
-
-fn table_source(blocks: &[Block], prefs: &Prefs) -> String {
-    let mut out = String::new();
-    for b in blocks {
-        if b.text.trim().is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push_str("\n\n");
-        }
-        match b.kind {
-            BlockKind::Table => out.push_str(&table::html_to_latex(&b.text)),
-            BlockKind::Text if b.role == BlockRole::DocTitle => {
-                out.push_str("# ");
-                out.push_str(&emit_text(&b.text, prefs));
-            }
-            BlockKind::Text if b.role == BlockRole::SectionTitle => {
-                out.push_str("## ");
-                out.push_str(&emit_text(&b.text, prefs));
-            }
-            _ => out.push_str(&emit_text(&b.text, prefs)),
-        }
-    }
-    out
-}
-
-fn mixed_source(blocks: &[Block], prefs: &Prefs) -> String {
     let mut out = String::new();
     for b in blocks {
         if b.text.trim().is_empty() {
@@ -112,6 +60,14 @@ fn mixed_source(blocks: &[Block], prefs: &Prefs) -> String {
         }
     }
     out
+}
+
+pub fn editor_lang_label(kind: SnipKind, src: &str) -> &'static str {
+    match kind {
+        SnipKind::Formula | SnipKind::Table => "LaTeX",
+        SnipKind::Mixed if src.contains("\\begin{tabular}") => "Markdown + tabular",
+        SnipKind::Mixed => "Markdown",
+    }
 }
 
 fn emit_text(text: &str, prefs: &Prefs) -> String {
@@ -380,6 +336,16 @@ mod tests {
 
     fn rect() -> Rect {
         unit_rect()
+    }
+
+    #[test]
+    fn editor_lang_label_matches_snip_kind() {
+        assert_eq!(editor_lang_label(SnipKind::Formula, "$$x$$"), "LaTeX");
+        assert_eq!(editor_lang_label(SnipKind::Mixed, "hello $x$"), "Markdown");
+        assert_eq!(
+            editor_lang_label(SnipKind::Mixed, "\\begin{tabular}{c}a\\end{tabular}"),
+            "Markdown + tabular"
+        );
     }
 
     #[test]

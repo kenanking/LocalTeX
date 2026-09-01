@@ -1,4 +1,4 @@
-use gpui::{div, prelude::*, px, rgb, App, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, Context, SharedString};
 
 use super::main_window::{MainWindow, View};
 use super::theme;
@@ -44,7 +44,7 @@ impl MainWindow {
                     })
                     .child(crate::identity::APP_NAME)
             })
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-snip",
                 IconKind::Snip,
                 "Create snip from screenshot  Ctrl+Shift+S",
@@ -60,7 +60,7 @@ impl MainWindow {
                     }
                 },
             ))
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-upload",
                 IconKind::Upload,
                 "Upload snip  Ctrl+O",
@@ -73,7 +73,7 @@ impl MainWindow {
                     }
                 },
             ))
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-paste",
                 IconKind::Paste,
                 "Paste image or path from clipboard  Ctrl+V",
@@ -89,7 +89,7 @@ impl MainWindow {
                     }
                 },
             ))
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-draw",
                 IconKind::Draw,
                 "Create snip from drawing  Ctrl+D",
@@ -103,7 +103,7 @@ impl MainWindow {
                 },
             ))
             .child(div().w(px(1.)).h(px(16.)).mx_1().bg(rgb(theme::TRACK_OFF)))
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-word",
                 IconKind::Word,
                 "Open as Word document",
@@ -117,7 +117,7 @@ impl MainWindow {
                 },
             ))
             .child(div().flex_1())
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-delete",
                 IconKind::Delete,
                 "Delete snip  Delete",
@@ -130,7 +130,7 @@ impl MainWindow {
                     }
                 },
             ))
-            .child(self.tool_btn(
+            .child(icon_btn(
                 "tool-settings",
                 IconKind::Settings,
                 "Settings  Ctrl+,",
@@ -138,33 +138,11 @@ impl MainWindow {
                 true,
                 {
                     let entity = cx.entity();
-                    move |_, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.unzoom();
-                            this.view = if matches!(this.view, View::Settings) {
-                                this.settings.update(cx, |pane, _| pane.dismiss_listen());
-                                View::Library
-                            } else {
-                                this.settings.update(cx, |pane, _| pane.reset_scroll());
-                                View::Settings
-                            };
-                            cx.notify();
-                        });
+                    move |window, cx| {
+                        entity.update(cx, |this, cx| this.toggle_settings(window, cx));
                     }
                 },
             ))
-    }
-
-    fn tool_btn(
-        &self,
-        id: &'static str,
-        kind: IconKind,
-        hint: &'static str,
-        active: bool,
-        enabled: bool,
-        on_click: impl Fn(&mut Window, &mut App) + 'static,
-    ) -> impl IntoElement {
-        icon_btn(id, kind, hint, active, enabled, on_click)
     }
 
     pub(crate) fn render_footer(

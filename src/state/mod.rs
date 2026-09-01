@@ -20,6 +20,8 @@ mod orig_export;
 mod search;
 mod session;
 
+pub use ingest::IngestSource;
+
 use session::{CaptureSession, IngestPump, SearchFilter};
 
 pub use crate::library::DatePreset;
@@ -120,6 +122,10 @@ impl AppState {
         cx.notify();
     }
 
+    /// Title-bar / WM close. On Linux this runs while GPUI's X11 client still
+    /// holds its `RefCell`; calling [`App::quit`] here re-enters `with_common`
+    /// and aborts (`RefCell already borrowed`). Close the window now, then stop
+    /// the loop after this event handler returns.
     pub fn handle_main_close(action: WindowCloseAction, window: &mut Window, cx: &mut App) -> bool {
         match action {
             WindowCloseAction::Minimize => {
@@ -127,7 +133,11 @@ impl AppState {
                 false
             }
             WindowCloseAction::Quit => {
-                cx.quit();
+                cx.spawn(async move |cx| {
+                    cx.background_spawn(async {}).await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
                 true
             }
         }

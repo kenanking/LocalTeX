@@ -42,7 +42,7 @@ pub struct Prefs {
     #[serde(default = "default_true")]
     pub autocopy: bool,
     #[serde(default)]
-    pub copy_habit: crate::doc::CopyHabit,
+    pub copy_habit: crate::export::CopyHabit,
     #[serde(default = "default_true")]
     pub show_original: bool,
     #[serde(default = "default_true")]
@@ -84,7 +84,7 @@ impl Default for Prefs {
         Self {
             default_fmt: ExportFmt::Markdown,
             autocopy: true,
-            copy_habit: crate::doc::CopyHabit::default(),
+            copy_habit: crate::export::CopyHabit::default(),
             show_original: true,
             hide_on_capture: true,
             close_action: WindowCloseAction::Minimize,

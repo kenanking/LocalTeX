@@ -10,6 +10,7 @@ pub(crate) mod search_field;
 mod selectable;
 mod settings;
 pub(crate) mod source_editor;
+mod text_buffer;
 mod theme;
 mod widgets;
 mod window_drag;

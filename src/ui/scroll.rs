@@ -349,6 +349,7 @@ pub struct ScrollChrome<'a> {
 /// `content_w` or GPUI will not create a scroll region. Uses `overflow_x_hidden`
 /// (not `overflow_x_scroll`) so a vertical wheel is not remapped onto X —
 /// GPUI's default `overflow_x_scroll` maps `delta.y → delta.x`.
+#[allow(clippy::needless_borrow)]
 pub fn h_scroll_pane(
     id: impl Into<SharedString>,
     chrome: ScrollChrome<'_>,

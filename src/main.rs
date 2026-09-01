@@ -12,7 +12,6 @@ mod export;
 mod icon;
 mod identity;
 mod imgutil;
-mod ingest;
 mod keymap;
 mod library;
 mod math;

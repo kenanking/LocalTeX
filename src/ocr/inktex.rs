@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::{Session, SessionInputValue};
 use ort::value::{DynValue, Tensor};
 
@@ -264,29 +263,6 @@ impl Vocab {
     }
 }
 
-fn build_session(path: &Path, intra_threads: usize, spinning: bool) -> Result<Session> {
-    fn e<E: std::fmt::Display>(err: E) -> anyhow::Error {
-        anyhow!("{}", err)
-    }
-    Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)
-        .map_err(e)?
-        .with_intra_threads(intra_threads)
-        .map_err(e)?
-        .with_inter_threads(1)
-        .map_err(e)?
-        .with_parallel_execution(false)
-        .map_err(e)?
-        .with_flush_to_zero()
-        .map_err(e)?
-        .with_intra_op_spinning(spinning)
-        .map_err(e)?
-        .with_inter_op_spinning(spinning)
-        .map_err(e)?
-        .commit_from_file(path)
-        .with_context(|| format!("commit session {}", path.display()))
-}
-
 pub struct InkTex {
     encoder: Session,
     decoder: Session,
@@ -304,8 +280,10 @@ pub struct RecognizeOut {
 
 impl InkTex {
     pub fn load(models_dir: &Path, intra_threads: usize, spinning: bool) -> Result<Self> {
-        let encoder = build_session(&models_dir.join(ENCODER_ONNX), intra_threads, spinning)?;
-        let decoder = build_session(&models_dir.join(DECODER_ONNX), intra_threads, spinning)?;
+        let encoder =
+            super::build_session(&models_dir.join(ENCODER_ONNX), intra_threads, spinning)?;
+        let decoder =
+            super::build_session(&models_dir.join(DECODER_ONNX), intra_threads, spinning)?;
         let vocab = Vocab::load(&models_dir.join(VOCAB_JSON))?;
 
         let mut num_layers = 0usize;

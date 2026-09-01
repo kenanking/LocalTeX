@@ -1,15 +1,22 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{App, AppContext, ClipboardItem, Context};
 use image::RgbaImage;
 use uuid::Uuid;
 
-use crate::doc::{Block, CopyKind, DocStatus, Document, ImageSlot, SnipKind};
+use crate::doc::{Block, DocStatus, Document, ImageSlot, SnipKind};
+use crate::export::CopyKind;
 use crate::identity::APP_SLUG;
-use crate::ingest::IngestSource;
 
 use super::session::Capture;
 use super::AppState;
+
+pub enum IngestSource {
+    Screen(RgbaImage),
+    Files(Vec<PathBuf>),
+    Strokes(Vec<Vec<[f32; 3]>>),
+}
 
 impl AppState {
     pub fn ingest(&mut self, source: IngestSource, cx: &mut Context<Self>) {
@@ -75,7 +82,7 @@ impl AppState {
     }
 
     fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
-        if self.ingest.file_loading || !self.ingest.ocr.is_idle() {
+        if self.ingest.file_loading {
             return;
         }
         let Some(path) = self.ingest.file_queue.pop_front() else {
@@ -117,9 +124,33 @@ impl AppState {
     }
 
     pub fn start_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        let slot = self.library.get(id).map(|d| d.image.clone());
+        match missing_pixels_action(slot.as_ref()) {
+            MissingPixels::Run => {}
+            MissingPixels::LoadPng => {
+                self.ingest.ocr.finish(id);
+                self.load_png_then_retry(id, cx);
+                return;
+            }
+            MissingPixels::Fail(msg) => {
+                if let Some(doc) = self.library.get_mut(id) {
+                    doc.status = DocStatus::Failed(msg.into());
+                    doc.bump_revision();
+                }
+                self.ingest.ocr.finish(id);
+                self.pump_ocr(cx);
+                cx.notify();
+                return;
+            }
+        }
         let Some(image) = self.library.pixels(id) else {
+            if let Some(doc) = self.library.get_mut(id) {
+                doc.status = DocStatus::Failed("Original image is missing".into());
+                doc.bump_revision();
+            }
             self.ingest.ocr.finish(id);
             self.pump_ocr(cx);
+            cx.notify();
             return;
         };
         let ink = self.library.get(id).and_then(|d| d.ink.clone());
@@ -129,13 +160,7 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let traces = match ink {
-                        Some(t) => Some(t),
-                        None => store
-                            .as_ref()
-                            .and_then(|s| s.load_ink(id).ok().flatten())
-                            .map(Arc::new),
-                    };
+                    let traces = resolve_ink_traces(ink, store.as_ref().map(|s| s.load_ink(id)))?;
                     if let Some(traces) = traces {
                         engine.recognize_ink(traces.as_ref(), size)
                     } else {
@@ -171,9 +196,6 @@ impl AppState {
                     if this.prefs.autocopy && this.library.selected() == Some(id) {
                         this.copy_selected(cx);
                     }
-                }
-                if this.capture.take_reveal_on_main() {
-                    this.dismiss_main_sheet(cx);
                 }
                 this.pump_ocr(cx);
                 cx.notify();
@@ -464,7 +486,9 @@ impl AppState {
                         eprintln!("{APP_SLUG}: load png: {err}");
                         if let Some(doc) = this.library.get_mut(id) {
                             doc.image = ImageSlot::Missing;
-                            doc.status = DocStatus::Ready;
+                            doc.status =
+                                DocStatus::Failed("Couldn't load the original image".into());
+                            doc.bump_revision();
                         }
                     }
                 }
@@ -512,7 +536,8 @@ impl AppState {
                     Err(err) => {
                         eprintln!("{APP_SLUG}: load blocks: {err}");
                         if let Some(doc) = this.library.get_mut(id) {
-                            doc.blocks_loaded = true;
+                            doc.status = DocStatus::Failed("Couldn't load recognized text".into());
+                            doc.bump_revision();
                         }
                     }
                 }
@@ -554,5 +579,75 @@ impl AppState {
             }
         })
         .detach();
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MissingPixels {
+    Run,
+    LoadPng,
+    Fail(&'static str),
+}
+
+fn missing_pixels_action(slot: Option<&ImageSlot>) -> MissingPixels {
+    match slot {
+        Some(ImageSlot::Loaded(_)) => MissingPixels::Run,
+        Some(ImageSlot::OnDisk) => MissingPixels::LoadPng,
+        Some(ImageSlot::Missing) => MissingPixels::Fail("Original image is missing"),
+        None => MissingPixels::Fail("Snip is gone"),
+    }
+}
+
+type InkTraces = Vec<Vec<[f32; 3]>>;
+
+fn resolve_ink_traces(
+    ram: Option<Arc<InkTraces>>,
+    disk: Option<anyhow::Result<Option<InkTraces>>>,
+) -> anyhow::Result<Option<Arc<InkTraces>>> {
+    if let Some(traces) = ram {
+        return Ok(Some(traces));
+    }
+    match disk {
+        None | Some(Ok(None)) => Ok(None),
+        Some(Ok(Some(traces))) => Ok(Some(Arc::new(traces))),
+        Some(Err(err)) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::RgbaImage;
+
+    #[test]
+    fn missing_pixels_do_not_drop_recognizing_without_status() {
+        let loaded = ImageSlot::Loaded(Arc::new(RgbaImage::new(2, 2)));
+        assert_eq!(missing_pixels_action(Some(&loaded)), MissingPixels::Run);
+        assert_eq!(
+            missing_pixels_action(Some(&ImageSlot::OnDisk)),
+            MissingPixels::LoadPng
+        );
+        assert!(matches!(
+            missing_pixels_action(Some(&ImageSlot::Missing)),
+            MissingPixels::Fail(_)
+        ));
+        assert!(matches!(
+            missing_pixels_action(None),
+            MissingPixels::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn disk_ink_error_does_not_fall_through_to_page_ocr() {
+        let err = anyhow::anyhow!("decode ink");
+        let out = resolve_ink_traces(None, Some(Err(err)));
+        assert!(out.is_err());
+        let none = resolve_ink_traces(None, Some(Ok(None))).unwrap();
+        assert!(none.is_none());
+        let ram = Arc::new(vec![vec![[0.0, 0.0, 0.0]]]);
+        let traces = resolve_ink_traces(Some(ram.clone()), Some(Err(anyhow::anyhow!("ignored"))))
+            .unwrap()
+            .expect("ram wins");
+        assert!(Arc::ptr_eq(&traces, &ram));
     }
 }

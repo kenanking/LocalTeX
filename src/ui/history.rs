@@ -201,23 +201,18 @@ impl MainWindow {
                             if media.borrow().thumb(id).is_some() {
                                 continue;
                             }
-                            if !doc.thumb_jpeg.is_empty() || doc.image.pixels().is_some() {
-                                media.borrow_mut().ensure_thumb(
-                                    id,
-                                    &doc.thumb_jpeg,
-                                    doc.image.pixels().map(|p| p.as_ref()),
-                                );
-                            } else {
+                            if !doc.thumb_jpeg.is_empty()
+                                || doc.image.pixels().is_some()
+                                || !matches!(doc.image, crate::doc::ImageSlot::Missing)
+                            {
                                 need_thumbs.push(id);
                             }
                         }
                     }
                     if !need_thumbs.is_empty() {
-                        let state = state_ent.clone();
+                        let entity = window_ent.clone();
                         cx.defer(move |cx| {
-                            for id in need_thumbs {
-                                state.update(cx, |s, cx| s.request_thumb(id, cx));
-                            }
+                            entity.update(cx, |this, cx| this.ensure_thumbs(&need_thumbs, cx));
                         });
                     }
                     let state = state_ent.read(cx);

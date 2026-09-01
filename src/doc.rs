@@ -5,6 +5,7 @@ use image::RgbaImage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::export::CopyKind;
 use crate::table;
 
 pub use crate::math::{split_math, unwrap_formula, MathRun};
@@ -146,171 +147,6 @@ pub enum SnipKind {
     Formula,
     Table,
     Mixed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopyKind {
-    MsWord,
-    Latex,
-    MdInline,
-    MdDisplay,
-    Equation,
-    Markdown,
-    LatexDoc,
-    MdTable,
-    LatexTable,
-    Tsv,
-}
-
-impl CopyKind {
-    pub const ALL: [Self; 10] = [
-        Self::MsWord,
-        Self::Latex,
-        Self::MdInline,
-        Self::MdDisplay,
-        Self::Equation,
-        Self::LatexTable,
-        Self::MdTable,
-        Self::Tsv,
-        Self::Markdown,
-        Self::LatexDoc,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::MsWord => "ms_word",
-            Self::Latex => "latex",
-            Self::MdInline => "md_inline",
-            Self::MdDisplay => "md_display",
-            Self::Equation => "equation",
-            Self::LatexTable => "latex_table",
-            Self::MdTable => "md_table",
-            Self::Tsv => "tsv",
-            Self::Markdown => "markdown",
-            Self::LatexDoc => "latex_doc",
-        }
-    }
-
-    pub fn applies_to(self, kind: SnipKind) -> bool {
-        match self {
-            Self::MsWord | Self::Latex | Self::MdInline | Self::MdDisplay | Self::Equation => {
-                kind == SnipKind::Formula
-            }
-            Self::LatexTable | Self::MdTable | Self::Tsv => kind == SnipKind::Table,
-            Self::Markdown | Self::LatexDoc => kind == SnipKind::Mixed,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            CopyKind::MsWord => "MathML",
-            CopyKind::Latex => "LaTeX",
-            CopyKind::MdInline => "Inline",
-            CopyKind::MdDisplay => "Display",
-            CopyKind::Equation => "Equation",
-            CopyKind::Markdown => "Markdown",
-            CopyKind::LatexDoc => "LaTeX",
-            CopyKind::MdTable => "Markdown table",
-            CopyKind::LatexTable => "LaTeX table",
-            CopyKind::Tsv => "TSV",
-        }
-    }
-
-    pub fn symbol(self) -> &'static str {
-        match self {
-            CopyKind::MsWord => "ml",
-            CopyKind::Latex | CopyKind::LatexDoc | CopyKind::LatexTable => "TeX",
-            CopyKind::MdInline => "$",
-            CopyKind::MdDisplay => "$$",
-            CopyKind::Equation => "eq",
-            CopyKind::Markdown | CopyKind::MdTable => "MD",
-            CopyKind::Tsv => "TSV",
-        }
-    }
-
-    /// Coarse fallback used when the habit slot is empty or inapplicable.
-    pub fn primary(snip: SnipKind, fmt: ExportFmt) -> Self {
-        match (snip, fmt) {
-            (SnipKind::Formula, ExportFmt::Markdown) => Self::MdDisplay,
-            (SnipKind::Formula, ExportFmt::Latex) => Self::Latex,
-            (SnipKind::Table, ExportFmt::Markdown) => Self::MdTable,
-            (SnipKind::Table, ExportFmt::Latex) => Self::LatexTable,
-            (SnipKind::Mixed, ExportFmt::Markdown) => Self::Markdown,
-            (SnipKind::Mixed, ExportFmt::Latex) => Self::LatexDoc,
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|k| k.id() == id)
-    }
-}
-
-impl Serialize for CopyKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.id())
-    }
-}
-
-/// Last text copy per snip kind. PNG is not represented.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CopyHabit {
-    #[serde(default, deserialize_with = "de_opt_copy_kind")]
-    formula: Option<CopyKind>,
-    #[serde(default, deserialize_with = "de_opt_copy_kind")]
-    table: Option<CopyKind>,
-    #[serde(default, deserialize_with = "de_opt_copy_kind")]
-    mixed: Option<CopyKind>,
-}
-
-impl CopyHabit {
-    fn slot(&self, snip: SnipKind) -> Option<CopyKind> {
-        match snip {
-            SnipKind::Formula => self.formula,
-            SnipKind::Table => self.table,
-            SnipKind::Mixed => self.mixed,
-        }
-    }
-
-    fn slot_mut(&mut self, snip: SnipKind) -> &mut Option<CopyKind> {
-        match snip {
-            SnipKind::Formula => &mut self.formula,
-            SnipKind::Table => &mut self.table,
-            SnipKind::Mixed => &mut self.mixed,
-        }
-    }
-
-    /// No-op if `kind` does not apply. Returns whether the stored value changed.
-    pub fn remember(&mut self, snip: SnipKind, kind: CopyKind) -> bool {
-        if !kind.applies_to(snip) {
-            return false;
-        }
-        let slot = self.slot_mut(snip);
-        if *slot == Some(kind) {
-            return false;
-        }
-        *slot = Some(kind);
-        true
-    }
-
-    pub fn preferred(&self, snip: SnipKind) -> Option<CopyKind> {
-        self.slot(snip).filter(|k| k.applies_to(snip))
-    }
-
-    pub fn resolve(&self, snip: SnipKind, fmt: ExportFmt) -> CopyKind {
-        self.preferred(snip)
-            .unwrap_or_else(|| CopyKind::primary(snip, fmt))
-    }
-}
-
-fn de_opt_copy_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CopyKind>, D::Error> {
-    let raw = Option::<String>::deserialize(d)?;
-    Ok(raw.and_then(|s| CopyKind::from_id(&s)))
-}
-
-#[derive(Clone)]
-pub struct CopyRow {
-    pub kind: CopyKind,
-    pub text: String,
 }
 
 #[derive(Clone)]
@@ -455,25 +291,13 @@ impl Document {
         out
     }
 
-    pub fn copy_rows(&self, prefs: &crate::prefs::Prefs) -> Vec<CopyRow> {
-        if !matches!(self.status, DocStatus::Ready) {
-            return Vec::new();
-        }
-        crate::export::copy_rows(&self.blocks, prefs)
-    }
-
     #[cfg(test)]
     pub fn primary_copy(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
         self.text_for(CopyKind::primary(self.snip_kind(), fmt), prefs)
     }
 
     pub fn text_for(&self, kind: CopyKind, prefs: &crate::prefs::Prefs) -> String {
-        let rows = self.copy_rows(prefs);
-        rows.iter()
-            .find(|r| r.kind == kind)
-            .or(rows.first())
-            .map(|r| r.text.clone())
-            .unwrap_or_default()
+        kind.render(&self.blocks, prefs)
     }
 }
 
@@ -552,6 +376,7 @@ fn table_preview_line(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export::CopyHabit;
 
     fn rect(y: u32) -> Rect {
         Rect {

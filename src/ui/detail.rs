@@ -1,23 +1,20 @@
-use std::sync::Arc;
-
 use gpui::{
-    canvas, div, img, prelude::*, px, rgb, Context, Corners, CursorStyle, Entity, MouseButton,
-    MouseDownEvent, ObjectFit, RenderImage, SharedString,
+    div, img, prelude::*, px, rgb, Context, CursorStyle, Entity, MouseButton, MouseDownEvent,
+    SharedString,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::orig_view::{
-    auto_strip_h, clamp_strip_h, copy_reserve, max_strip_h, orig_action_capsule, orig_hud_disc,
-    source_hud_bar, source_hud_disc, source_hud_sep,
+    clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_hud_bar, source_hud_disc,
+    source_hud_sep, OrigStripFrame,
 };
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
-use super::widgets::{
-    btn, copy_chip, kbd_chip, missing_image_slot, ocr_meta_bar, section_label, IconKind,
-};
+use super::widgets::{btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, IconKind};
 use super::window_drag::WindowDrag;
-use crate::doc::{CopyKind, DocStatus, ImageSlot, OcrMeta, SnipKind};
+use crate::doc::{DocStatus, ImageSlot, OcrMeta};
+use crate::export::{CopyKind, CopyRow};
 use crate::state::AppState;
 
 impl MainWindow {
@@ -28,10 +25,10 @@ impl MainWindow {
         win_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if self.orig_strip.bind_doc(self.state.read(cx).selected()) {
-            if self.window_drag.as_ref().is_some_and(|d| d.is_strip()) {
-                self.window_drag = None;
-            }
+        if self.orig_strip.bind_doc(self.state.read(cx).selected())
+            && self.window_drag.as_ref().is_some_and(|d| d.is_strip())
+        {
+            self.window_drag = None;
         }
         let snap = {
             let state = self.state.read(cx);
@@ -75,13 +72,8 @@ impl MainWindow {
                 .selected_doc()
                 .is_some_and(|d| d.is_edited());
         let ocr = snap.ocr;
-        if self.source_open && !ready {
-            self.close_source(cx);
-        }
-        if self.source_open {
-            self.bind_source(cx);
-        }
         let source_open = self.source_open;
+        let lang = self.source_lang;
         let edited = self
             .state
             .read(cx)
@@ -89,24 +81,6 @@ impl MainWindow {
             .is_some_and(|d| d.is_edited());
         let can_undo = self.source.read(cx).can_undo();
         let can_redo = self.source.read(cx).can_redo();
-        let lang = {
-            let prefs = self.state.read(cx).prefs.clone();
-            let src = self.source.read(cx).text();
-            let kind = crate::source::parse_source(&src, &prefs)
-                .map(|b| crate::doc::snip_kind(&b))
-                .unwrap_or_else(|_| {
-                    self.state
-                        .read(cx)
-                        .selected_doc()
-                        .map(|d| d.snip_kind())
-                        .unwrap_or(SnipKind::Formula)
-                });
-            match kind {
-                SnipKind::Formula | SnipKind::Table => "LaTeX",
-                SnipKind::Mixed if src.contains("\\begin{tabular}") => "Markdown + tabular",
-                SnipKind::Mixed => "Markdown",
-            }
-        };
         let (orig_copied, reveal_enabled) = {
             let state = self.state.read(cx);
             (
@@ -125,29 +99,24 @@ impl MainWindow {
         let max_h = max_strip_h(win_h, copy_h);
         let strip_h = clamp_strip_h(snap.orig_strip_h, max_h);
         let orig = self.render_orig_strip(
-            doc_id,
-            full,
-            orig_hover,
-            orig_copied,
-            reveal_enabled,
-            image_missing,
-            img_w,
-            img_h,
-            copy_pane_w,
-            strip_h,
-            max_h,
+            OrigStripFrame {
+                doc_id,
+                full,
+                hovered: orig_hover,
+                copied: orig_copied,
+                reveal_enabled,
+                missing: image_missing,
+                img_w,
+                img_h,
+                pane_w: copy_pane_w,
+                strip_h,
+                max_h,
+            },
             cx,
         );
 
-        if ready && self.preview.bar_pending {
-            if self.preview.hscroll_bounds_ready() {
-                self.preview.bar_pending = false;
-            } else {
-                let entity = cx.entity();
-                cx.defer(move |cx| {
-                    entity.update(cx, |_, cx| cx.notify());
-                });
-            }
+        if ready && self.preview.bar_pending && self.preview.hscroll_bounds_ready() {
+            self.preview.bar_pending = false;
         }
 
         div()
@@ -425,209 +394,10 @@ impl MainWindow {
             )
     }
 
-    fn render_orig_strip(
-        &self,
-        doc_id: Uuid,
-        full: Option<Arc<RenderImage>>,
-        hovered: bool,
-        copied: bool,
-        reveal_enabled: bool,
-        missing: bool,
-        img_w: f32,
-        img_h: f32,
-        pane_w: f32,
-        strip_h: f32,
-        max_h: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let split_on =
-            self.orig_strip.split_hover || self.window_drag.as_ref().is_some_and(|d| d.is_strip());
-        let card = if missing {
-            missing_image_slot(px(720.), px(strip_h))
-                .id("orig-thumb")
-                .size_full()
-                .when(split_on, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .left(px(8.))
-                            .right(px(8.))
-                            .bottom_0()
-                            .h(px(2.))
-                            .rounded(px(2.))
-                            .bg(rgb(theme::ACCENT)),
-                    )
-                })
-                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
-                .into_any()
-        } else {
-            let entity = cx.entity();
-            div()
-                .id("orig-thumb")
-                .size_full()
-                .overflow_hidden()
-                .rounded_md()
-                .bg(rgb(theme::BG_SUNKEN))
-                .border_1()
-                .border_color(rgb(theme::BORDER))
-                .when_some(full.clone(), |d, img_data| {
-                    d.child(
-                        canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                let fitted =
-                                    ObjectFit::Contain.get_bounds(bounds, img_data.size(0));
-                                window
-                                    .paint_image(
-                                        fitted,
-                                        fitted,
-                                        Corners::default(),
-                                        img_data,
-                                        0,
-                                        false,
-                                    )
-                                    .ok();
-                            },
-                        )
-                        .size_full(),
-                    )
-                })
-                .when(full.is_some(), |d| {
-                    d.child(
-                        div()
-                            .id("orig-hit")
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .right_0()
-                            .bottom(px(12.))
-                            .occlude()
-                            .cursor_pointer()
-                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                if this.orig.strip_hover != *hovered {
-                                    this.orig.strip_hover = *hovered;
-                                    cx.notify();
-                                }
-                            }))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.zoom_original(doc_id, window, cx);
-                            }))
-                            .flex()
-                            .items_start()
-                            .justify_end()
-                            .pt(px(8.))
-                            .pr(px(8.))
-                            .when(hovered, |d| {
-                                d.child(
-                                    div()
-                                        .id("strip-actions")
-                                        .h(px(28.))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .child(orig_action_capsule(
-                                            doc_id,
-                                            copied,
-                                            reveal_enabled,
-                                            "strip",
-                                            cx,
-                                        ))
-                                        .child(orig_hud_disc(
-                                            "strip-zoom",
-                                            IconKind::Corners,
-                                            "Open original",
-                                            {
-                                                let entity = entity.clone();
-                                                move |_, window, cx| {
-                                                    entity.update(cx, |this, cx| {
-                                                        this.zoom_original(doc_id, window, cx);
-                                                    });
-                                                }
-                                            },
-                                        )),
-                                )
-                            }),
-                    )
-                })
-                .when(split_on, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .left(px(8.))
-                            .right(px(8.))
-                            .bottom_0()
-                            .h(px(2.))
-                            .rounded(px(2.))
-                            .bg(rgb(theme::ACCENT)),
-                    )
-                })
-                .child(self.orig_strip_handle(strip_h, img_w, img_h, pane_w, max_h, cx))
-                .into_any()
-        };
-
-        div()
-            .id("orig-wrap")
-            .px_4()
-            .pt_3()
-            .flex_none()
-            .h(px(strip_h))
-            .overflow_hidden()
-            .child(card)
-    }
-
-    fn orig_strip_handle(
-        &self,
-        strip_h: f32,
-        img_w: f32,
-        img_h: f32,
-        pane_w: f32,
-        max_h: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div()
-            .id("orig-strip-resize")
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(px(12.))
-            .occlude()
-            .cursor(CursorStyle::ResizeUpDown)
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if this.orig_strip.split_hover != *hovered {
-                    this.orig_strip.split_hover = *hovered;
-                    cx.notify();
-                }
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                    if ev.click_count >= 2 {
-                        let next = auto_strip_h(img_w, img_h, pane_w, max_h);
-                        this.state.update(cx, |s, cx| {
-                            s.prefs.orig_strip_h = next;
-                            s.persist_prefs();
-                            cx.notify();
-                        });
-                    } else {
-                        this.window_drag = Some(WindowDrag::Strip {
-                            start_y: f32::from(ev.position.y),
-                            start_h: strip_h,
-                        });
-                    }
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
-    }
-
     fn render_copy_rows(
         &self,
         doc_id: Uuid,
-        rows: &[crate::doc::CopyRow],
+        rows: &[CopyRow],
         copied: Option<(Uuid, CopyKind)>,
         ocr: Option<OcrMeta>,
         pane_w: f32,

@@ -20,6 +20,7 @@ impl OcrQueue {
         self.running
     }
 
+    #[cfg(test)]
     pub fn is_idle(&self) -> bool {
         self.running().is_none() && self.pending.is_empty()
     }

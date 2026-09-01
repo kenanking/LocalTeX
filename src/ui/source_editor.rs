@@ -1,14 +1,14 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, Bounds,
-    ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, Window,
+    actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, Bounds, Context,
+    CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
+    Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun,
+    UTF16Selection, Window,
 };
-use unicode_segmentation::UnicodeSegmentation;
 
+use super::text_buffer::TextBuffer;
 use super::theme;
 
 actions!(
@@ -38,14 +38,10 @@ const UNDO_CAP: usize = 64;
 
 pub struct SourceEditor {
     focus_handle: FocusHandle,
-    content: SharedString,
-    selected_range: Range<usize>,
-    selection_reversed: bool,
-    marked_range: Option<Range<usize>>,
+    buf: TextBuffer,
     last_lines: Vec<(usize, ShapedLine)>,
     last_bounds: Option<Bounds<Pixels>>,
     last_line_height: Pixels,
-    is_selecting: bool,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
     skip_undo: bool,
@@ -55,14 +51,10 @@ impl SourceEditor {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
-            content: "".into(),
-            selected_range: 0..0,
-            selection_reversed: false,
-            marked_range: None,
+            buf: TextBuffer::new(),
             last_lines: Vec::new(),
             last_bounds: None,
             last_line_height: px(16.),
-            is_selecting: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             skip_undo: false,
@@ -70,7 +62,7 @@ impl SourceEditor {
     }
 
     pub fn text(&self) -> String {
-        self.content.to_string()
+        self.buf.content.to_string()
     }
 
     pub fn can_undo(&self) -> bool {
@@ -82,10 +74,10 @@ impl SourceEditor {
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
-        let len = self.content.len();
-        self.selected_range = len..len;
-        self.marked_range = None;
+        self.buf.content = text.into();
+        let len = self.buf.content.len();
+        self.buf.selected_range = len..len;
+        self.buf.marked_range = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.skip_undo = true;
@@ -96,10 +88,10 @@ impl SourceEditor {
         let Some(prev) = self.undo_stack.pop() else {
             return;
         };
-        self.redo_stack.push(self.content.to_string());
-        self.content = prev.into();
-        let len = self.content.len();
-        self.selected_range = len..len;
+        self.redo_stack.push(self.buf.content.to_string());
+        self.buf.content = prev.into();
+        let len = self.buf.content.len();
+        self.buf.selected_range = len..len;
         self.skip_undo = true;
         cx.notify();
     }
@@ -108,10 +100,10 @@ impl SourceEditor {
         let Some(next) = self.redo_stack.pop() else {
             return;
         };
-        self.undo_stack.push(self.content.to_string());
-        self.content = next.into();
-        let len = self.content.len();
-        self.selected_range = len..len;
+        self.undo_stack.push(self.buf.content.to_string());
+        self.buf.content = next.into();
+        let len = self.buf.content.len();
+        self.buf.selected_range = len..len;
         self.skip_undo = true;
         cx.notify();
     }
@@ -129,7 +121,7 @@ impl SourceEditor {
             self.skip_undo = false;
             return;
         }
-        self.undo_stack.push(self.content.to_string());
+        self.undo_stack.push(self.buf.content.to_string());
         if self.undo_stack.len() > UNDO_CAP {
             self.undo_stack.remove(0);
         }
@@ -137,18 +129,18 @@ impl SourceEditor {
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.move_to(self.previous_boundary(self.cursor_offset()), cx);
+        if self.buf.selected_range.is_empty() {
+            self.move_to(self.buf.previous_boundary(self.cursor_offset()), cx);
         } else {
-            self.move_to(self.selected_range.start, cx);
+            self.move_to(self.buf.selected_range.start, cx);
         }
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.move_to(self.next_boundary(self.selected_range.end), cx);
+        if self.buf.selected_range.is_empty() {
+            self.move_to(self.buf.next_boundary(self.buf.selected_range.end), cx);
         } else {
-            self.move_to(self.selected_range.end, cx);
+            self.move_to(self.buf.selected_range.end, cx);
         }
     }
 
@@ -161,16 +153,16 @@ impl SourceEditor {
     }
 
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+        self.select_to(self.buf.previous_boundary(self.cursor_offset()), cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
+        self.select_to(self.buf.next_boundary(self.cursor_offset()), cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_to(self.buf.content.len(), cx);
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
@@ -187,16 +179,16 @@ impl SourceEditor {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+        if self.buf.selected_range.is_empty() {
+            self.select_to(self.buf.previous_boundary(self.cursor_offset()), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
         cx.stop_propagation();
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx);
+        if self.buf.selected_range.is_empty() {
+            self.select_to(self.buf.next_boundary(self.cursor_offset()), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
         cx.stop_propagation();
@@ -209,7 +201,7 @@ impl SourceEditor {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        self.is_selecting = true;
+        self.buf.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
         } else {
@@ -219,11 +211,11 @@ impl SourceEditor {
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
-        self.is_selecting = false;
+        self.buf.is_selecting = false;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_selecting {
+        if self.buf.is_selecting {
             self.select_to(self.index_for_mouse_position(event.position), cx);
         }
     }
@@ -236,62 +228,52 @@ impl SourceEditor {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
-        }
+        self.buf.write_selection(cx);
         cx.stop_propagation();
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        if self.buf.selected_text().is_some() {
+            self.buf.write_selection(cx);
             self.replace_text_in_range(None, "", window, cx);
         }
         cx.stop_propagation();
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.selected_range = offset..offset;
+        self.buf.move_to(offset);
         cx.notify();
     }
 
     fn cursor_offset(&self) -> usize {
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
+        self.buf.cursor_offset()
     }
 
     fn line_ranges(&self) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
         let mut start = 0usize;
-        for (i, ch) in self.content.char_indices() {
+        for (i, ch) in self.buf.content.char_indices() {
             if ch == '\n' {
                 ranges.push(start..i);
                 start = i + 1;
             }
         }
-        ranges.push(start..self.content.len());
+        ranges.push(start..self.buf.content.len());
         ranges
     }
 
     fn line_start(&self, offset: usize) -> usize {
-        self.content[..offset]
+        self.buf.content[..offset]
             .rfind('\n')
             .map(|i| i + 1)
             .unwrap_or(0)
     }
 
     fn line_end(&self, offset: usize) -> usize {
-        self.content[offset..]
+        self.buf.content[offset..]
             .find('\n')
             .map(|i| offset + i)
-            .unwrap_or(self.content.len())
+            .unwrap_or(self.buf.content.len())
     }
 
     fn offset_on_neighbor_line(&self, offset: usize, dir: i32) -> usize {
@@ -328,69 +310,12 @@ impl SourceEditor {
         let line_ix = line_ix.min(self.last_lines.len().saturating_sub(1));
         let (start, line) = &self.last_lines[line_ix];
         let col = line.closest_index_for_x(position.x - bounds.left());
-        (start + col).min(self.content.len())
+        (start + col).min(self.buf.content.len())
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        if self.selection_reversed {
-            self.selected_range.start = offset;
-        } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
+        self.buf.select_to(offset);
         cx.notify();
-    }
-
-    fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-        utf8_offset
-    }
-
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-        for ch in self.content.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-        utf16_offset
-    }
-
-    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
-    }
-
-    fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
-    }
-
-    fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(idx, _)| (idx < offset).then_some(idx))
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(idx, _)| (idx > offset).then_some(idx))
-            .unwrap_or(self.content.len())
     }
 }
 
@@ -402,9 +327,7 @@ impl EntityInputHandler for SourceEditor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
-        actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        self.buf.text_for_utf16(range_utf16, actual_range)
     }
 
     fn selected_text_range(
@@ -413,10 +336,7 @@ impl EntityInputHandler for SourceEditor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: self.selection_reversed,
-        })
+        Some(self.buf.selected_utf16())
     }
 
     fn marked_text_range(
@@ -424,13 +344,14 @@ impl EntityInputHandler for SourceEditor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.marked_range
+        self.buf
+            .marked_range
             .as_ref()
-            .map(|range| self.range_to_utf16(range))
+            .map(|range| self.buf.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.marked_range = None;
+        self.buf.marked_range = None;
     }
 
     fn replace_text_in_range(
@@ -441,16 +362,7 @@ impl EntityInputHandler for SourceEditor {
         cx: &mut Context<Self>,
     ) {
         self.push_undo();
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
-        self.marked_range.take();
+        self.buf.replace_text(range_utf16, new_text);
         cx.notify();
     }
 
@@ -463,24 +375,8 @@ impl EntityInputHandler for SourceEditor {
         cx: &mut Context<Self>,
     ) {
         self.push_undo();
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        if !new_text.is_empty() {
-            self.marked_range = Some(range.start..range.start + new_text.len());
-        } else {
-            self.marked_range = None;
-        }
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.buf
+            .replace_and_mark(range_utf16, new_text, new_selected_range_utf16);
         cx.notify();
     }
 
@@ -491,7 +387,7 @@ impl EntityInputHandler for SourceEditor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.buf.range_from_utf16(&range_utf16);
         let lh = self.last_line_height;
         let (line_ix, col_start) = self.line_col(range.start);
         let (_, col_end) = self.line_col(range.end);
@@ -518,7 +414,10 @@ impl EntityInputHandler for SourceEditor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.offset_to_utf16(self.index_for_mouse_position(point)))
+        Some(
+            self.buf
+                .offset_to_utf16(self.index_for_mouse_position(point)),
+        )
     }
 }
 
@@ -574,6 +473,7 @@ impl Element for FieldElement {
         let n = self
             .input
             .read(cx)
+            .buf
             .content
             .chars()
             .filter(|c| *c == '\n')
@@ -595,8 +495,8 @@ impl Element for FieldElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
-        let content = input.content.clone();
-        let selected_range = input.selected_range.clone();
+        let content = input.buf.content.clone();
+        let selected_range = input.buf.selected_range.clone();
         let cursor = input.cursor_offset();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());

@@ -4,11 +4,10 @@ use std::time::Duration;
 use gpui::{App, AppContext, Context, WindowHandle};
 use image::RgbaImage;
 
-use crate::identity::APP_SLUG;
-use crate::ingest::IngestSource;
-
+use super::ingest::IngestSource;
 use super::session::Capture;
 use super::AppState;
+use crate::identity::APP_SLUG;
 
 const SHEET_DISMISS_SETTLE: Duration = Duration::from_millis(250);
 
@@ -53,8 +52,16 @@ impl AppState {
 
         cx.spawn(async move |this, cx| {
             if hide {
-                cx.background_spawn(async { crate::desktop::wait_until_iconified() })
-                    .await;
+                if let Err(err) = cx
+                    .background_spawn(async { crate::desktop::wait_until_iconified() })
+                    .await
+                {
+                    let _ = this.update(cx, |this, cx| {
+                        this.flash_capture_error(err.to_string(), cx);
+                        this.restore_after_hide(cx);
+                    });
+                    return;
+                }
             } else {
                 cx.background_spawn(async {
                     std::thread::sleep(SHEET_DISMISS_SETTLE);
@@ -71,7 +78,6 @@ impl AppState {
                 Ok(Some(crop)) => this.finish_capture(crop, cx),
                 Ok(None) => {
                     this.capture.set(Capture::Idle);
-                    this.capture.set_reveal_on_main(false);
                     this.restore_after_hide(cx);
                     cx.notify();
                 }
@@ -87,9 +93,9 @@ impl AppState {
     }
 
     pub fn finish_capture(&mut self, crop: RgbaImage, cx: &mut Context<Self>) {
-        self.capture.set_reveal_on_main(true);
         self.capture.set(Capture::Idle);
         self.ingest(IngestSource::Screen(crop), cx);
+        self.dismiss_main_sheet(cx);
         self.restore_after_hide(cx);
     }
 

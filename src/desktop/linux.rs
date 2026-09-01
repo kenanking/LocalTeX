@@ -300,21 +300,20 @@ fn load_left_ptr(conn: &impl x11rb::connection::Connection) -> anyhow::Result<u3
 
 /// Block until the main window is no longer viewable, then a short compositor
 /// settle so xcap does not catch the minimize animation.
-pub fn wait_until_iconified() {
+pub fn wait_until_iconified() -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
     use x11rb::connection::Connection;
-    let Ok((conn, screen_num)) = x11rb::connect(None) else {
-        return;
-    };
+    let (conn, screen_num) =
+        x11rb::connect(None).map_err(|err| anyhow::anyhow!("x11 connect for hide wait: {err}"))?;
     let root = conn.setup().roots[screen_num].root;
     let deadline = Instant::now() + Duration::from_millis(700);
     loop {
         if main_window_hidden_on(&conn, root) {
             std::thread::sleep(Duration::from_millis(120));
-            return;
+            return Ok(());
         }
         if Instant::now() >= deadline {
-            return;
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(16));
     }
@@ -454,5 +453,25 @@ mod tests {
         assert_eq!(at(16, 16).0, 0, "center is transparent");
         assert!(at(16, 16 - 8).0 > 200, "ring is opaque");
         assert_eq!(at(0, 0).0, 0, "corner is transparent");
+    }
+
+    #[test]
+    fn wait_until_iconified_connect_failure_is_an_error() {
+        let src = include_str!("linux.rs");
+        let body = src
+            .split("pub fn wait_until_iconified")
+            .nth(1)
+            .expect("wait_until_iconified")
+            .split("fn intern")
+            .next()
+            .expect("body");
+        assert!(
+            body.contains("-> anyhow::Result"),
+            "hide wait must report X connect failure"
+        );
+        assert!(
+            !body.contains("let Ok((conn, screen_num))"),
+            "must not ignore x11rb::connect errors"
+        );
     }
 }

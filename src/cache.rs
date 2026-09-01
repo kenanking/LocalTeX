@@ -60,25 +60,17 @@ impl MediaCache {
         self.fulls.get(&id).cloned()
     }
 
-    /// Insert a list thumbnail. Caller must not pass an id that is still
-    /// painted this frame if they later evict it in the same call.
-    pub fn ensure_thumb(
-        &mut self,
-        id: Uuid,
-        jpeg: &[u8],
-        pixels: Option<&RgbaImage>,
-    ) -> Option<Arc<RenderImage>> {
-        if let Some(existing) = self.thumbs.get(&id) {
-            return Some(existing.clone());
-        }
-        let render = imgutil::jpeg_to_render(jpeg).or_else(|| {
+    pub fn put_thumb(&mut self, id: Uuid, render: Arc<RenderImage>) {
+        self.thumbs.entry(id).or_insert(render);
+    }
+
+    pub fn decode_thumb(jpeg: &[u8], pixels: Option<&RgbaImage>) -> Option<Arc<RenderImage>> {
+        imgutil::jpeg_to_render(jpeg).or_else(|| {
             pixels.map(|p| {
                 let thumb = imgutil::thumbnail(p, 56, 40);
                 imgutil::rgba_to_render(&thumb)
             })
-        })?;
-        self.thumbs.insert(id, render.clone());
-        Some(render)
+        })
     }
 
     pub fn ensure_full(&mut self, id: Uuid, pixels: &RgbaImage) -> Arc<RenderImage> {
