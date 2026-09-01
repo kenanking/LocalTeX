@@ -1,10 +1,11 @@
-use gpui::{div, prelude::*, px, relative, rgb, AnyElement, SharedString};
+use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Entity, PromptLevel, SharedString};
 
 use super::super::theme;
-use super::super::widgets::{settings_group, Tooltip};
+use super::super::widgets::{btn, setting_row, settings_group, Tooltip};
+use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
-pub(super) fn system_page(snap: &SysSnapshot) -> impl IntoElement {
+pub(super) fn system_page(state: Entity<AppState>, snap: &SysSnapshot) -> impl IntoElement {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
         _ => "—".into(),
@@ -71,6 +72,35 @@ pub(super) fn system_page(snap: &SysSnapshot) -> impl IntoElement {
         .child(settings_group(
             "This machine",
             vec![panel.into_any_element()],
+        ))
+        .child(settings_group(
+            "Library",
+            vec![setting_row(
+                "Delete all snips",
+                "Removes every snip and the database. Settings stay. This cannot be undone.",
+                btn("wipe-library", "Delete all…", false, true, {
+                    let state = state.clone();
+                    move |window, cx| {
+                        let answer = window.prompt(
+                            PromptLevel::Warning,
+                            "Delete all snips?",
+                            Some(
+                                "Removes every snip and the local database. Settings and shortcuts stay. This cannot be undone.",
+                            ),
+                            &["Cancel", "Delete all"],
+                            cx,
+                        );
+                        let state = state.clone();
+                        cx.spawn(async move |cx| {
+                            if answer.await == Ok(1) {
+                                let _ = state.update(cx, |s, cx| s.wipe_library(cx));
+                            }
+                        })
+                        .detach();
+                    }
+                }),
+            )
+            .into_any_element()],
         ))
 }
 

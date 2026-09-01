@@ -49,6 +49,7 @@ macro_rules! bundled {
 
 const BUNDLED: &[(&str, &[u8])] = bundled![
     "icon.svg",
+    "icons/library.svg",
     "icons/snip.svg",
     "icons/upload.svg",
     "icons/paste.svg",
@@ -214,6 +215,7 @@ mod tests {
     #[test]
     fn toolbar_icon_files_are_embedded_and_hidpi() {
         for path in [
+            "icons/library.svg",
             "icons/snip.svg",
             "icons/upload.svg",
             "icons/paste.svg",

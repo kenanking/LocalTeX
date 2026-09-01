@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use super::chrome::chrome;
+use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
@@ -22,8 +22,9 @@ use super::source_editor::SourceEditor;
 use super::theme;
 use super::window_drag::{WindowDrag, WindowDragCatcher};
 use crate::actions::{
-    Capture, CloseSheet, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp,
-    RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource, UploadImage,
+    Capture, CloseSheet, CloseWindow, CopyExport, DeleteSelected, OpenDocx, OpenSettings,
+    PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource,
+    UploadImage,
 };
 use crate::cache::MediaCache;
 use crate::doc::DocStatus;
@@ -116,6 +117,7 @@ pub struct MainWindow {
     pub(crate) orig_strip: OrigStrip,
     pub(crate) preview: PreviewPane,
     pub(crate) window_drag: Option<WindowDrag>,
+    pub(crate) caption_pending_move: Rc<Cell<bool>>,
     pub(crate) history: HistoryPane,
     pub(crate) source_open: bool,
     pub(crate) source: Entity<SourceEditor>,
@@ -134,6 +136,8 @@ impl MainWindow {
         let orig_focus = cx.focus_handle();
         let draw_focus = cx.focus_handle();
         window.focus(&snip_list_focus, cx);
+        #[cfg(target_os = "linux")]
+        window.set_client_inset(px(0.));
         let state_for_close = state.clone();
         window.on_window_should_close(cx, move |window, cx| {
             let action = state_for_close.read(cx).prefs.close_action;
@@ -246,6 +250,7 @@ impl MainWindow {
             orig_strip: OrigStrip::new(),
             preview: PreviewPane::new(),
             window_drag: None,
+            caption_pending_move: Rc::new(Cell::new(false)),
             history,
             source_open: false,
             source,
@@ -390,7 +395,10 @@ impl MainWindow {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
             return;
         }
-        self.state.update(cx, |state, cx| state.copy_selected(cx));
+        let copied = self.state.update(cx, |state, cx| state.copy_selected(cx));
+        if let Some((id, kind)) = copied {
+            self.flash_copied(id, kind, cx);
+        }
     }
 
     pub(crate) fn flash_copied(&mut self, doc_id: Uuid, kind: CopyKind, cx: &mut Context<Self>) {
@@ -583,6 +591,11 @@ impl MainWindow {
 
     fn quit(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
+    }
+
+    fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        let action = self.state.read(cx).prefs.close_action;
+        AppState::handle_main_close(action, window, cx);
     }
 
     pub(crate) fn full(&self, id: Uuid) -> Option<Arc<RenderImage>> {
@@ -782,13 +795,13 @@ impl MainWindow {
     ) {
         match self.window_drag {
             Some(WindowDrag::Strip { .. }) => {
-                let win_h: f32 = window.bounds().size.height.into();
+                let workspace_h = workspace_height(window.viewport_size().height.into());
                 let ready = self
                     .state
                     .read(cx)
                     .selected_doc()
                     .is_some_and(|d| matches!(d.status, DocStatus::Ready));
-                let max_h = max_strip_h(win_h, copy_reserve(ready));
+                let max_h = max_strip_h(workspace_h, copy_reserve(ready));
                 let Some(drag) = self.window_drag.as_ref() else {
                     return;
                 };
@@ -883,13 +896,14 @@ impl gpui::Render for MainWindow {
             });
         }
         let history = self.render_history(n_docs, cx);
+        let viewport = window.viewport_size();
         let copy_pane_w = {
             let sidebar = self.current_sidebar_width(has_docs, cx);
-            let win_w: f32 = window.bounds().size.width.into();
+            let win_w: f32 = viewport.width.into();
             (win_w - sidebar - 32.).max(112.)
         };
-        let win_h: f32 = window.bounds().size.height.into();
-        let detail = self.render_detail(capturing, copy_pane_w, win_h, cx);
+        let workspace_h = workspace_height(viewport.height.into());
+        let detail = self.render_detail(capturing, copy_pane_w, workspace_h, cx);
         let orig_open = self.orig.open;
         if orig_open && !self.orig_focus.is_focused(window) {
             cx.on_next_frame(window, |this, window, cx| {
@@ -933,6 +947,7 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::retry))
             .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::quit))
+            .on_action(cx.listener(Self::close_window))
             .cursor(CursorStyle::Arrow)
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
                 if this.orig.has_pointer() && !ev.dragging() {
@@ -969,7 +984,7 @@ impl gpui::Render for MainWindow {
                 cx.entity_id(),
             ))
             .child(WindowDragCatcher { view: cx.entity() })
-            .child(self.render_topbar(capturing, has_selected, can_open_docx, cx))
+            .child(self.render_topbar(capturing, has_selected, can_open_docx, window, cx))
             .child(
                 div()
                     .relative()
@@ -980,7 +995,9 @@ impl gpui::Render for MainWindow {
                     .when(matches!(view, View::Library), |d| {
                         d.when(has_docs, |d| d.child(history))
                             .child(detail)
-                            .when(orig_open, |d| d.child(self.render_orig_overlay(window, cx)))
+                            .when(orig_open, |d| {
+                                d.child(self.render_orig_overlay(window, workspace_h, cx))
+                            })
                     })
                     .when(matches!(view, View::Draw), |d| {
                         d.child(self.render_draw(cx))
@@ -994,6 +1011,6 @@ impl gpui::Render for MainWindow {
                     }),
             )
             .child(self.render_footer(status_kind, status_label))
-            .into_any_element()
+            .map(|content| super::chrome::client_frame(content, window))
     }
 }

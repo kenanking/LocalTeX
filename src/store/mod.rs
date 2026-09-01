@@ -264,6 +264,19 @@ impl Store {
         Ok(())
     }
 
+    pub fn wipe(&self) -> Result<()> {
+        {
+            let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
+            conn.execute("DELETE FROM snips", [])?;
+        }
+        let snips = self.root.join("snips");
+        if snips.exists() {
+            std::fs::remove_dir_all(&snips).with_context(|| "remove snips dir")?;
+        }
+        std::fs::create_dir_all(&snips).with_context(|| "create snips dir")?;
+        Ok(())
+    }
+
     fn ink_path(&self, id: Uuid) -> PathBuf {
         self.root.join(format!("snips/{id}.ink.json"))
     }
@@ -517,6 +530,23 @@ mod tests {
             .query_ids("frac", DateRange::default())
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn wipe_clears_rows_and_png_and_is_idempotent() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("hello", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        let png = root.join(format!("snips/{id}.png"));
+        assert!(png.is_file());
+        store.wipe().unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(!png.exists());
+        assert!(root.join("snips").is_dir());
+        store.wipe().unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(root.join("snips").is_dir());
     }
 
     #[test]

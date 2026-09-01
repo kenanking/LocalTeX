@@ -129,6 +129,7 @@ impl AppState {
     pub fn handle_main_close(action: WindowCloseAction, window: &mut Window, cx: &mut App) -> bool {
         match action {
             WindowCloseAction::Minimize => {
+                crate::desktop::iconify_main_window();
                 window.minimize_window();
                 false
             }
@@ -141,11 +142,6 @@ impl AppState {
                 true
             }
         }
-    }
-
-    pub fn set_format(&mut self, fmt: ExportFmt, cx: &mut Context<Self>) {
-        self.export_fmt = fmt;
-        cx.notify();
     }
 
     pub fn engine_status(&self) -> crate::ocr::EngineStatus {
@@ -209,7 +205,17 @@ impl AppState {
     fn handle_desktop(&mut self, cmd: DesktopCmd, cx: &mut Context<Self>) {
         match cmd {
             DesktopCmd::Capture => self.request_capture(cx),
-            DesktopCmd::Show => self.restore_main(cx),
+            DesktopCmd::Show => {
+                let active = self
+                    .main_window
+                    .and_then(|handle| handle.is_active(cx))
+                    .unwrap_or(false);
+                if active {
+                    self.iconify_main(cx);
+                } else {
+                    self.restore_main(cx);
+                }
+            }
             DesktopCmd::Quit => cx.quit(),
         }
     }

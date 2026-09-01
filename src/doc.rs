@@ -26,13 +26,6 @@ pub enum ExportFmt {
 }
 
 impl ExportFmt {
-    pub fn label(self) -> &'static str {
-        match self {
-            ExportFmt::Markdown => "Markdown",
-            ExportFmt::Latex => "LaTeX",
-        }
-    }
-
     pub fn toggle(self) -> Self {
         match self {
             ExportFmt::Markdown => ExportFmt::Latex,

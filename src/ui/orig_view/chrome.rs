@@ -76,6 +76,39 @@ pub(crate) fn source_hud_disc(
         )
 }
 
+/// Outlined 24px disc, sits outside the source HUD pill (Done).
+pub(crate) fn source_done_disc(
+    id: impl Into<SharedString>,
+    icon: IconKind,
+    tooltip: &'static str,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl gpui::IntoElement {
+    div()
+        .id(id.into())
+        .size(px(24.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(theme::BG_RAISED))
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .tooltip(Tooltip::text(tooltip))
+        .on_click(on_click)
+        .hover(|d| {
+            d.bg(rgb(theme::ACCENT_SOFT_FILL))
+                .border_color(rgb(theme::ACCENT_BORDER))
+        })
+        .child(
+            svg()
+                .path(icon.asset_path())
+                .size(px(13.))
+                .text_color(rgb(theme::TEXT)),
+        )
+}
+
 pub(crate) fn source_hud_bar() -> gpui::Div {
     div()
         .h(px(24.))

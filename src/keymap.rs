@@ -85,7 +85,7 @@ pub const CATALOG: &[Spec] = &[
         id: ShortcutId::Capture,
         group: Group::Capture,
         label: "Create snip from screenshot",
-        default: "ctrl-shift-s",
+        default: "ctrl-alt-m",
         context: None,
         required: false,
         os: Some(GlobalCmd::Capture),
@@ -93,8 +93,8 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Show,
         group: Group::Window,
-        label: "Show main window",
-        default: "ctrl-shift-a",
+        label: "Toggle main window",
+        default: "ctrl-alt-l",
         context: None,
         required: false,
         os: Some(GlobalCmd::Show),
@@ -129,7 +129,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Copy,
         group: Group::Document,
-        label: "Copy primary format",
+        label: "Copy last format",
         default: "ctrl-c",
         context: None,
         required: true,
@@ -304,8 +304,8 @@ pub fn to_global_hotkey(chord: &str) -> Option<HotKey> {
 
 pub fn apply(cx: &mut App, over: &Overrides) {
     use crate::actions::{
-        CloseSheet, DrawEraser, DrawPen, DrawRedo, DrawUndo, QuitApp, RetryOcr, SelectNext,
-        SelectPrev, ToggleSource,
+        CloseSheet, CloseWindow, DrawEraser, DrawPen, DrawRedo, DrawUndo, QuitApp, RetryOcr,
+        SelectNext, SelectPrev, ToggleSource,
     };
     cx.clear_key_bindings();
     cx.bind_keys([
@@ -326,6 +326,7 @@ pub fn apply(cx: &mut App, over: &Overrides) {
         KeyBinding::new("ctrl-r", RetryOcr, None),
         KeyBinding::new("ctrl-e", ToggleSource, None),
         KeyBinding::new("ctrl-q", QuitApp, None),
+        KeyBinding::new("ctrl-w", CloseWindow, None),
     ]);
     cx.bind_keys([
         KeyBinding::new("1", DrawPen, Some("DrawBoard")),
@@ -433,7 +434,11 @@ mod tests {
         let over = Overrides::new();
         assert_eq!(
             effective(&over, ShortcutId::Capture).as_deref(),
-            Some("ctrl-shift-s")
+            Some("ctrl-alt-m")
+        );
+        assert_eq!(
+            effective(&over, ShortcutId::Show).as_deref(),
+            Some("ctrl-alt-l")
         );
         assert!(!is_customized(&over, ShortcutId::Capture));
     }
@@ -556,8 +561,8 @@ mod tests {
                 .map(|(id, chord, cmd)| (*id, chord.as_str(), *cmd))
                 .collect::<Vec<_>>(),
             vec![
-                (ShortcutId::Capture, "ctrl-shift-s", GlobalCmd::Capture),
-                (ShortcutId::Show, "ctrl-shift-a", GlobalCmd::Show),
+                (ShortcutId::Capture, "ctrl-alt-m", GlobalCmd::Capture),
+                (ShortcutId::Show, "ctrl-alt-l", GlobalCmd::Show),
             ]
         );
     }
@@ -570,10 +575,15 @@ mod tests {
                 assert!(matches!(cmd, GlobalCmd::Capture | GlobalCmd::Show));
             }
         }
-        assert_eq!(spec(ShortcutId::Show).default, "ctrl-shift-a");
+        assert_eq!(spec(ShortcutId::Show).default, "ctrl-alt-l");
         assert_eq!(spec(ShortcutId::Show).group, Group::Window);
         let id: ShortcutId = serde_json::from_str("\"show\"").unwrap();
         assert_eq!(id, ShortcutId::Show);
         assert_eq!(id.as_str(), "show");
+    }
+
+    #[test]
+    fn catalog_does_not_advertise_ctrl_w() {
+        assert!(CATALOG.iter().all(|s| s.default != "ctrl-w"));
     }
 }

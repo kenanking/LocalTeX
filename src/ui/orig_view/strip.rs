@@ -11,8 +11,6 @@ use super::super::theme;
 use super::super::widgets::{missing_image_slot, IconKind};
 use super::super::window_drag::WindowDrag;
 use super::chrome::{orig_action_capsule, orig_hud_disc};
-use super::geom::{FOOTER_H, TOPBAR_H};
-
 pub const STRIP_MIN: f32 = 64.0;
 pub const STRIP_DEFAULT: f32 = 96.0;
 pub const STRIP_AUTO_CAP: f32 = 280.0;
@@ -286,8 +284,8 @@ pub fn clamp_strip_h(h: f32, max_h: f32) -> f32 {
     h.clamp(lo, hi)
 }
 
-pub fn max_strip_h(win_h: f32, copy_h: f32) -> f32 {
-    (win_h - TOPBAR_H - FOOTER_H - copy_h - STRIP_MIN_PREVIEW - 24.0).max(STRIP_MIN)
+pub fn max_strip_h(workspace_h: f32, copy_h: f32) -> f32 {
+    (workspace_h - copy_h - STRIP_MIN_PREVIEW - 24.0).max(STRIP_MIN)
 }
 
 #[cfg(test)]
@@ -357,6 +355,11 @@ mod tests {
     fn max_strip_h_uses_copy_reserve_constant() {
         assert_eq!(max_strip_h(200.0, copy_reserve(true)), STRIP_MIN);
         assert!(max_strip_h(200.0, copy_reserve(true)) >= STRIP_MIN);
+    }
+
+    #[test]
+    fn max_strip_h_uses_workspace_budget() {
+        assert_eq!(max_strip_h(456.0, copy_reserve(true)), 280.0);
     }
 
     #[test]

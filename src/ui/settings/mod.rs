@@ -249,7 +249,7 @@ impl SettingsPane {
                                         ))
                                     })
                                     .when(tab == SettingsTab::System, |d| {
-                                        d.child(system_page(&self.sys_snap))
+                                        d.child(system_page(state.clone(), &self.sys_snap))
                                     }),
                             ),
                     )

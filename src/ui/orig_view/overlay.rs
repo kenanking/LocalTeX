@@ -11,7 +11,7 @@ use super::super::widgets::IconKind;
 use super::chrome::{hud_pill, orig_action_capsule, orig_hud_disc};
 use super::geom::{
     film_content_w, film_pan_offset, zoom_factor_for_wheel, zoom_percent, FILM_GAP, FILM_H,
-    FILM_PAD_X, FILM_THUMB_H, FILM_THUMB_W, FOOTER_H, TOPBAR_H, ZOOM_PILL_W,
+    FILM_PAD_X, FILM_THUMB_H, FILM_THUMB_W, ZOOM_PILL_W,
 };
 use crate::doc::ImageSlot;
 
@@ -19,6 +19,7 @@ impl MainWindow {
     pub(crate) fn render_orig_overlay(
         &mut self,
         window: &Window,
+        workspace_h: f32,
         cx: &mut Context<Self>,
     ) -> impl gpui::IntoElement {
         self.ensure_selected_full(cx);
@@ -49,10 +50,9 @@ impl MainWindow {
             self.orig
                 .apply_image_size(u32::from(s.width) as f32, u32::from(s.height) as f32);
         }
-        let win_w: f32 = window.bounds().size.width.into();
-        let win_h: f32 = window.bounds().size.height.into();
+        let viewport_w: f32 = window.viewport_size().width.into();
         self.orig
-            .seed_stage_if_empty(win_w, (win_h - TOPBAR_H - FOOTER_H - FILM_H).max(1.0));
+            .seed_stage_if_empty(viewport_w, (workspace_h - FILM_H).max(1.0));
         let n = ids.len();
         let at_start = !idx.is_some_and(|i| i > 0);
         let at_end = !idx.is_some_and(|i| i + 1 < n);

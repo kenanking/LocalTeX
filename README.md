@@ -2,7 +2,7 @@
 
 Offline screenshot OCR for papers and notes: snip the screen, get Markdown or LaTeX. Built with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) (the UI toolkit from [Zed](https://github.com/zed-industries/zed)).
 
-- Global hotkey **Ctrl+Shift+S** (also **Snip** in the window, or the tray)
+- Global hotkey **Ctrl+Alt+M** to snip (also **Snip** in the window, or the tray); **Ctrl+Alt+L** toggles the main window
 - Drag-select overlay, click or Esc to cancel
 - Mixed **text + formula** document model; Markdown / LaTeX export and copy
 - Local **PP-DocLayoutV2** layout + **UniRec-0.1B** recognition (text, formulas, tables; statically linked ONNX Runtime). Formula preview via RaTeX
@@ -30,8 +30,8 @@ To package from a checkout, run `./scripts/bundle-linux.sh` or `.\scripts\bundle
 
 | Target | Capture | Snip UI | Hotkey | Tray | Notes |
 |---|---|---|---|---|---|
-| **Linux X11** | xcap | override-redirect freeze-frame | Ctrl+Shift+S | StatusNotifier (`ksni`) | Current product |
-| **Windows** | xcap (WGC) | per-monitor Win32 freeze-frame | Ctrl+Shift+S (UI thread) | `tray-icon` | Dual-monitor / mixed DPI: overlay per display |
+| **Linux X11** | xcap | override-redirect freeze-frame | Ctrl+Alt+M | StatusNotifier (`ksni`) | Current product |
+| **Windows** | xcap (WGC) | per-monitor Win32 freeze-frame | Ctrl+Alt+M (UI thread) | `tray-icon` | Dual-monitor / mixed DPI: overlay per display |
 | **macOS** | xcap | not implemented yet | same as Windows | `tray-icon` | Compiles; no dedicated QA yet |
 | **Linux Wayland** | — | — | — | — | Not supported |
 
@@ -77,7 +77,7 @@ From a graphical session:
 ./target/release/localtex
 ```
 
-Hotkey **Ctrl+Shift+S** starts a capture. Overlay: drag to confirm; click or Esc cancels.
+Hotkey **Ctrl+Alt+M** starts a capture. Overlay: drag to confirm; click or Esc cancels. **Ctrl+Alt+L** toggles the main window.
 
 ## Layout
 

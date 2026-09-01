@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::orig_view::{
-    clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_hud_bar, source_hud_disc,
-    source_hud_sep, OrigStripFrame,
+    clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_done_disc, source_hud_bar,
+    source_hud_disc, source_hud_sep, OrigStripFrame,
 };
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
 use super::theme;
@@ -15,6 +15,7 @@ use super::widgets::{btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, Icon
 use super::window_drag::WindowDrag;
 use crate::doc::{DocStatus, ImageSlot, OcrMeta};
 use crate::export::{CopyKind, CopyRow};
+use crate::keymap::{self, ShortcutId};
 use crate::state::AppState;
 
 impl MainWindow {
@@ -22,7 +23,7 @@ impl MainWindow {
         &mut self,
         capturing: bool,
         copy_pane_w: f32,
-        win_h: f32,
+        workspace_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if self.orig_strip.bind_doc(self.state.read(cx).selected())
@@ -33,7 +34,9 @@ impl MainWindow {
         let snap = {
             let state = self.state.read(cx);
             let Some(doc) = state.selected_doc() else {
-                return empty_state(self.state.clone(), capturing);
+                let capture_chord = keymap::effective(&state.prefs.shortcuts, ShortcutId::Capture)
+                    .map(|c| keymap::chips(&c).join("+"));
+                return empty_state(self.state.clone(), capturing, capture_chord);
             };
             DetailSnap {
                 id: doc.id,
@@ -96,7 +99,7 @@ impl MainWindow {
             })
             .unwrap_or((0.0, 0.0));
         let copy_h = copy_reserve(ready);
-        let max_h = max_strip_h(win_h, copy_h);
+        let max_h = max_strip_h(workspace_h, copy_h);
         let strip_h = clamp_strip_h(snap.orig_strip_h, max_h);
         let orig = self.render_orig_strip(
             OrigStripFrame {
@@ -299,9 +302,11 @@ impl MainWindow {
                     .right_0()
                     .flex()
                     .justify_center()
+                    .items_center()
+                    .gap(px(6.))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         source_hud_bar()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
                                 div()
                                     .px_1()
@@ -310,19 +315,6 @@ impl MainWindow {
                                     .child(lang),
                             )
                             .child(source_hud_sep())
-                            .child(source_hud_disc(
-                                "src-hide",
-                                IconKind::Collapse,
-                                "Collapse",
-                                {
-                                    let entity = entity.clone();
-                                    move |_, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.set_source_open(false, window, cx);
-                                        });
-                                    }
-                                },
-                            ))
                             .child(div().opacity(if edited { 1. } else { 0.38 }).child(
                                 source_hud_disc("src-revert", IconKind::Reset, "Revert OCR", {
                                     let entity = entity.clone();
@@ -358,7 +350,15 @@ impl MainWindow {
                                     }
                                 }),
                             )),
-                    ),
+                    )
+                    .child(source_done_disc("src-hide", IconKind::Check, "Done", {
+                        let entity = entity.clone();
+                        move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.set_source_open(false, window, cx);
+                            });
+                        }
+                    })),
             )
     }
 
@@ -475,7 +475,11 @@ struct DetailSnap {
     ready: bool,
 }
 
-fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
+fn empty_state(
+    state: Entity<AppState>,
+    capturing: bool,
+    capture_chord: Option<String>,
+) -> gpui::Div {
     div()
         .flex_1()
         .flex()
@@ -515,7 +519,7 @@ fn empty_state(state: Entity<AppState>, capturing: bool) -> gpui::Div {
                         state.update(cx, |s, cx| s.request_capture(cx));
                     }
                 }))
-                .child(kbd_chip("Ctrl+Shift+S")),
+                .children(capture_chord.map(kbd_chip)),
         )
         .child(
             div()

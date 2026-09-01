@@ -35,7 +35,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                     &state,
                     "pref-copy",
                     "Copy result automatically",
-                    "Copies the last text format you used for this kind of snip, or the primary format.",
+                    "Copies the last text format you used for this kind of snip.",
                     prefs.autocopy,
                     |p, v| p.autocopy = v,
                 ),
@@ -47,7 +47,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                 &state,
                 "pref-close-min",
                 "Minimize on close",
-                "Keeps the tray, Ctrl+Shift+S, and Ctrl+Shift+A. Off quits; Ctrl+Q always quits.",
+                "Keeps the tray and global hotkeys. Off quits; Ctrl+Q always quits.",
                 prefs.close_action == WindowCloseAction::Minimize,
                 |p, v| {
                     p.close_action = if v {

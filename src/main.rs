@@ -27,6 +27,8 @@ mod sysmon;
 mod table;
 mod ui;
 
+#[cfg(target_os = "linux")]
+use gpui::WindowDecorations;
 use gpui::{
     px, size, App, AppContext, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
 };
@@ -62,6 +64,10 @@ fn main() {
                         app_id: Some(APP_ID.into()),
                         window_min_size: Some(size(px(520.), px(400.))),
                         window_background: gpui::WindowBackgroundAppearance::Opaque,
+                        // GNOME leaves server-decorated X11 clients unmapped when
+                        // its mutter-x11-frames helper dies. Own the Linux frame.
+                        #[cfg(target_os = "linux")]
+                        window_decorations: Some(WindowDecorations::Client),
                         ..Default::default()
                     },
                     {

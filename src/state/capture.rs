@@ -198,6 +198,10 @@ impl AppState {
 
     fn hide_main(&mut self, cx: &mut Context<Self>) {
         self.capture.push_hide();
+        self.iconify_main(cx);
+    }
+
+    pub(super) fn iconify_main(&mut self, cx: &mut Context<Self>) {
         // EWMH HIDDEN does not nest `handle.update` (in-app Snip runs while the
         // main window is already on GPUI's update stack).
         crate::desktop::iconify_main_window();

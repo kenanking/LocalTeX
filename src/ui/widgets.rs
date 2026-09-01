@@ -51,6 +51,7 @@ impl Render for Tooltip {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
+    Library,
     Snip,
     Upload,
     Paste,
@@ -75,6 +76,7 @@ pub enum IconKind {
 impl IconKind {
     pub fn asset_path(self) -> &'static str {
         match self {
+            Self::Library => "icons/library.svg",
             Self::Snip => "icons/snip.svg",
             Self::Upload => "icons/upload.svg",
             Self::Paste => "icons/paste.svg",
@@ -98,7 +100,8 @@ impl IconKind {
     }
 
     #[cfg(test)]
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
+        Self::Library,
         Self::Snip,
         Self::Upload,
         Self::Paste,

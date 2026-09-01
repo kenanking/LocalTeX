@@ -229,18 +229,18 @@ impl AppState {
         }
     }
 
-    pub fn copy_selected(&mut self, cx: &mut App) {
-        let Some(doc) = self.selected_doc() else {
-            return;
-        };
+    pub fn copy_selected(&mut self, cx: &mut App) -> Option<(Uuid, CopyKind)> {
+        let doc = self.selected_doc()?;
+        let id = doc.id;
         let snip = doc.snip_kind();
         let kind = self.prefs.copy_habit.resolve(snip, self.export_fmt);
         let text = doc.text_for(kind, &self.prefs);
         if text.is_empty() {
-            return;
+            return None;
         }
         Self::write_clipboard(text, cx);
         self.record_copy_habit(snip, kind);
+        Some((id, kind))
     }
 
     pub fn copy_chip(&mut self, kind: CopyKind, cx: &mut App) {
@@ -325,6 +325,26 @@ impl AppState {
             self.ensure_detail(id, cx);
         }
         self.pump_ocr(cx);
+        cx.notify();
+    }
+
+    pub fn wipe_library(&mut self, cx: &mut Context<Self>) {
+        self.ingest.ocr.cancel_remaining();
+        if let Some(id) = self.ingest.ocr.running() {
+            self.ingest.ocr.remove(id);
+        }
+        self.ingest.file_queue.clear();
+        self.ingest.thumb_inflight.clear();
+        self.search.bump();
+        self.library.clear();
+        if let Some(store) = self.store.clone() {
+            cx.background_spawn(async move {
+                if let Err(err) = store.wipe() {
+                    eprintln!("{APP_SLUG}: wipe library: {err}");
+                }
+            })
+            .detach();
+        }
         cx.notify();
     }
 

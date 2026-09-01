@@ -16,9 +16,6 @@ pub(crate) fn zoom_factor_for_wheel(dy: f32) -> f32 {
     }
 }
 
-/// Must match `MainWindow` chrome; used only to seed the first overlay frame.
-pub(crate) const TOPBAR_H: f32 = 44.0;
-pub(crate) const FOOTER_H: f32 = 28.0;
 pub(crate) const FILM_H: f32 = 72.0;
 pub(crate) const FILM_THUMB_W: f32 = 88.0;
 pub(crate) const FILM_THUMB_H: f32 = 56.0;

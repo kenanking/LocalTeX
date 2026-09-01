@@ -213,6 +213,14 @@ impl Library {
         self.date_preset = preset;
         true
     }
+
+    pub fn clear(&mut self) {
+        self.docs.clear();
+        self.order.clear();
+        self.visible_ids.clear();
+        self.selected = None;
+        self.loaded_lru.clear();
+    }
 }
 
 pub fn merge_visible(inflight_hits: Vec<Uuid>, mut persisted: Vec<Uuid>) -> Vec<Uuid> {
@@ -300,5 +308,17 @@ mod tests {
         let c = Uuid::new_v4();
         let out = merge_visible(vec![a], vec![a, b, c]);
         assert_eq!(out, vec![a, b, c]);
+    }
+
+    #[test]
+    fn clear_resets_docs_and_keeps_date_preset() {
+        let mut lib = Library::new();
+        lib.set_date_preset(DatePreset::Last7Days);
+        lib.insert_newest(Document::pending(Arc::new(RgbaImage::new(4, 4))));
+        lib.clear();
+        assert!(lib.is_empty());
+        assert_eq!(lib.selected(), None);
+        assert!(lib.visible_ids.is_empty());
+        assert_eq!(lib.date_preset(), DatePreset::Last7Days);
     }
 }

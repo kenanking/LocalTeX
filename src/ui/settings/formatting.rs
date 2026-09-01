@@ -2,7 +2,6 @@ use gpui::{div, prelude::*, Entity};
 
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{patch_prefs, picker};
-use crate::doc::ExportFmt;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs};
 use crate::state::AppState;
 
@@ -13,47 +12,6 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
         .gap_4()
         .w_full()
         .min_w_0()
-        .child(settings_group(
-            "Export",
-            vec![setting_row(
-                "Primary format",
-                "Fallback for Ctrl+C and auto-copy when you have not picked a format for this kind of snip. Extra formats stay available on each snip.",
-                picker(
-                    150.,
-                    [
-                        seg_item(
-                            "pref-md",
-                            ExportFmt::Markdown.label(),
-                            prefs.default_fmt == ExportFmt::Markdown,
-                            {
-                                let state = state.clone();
-                                move |_, cx| {
-                                    state.update(cx, |s, cx| {
-                                        s.update_prefs(cx, |p| p.default_fmt = ExportFmt::Markdown);
-                                        s.set_format(ExportFmt::Markdown, cx);
-                                    });
-                                }
-                            },
-                        ),
-                        seg_item(
-                            "pref-tex",
-                            ExportFmt::Latex.label(),
-                            prefs.default_fmt == ExportFmt::Latex,
-                            {
-                                let state = state.clone();
-                                move |_, cx| {
-                                    state.update(cx, |s, cx| {
-                                        s.update_prefs(cx, |p| p.default_fmt = ExportFmt::Latex);
-                                        s.set_format(ExportFmt::Latex, cx);
-                                    });
-                                }
-                            },
-                        ),
-                    ],
-                ),
-            )
-            .into_any_element()],
-        ))
         .child(settings_group(
             "Math delimiters",
             vec![
