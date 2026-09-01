@@ -30,6 +30,8 @@ pub(crate) struct DrawBoard {
     redo: Vec<Vec<Vec<StrokePt>>>,
     gesture_before: Option<Vec<Vec<StrokePt>>>,
     pub(crate) hover: Option<Point<Pixels>>,
+    pad_hovered: bool,
+    dock_hovered: bool,
 }
 
 impl DrawBoard {
@@ -44,6 +46,8 @@ impl DrawBoard {
             redo: Vec::new(),
             gesture_before: None,
             hover: None,
+            pad_hovered: false,
+            dock_hovered: false,
         }
     }
 
@@ -72,6 +76,34 @@ impl DrawBoard {
         self.paper = paper;
     }
 
+    pub(crate) fn set_pad_hovered(&mut self, hovered: bool) {
+        self.pad_hovered = hovered;
+        if !hovered {
+            self.hover = None;
+            self.dock_hovered = false;
+        }
+    }
+
+    pub(crate) fn set_dock_hovered(&mut self, hovered: bool) {
+        self.dock_hovered = hovered;
+    }
+
+    pub(crate) fn leave_canvas(&mut self) {
+        self.set_pad_hovered(false);
+    }
+
+    /// Hide the OS pointer so the painted eraser ring is the only cursor.
+    pub(crate) fn os_cursor_hidden(&self) -> bool {
+        self.tool == DrawTool::Eraser && self.pad_hovered && !self.dock_hovered
+    }
+
+    pub(crate) fn eraser_ring(&self) -> Option<Point<Pixels>> {
+        if self.tool != DrawTool::Eraser || self.dock_hovered {
+            return None;
+        }
+        self.hover
+    }
+
     pub(crate) fn begin_gesture(&mut self) {
         self.gesture_before = Some(self.lines.clone());
     }
@@ -89,6 +121,7 @@ impl DrawBoard {
 
     pub(crate) fn pointer_down(&mut self, pos: Point<Pixels>) {
         self.hover = Some(pos);
+        self.pad_hovered = true;
         self.begin_gesture();
         self.painting = true;
         self.apply_tool(pos, true);
@@ -96,6 +129,7 @@ impl DrawBoard {
 
     pub(crate) fn pointer_move(&mut self, pos: Point<Pixels>) -> bool {
         self.hover = Some(pos);
+        self.pad_hovered = true;
         if self.painting {
             self.apply_tool(pos, false);
             return true;
@@ -226,5 +260,27 @@ mod tests {
         assert!(!b.has_ink());
         assert_eq!(b.tool, DrawTool::Eraser);
         assert_eq!(b.paper, DrawPaper::Lines);
+    }
+
+    #[test]
+    fn eraser_hides_os_cursor_only_on_pad() {
+        let mut b = DrawBoard::new();
+        assert!(!b.os_cursor_hidden());
+        b.set_tool(DrawTool::Eraser);
+        assert!(!b.os_cursor_hidden());
+        let _ = b.pointer_move(point(px(8.0), px(8.0)));
+        assert!(b.os_cursor_hidden());
+        assert!(b.eraser_ring().is_some());
+        b.set_dock_hovered(true);
+        assert!(!b.os_cursor_hidden());
+        assert!(b.eraser_ring().is_none());
+        b.set_dock_hovered(false);
+        assert!(b.os_cursor_hidden());
+        b.set_tool(DrawTool::Pen);
+        assert!(!b.os_cursor_hidden());
+        b.set_tool(DrawTool::Eraser);
+        b.leave_canvas();
+        assert!(!b.os_cursor_hidden());
+        assert!(b.hover.is_none());
     }
 }

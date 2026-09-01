@@ -285,6 +285,21 @@ pub fn prepare_snip_input() {
     win::prepare_snip_input();
 }
 
+/// Hide or show the OS pointer over the GPUI window. Used by the draw-board
+/// eraser so the painted ring is the only cursor. Idempotent.
+pub fn set_os_cursor_visible(visible: bool) {
+    #[cfg(target_os = "linux")]
+    linux::set_os_cursor_visible(visible);
+    #[cfg(target_os = "windows")]
+    win::set_os_cursor_visible(visible);
+}
+
+/// Re-apply the blank X cursor after GPUI's `reset_cursor_style` (Arrow).
+pub fn reassert_hidden_os_cursor() {
+    #[cfg(target_os = "linux")]
+    linux::reassert_hidden_os_cursor();
+}
+
 #[cfg(test)]
 mod clipboard_decode_tests {
     use super::decode_clipboard_image;

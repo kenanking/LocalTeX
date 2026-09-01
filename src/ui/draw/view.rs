@@ -32,25 +32,28 @@ impl MainWindow {
         let can_undo = self.board.can_undo();
         let can_redo = self.board.can_redo();
         let has_ink = self.board.has_ink();
+        // Eraser has no GPUI hidden-cursor style (None was dropped). Arrow is
+        // the fallback if the OS hide fails; the pad hides the pointer and
+        // paints the ring as the cursor.
         let cursor = match tool {
             DrawTool::Pen => CursorStyle::Crosshair,
             DrawTool::Eraser => CursorStyle::Arrow,
         };
-        let eraser_at = (tool == DrawTool::Eraser)
-            .then_some(self.board.hover)
-            .flatten();
+        let eraser_at = self.board.eraser_ring();
         let draw_focus = self.draw_focus.clone();
 
         div()
             .id("draw")
             .track_focus(&draw_focus)
             .key_context("DrawBoard")
-            .on_action(cx.listener(|this, _: &DrawPen, _, cx| {
+            .on_action(cx.listener(|this, _: &DrawPen, window, cx| {
                 this.board.set_tool(DrawTool::Pen);
+                sync_eraser_os_cursor(&this.board, window, cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &DrawEraser, _, cx| {
+            .on_action(cx.listener(|this, _: &DrawEraser, window, cx| {
                 this.board.set_tool(DrawTool::Eraser);
+                sync_eraser_os_cursor(&this.board, window, cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &DrawUndo, _, cx| {
@@ -100,6 +103,8 @@ impl MainWindow {
                             entity.update(cx, |this, cx| {
                                 let pts = this.board.traces();
                                 this.board.clear_ink();
+                                this.board.leave_canvas();
+                                crate::desktop::set_os_cursor_visible(true);
                                 this.view = View::Library;
                                 this.state.update(cx, |s, cx| {
                                     s.ingest(IngestSource::Strokes(pts), cx);
@@ -118,6 +123,7 @@ impl MainWindow {
                     .m_4()
                     .child(
                         div()
+                            .id("draw-pad")
                             .size_full()
                             .relative()
                             .rounded_md()
@@ -125,6 +131,11 @@ impl MainWindow {
                             .border_color(rgb(theme::BORDER))
                             .overflow_hidden()
                             .cursor(cursor)
+                            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                                this.board.set_pad_hovered(*hovered);
+                                sync_eraser_os_cursor(&this.board, window, cx);
+                                cx.notify();
+                            }))
                             .child(
                                 canvas(
                                     move |_, _, _| {},
@@ -156,16 +167,20 @@ impl MainWindow {
                             .child(draw_dock(tool, paper, can_undo, can_redo, cx))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                                     this.board.pointer_down(ev.position);
+                                    sync_eraser_os_cursor(&this.board, window, cx);
                                     cx.notify();
                                 }),
                             )
-                            .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
-                                if this.board.pointer_move(ev.position) {
-                                    cx.notify();
-                                }
-                            }))
+                            .on_mouse_move(cx.listener(
+                                |this, ev: &gpui::MouseMoveEvent, window, cx| {
+                                    if this.board.pointer_move(ev.position) {
+                                        sync_eraser_os_cursor(&this.board, window, cx);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .on_mouse_up(
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
@@ -213,12 +228,25 @@ fn paint_paper(bounds: Bounds<Pixels>, paper: DrawPaper, window: &mut gpui::Wind
     }
 }
 
+fn sync_eraser_os_cursor(
+    board: &crate::ui::draw::DrawBoard,
+    window: &mut gpui::Window,
+    cx: &mut Context<MainWindow>,
+) {
+    crate::desktop::set_os_cursor_visible(!board.os_cursor_hidden());
+    if board.os_cursor_hidden() {
+        cx.on_next_frame(window, |_, _, _| {
+            crate::desktop::reassert_hidden_os_cursor();
+        });
+    }
+}
+
 fn paint_eraser_ring(pos: Point<Pixels>, window: &mut gpui::Window) {
     let r = px(ERASER_RADIUS);
     let radii = point(r, r);
     let left = point(pos.x - r, pos.y);
     let right = point(pos.x + r, pos.y);
-    let mut builder = PathBuilder::stroke(px(1.2));
+    let mut builder = PathBuilder::stroke(px(1.6));
     builder.move_to(left);
     builder.arc_to(radii, px(0.), false, true, right);
     builder.arc_to(radii, px(0.), false, true, left);
@@ -251,6 +279,11 @@ fn draw_dock(
         .border_1()
         .border_color(rgb(theme::BORDER))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+            this.board.set_dock_hovered(*hovered);
+            sync_eraser_os_cursor(&this.board, window, cx);
+            cx.notify();
+        }))
         .child(icon_btn_kbd(
             "draw-pen",
             IconKind::Draw,
@@ -260,9 +293,10 @@ fn draw_dock(
             true,
             {
                 let entity = cx.entity();
-                move |_, cx| {
+                move |window, cx| {
                     entity.update(cx, |this, cx| {
                         this.board.set_tool(DrawTool::Pen);
+                        sync_eraser_os_cursor(&this.board, window, cx);
                         cx.notify();
                     });
                 }
@@ -277,9 +311,10 @@ fn draw_dock(
             true,
             {
                 let entity = cx.entity();
-                move |_, cx| {
+                move |window, cx| {
                     entity.update(cx, |this, cx| {
                         this.board.set_tool(DrawTool::Eraser);
+                        sync_eraser_os_cursor(&this.board, window, cx);
                         cx.notify();
                     });
                 }

@@ -1,6 +1,7 @@
 //! Windows window-manager helpers (hide-before-WGC). Overlay lives in
 //! `win_snip`; this file is the analogue of `linux.rs` hide/wait.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::core::BOOL;
@@ -9,7 +10,7 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, ClipCursor, EnumWindows, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, ASFW_ANY, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    IsIconic, IsWindowVisible, ShowCursor, ASFW_ANY, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 
 use crate::identity::APP_SLUG;
@@ -20,6 +21,19 @@ const WGC_SETTLE: Duration = Duration::from_millis(280);
 const ICONIFY_POLL: Duration = Duration::from_millis(8);
 const ICONIFY_DEADLINE: Duration = Duration::from_millis(700);
 const ICONIFY_FALLBACK: Duration = Duration::from_millis(280);
+
+static OS_CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+/// Process-wide ShowCursor counter. Idempotent.
+pub(crate) fn set_os_cursor_visible(visible: bool) {
+    let hide = !visible;
+    if OS_CURSOR_HIDDEN.swap(hide, Ordering::SeqCst) == hide {
+        return;
+    }
+    unsafe {
+        ShowCursor(BOOL::from(visible));
+    }
+}
 
 pub(crate) fn wait_until_main_iconified() {
     let started = Instant::now();

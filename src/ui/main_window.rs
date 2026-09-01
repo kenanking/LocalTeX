@@ -281,6 +281,10 @@ impl MainWindow {
     }
 
     fn open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.view, View::Draw) {
+            self.board.leave_canvas();
+            crate::desktop::set_os_cursor_visible(true);
+        }
         self.unzoom();
         self.view = if matches!(self.view, View::Settings) {
             self.settings.update(cx, |pane, _| pane.dismiss_listen());
@@ -312,6 +316,8 @@ impl MainWindow {
     }
 
     pub fn dismiss_sheet(&mut self, cx: &mut Context<Self>) {
+        self.board.leave_canvas();
+        crate::desktop::set_os_cursor_visible(true);
         let was_zoom = self.orig.open;
         self.unzoom();
         if matches!(self.view, View::Draw | View::Settings) {

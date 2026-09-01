@@ -1,6 +1,6 @@
 use gpui::{Pixels, Point};
 
-pub(crate) const ERASER_RADIUS: f32 = 4.0;
+pub(crate) const ERASER_RADIUS: f32 = 8.0;
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct StrokePt {
