@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 /// Window title, tray label, and user-facing product name.
 pub const APP_NAME: &str = "LocalTeX";
-/// Crate, binary, XDG slug, key-context, and log prefix. Must match `actions!`.
 pub const APP_SLUG: &str = "localtex";
 /// Freedesktop / GPUI application id.
 pub const APP_ID: &str = "com.localtex.app";
