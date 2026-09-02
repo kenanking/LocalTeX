@@ -425,6 +425,30 @@ fn gpui_key_to_code(key: &str) -> Option<Code> {
     Code::from_str(name).ok()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChordParts {
+    pub key: String,
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub platform: bool,
+}
+
+/// Split a catalog chord for OS matching. Requires at least one modifier.
+pub(crate) fn chord_parts(chord: &str) -> Option<ChordParts> {
+    let ks = Keystroke::parse(chord).ok()?;
+    if !(ks.modifiers.control || ks.modifiers.alt || ks.modifiers.shift || ks.modifiers.platform) {
+        return None;
+    }
+    Some(ChordParts {
+        key: ks.key,
+        control: ks.modifiers.control,
+        alt: ks.modifiers.alt,
+        shift: ks.modifiers.shift,
+        platform: ks.modifiers.platform,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +465,31 @@ mod tests {
             Some("ctrl-alt-l")
         );
         assert!(!is_customized(&over, ShortcutId::Capture));
+    }
+
+    #[test]
+    fn chord_parts_require_a_modifier() {
+        assert!(chord_parts("l").is_none());
+        assert_eq!(
+            chord_parts("ctrl-alt-l"),
+            Some(ChordParts {
+                key: "l".into(),
+                control: true,
+                alt: true,
+                shift: false,
+                platform: false,
+            })
+        );
+        assert_eq!(
+            chord_parts("ctrl-alt-m"),
+            Some(ChordParts {
+                key: "m".into(),
+                control: true,
+                alt: true,
+                shift: false,
+                platform: false,
+            })
+        );
     }
 
     #[test]

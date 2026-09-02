@@ -2,7 +2,9 @@ use std::path::Path;
 #[cfg(any(test, target_os = "linux"))]
 use std::path::PathBuf;
 
-use crate::identity::{APP_ID, APP_NAME};
+#[cfg(any(test, target_os = "linux"))]
+use crate::identity::APP_ID;
+use crate::identity::APP_NAME;
 
 /// Align the OS login-item with `enabled`. Safe to call twice.
 pub fn apply(enabled: bool) -> anyhow::Result<()> {

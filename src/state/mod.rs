@@ -237,7 +237,7 @@ impl AppState {
     pub fn handle_main_close(
         &mut self,
         action: WindowCloseAction,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         match action {
@@ -246,7 +246,7 @@ impl AppState {
                 self.schedule_hidden_media_release(cx);
                 crate::desktop::hide_main_to_tray();
                 #[cfg(not(target_os = "windows"))]
-                window.minimize_window();
+                _window.minimize_window();
                 false
             }
             WindowCloseAction::Quit => {

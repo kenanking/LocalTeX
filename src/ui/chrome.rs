@@ -1,8 +1,11 @@
+#[cfg(target_os = "linux")]
+use gpui::{canvas, Bounds, CursorStyle, Decorations, HitboxBehavior};
 use gpui::{
-    canvas, div, img, point, prelude::*, px, rgb, svg, AnyElement, Bounds, Context, CursorStyle,
-    Decorations, Entity, HitboxBehavior, MouseButton, ObjectFit, Pixels, Point, ResizeEdge,
-    SharedString, Size, Tiling, Window,
+    div, img, prelude::*, px, rgb, svg, AnyElement, Context, Entity, MouseButton, ObjectFit,
+    SharedString, Window,
 };
+#[cfg(any(test, target_os = "linux"))]
+use gpui::{point, Pixels, Point, ResizeEdge, Size, Tiling};
 
 use super::main_window::{MainWindow, View};
 use super::theme;
@@ -444,6 +447,7 @@ pub(crate) fn client_frame(content: impl IntoElement, window: &mut Window) -> An
     }
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn resize_edge(
     position: Point<Pixels>,
     inset: Pixels,
@@ -476,6 +480,7 @@ fn resize_edge(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
     match edge {
         ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,

@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::RwLock;
+#[cfg(not(target_os = "windows"))]
 use std::thread;
 
 use global_hotkey::hotkey::HotKey;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use global_hotkey::GlobalHotKeyManager;
+#[cfg(not(target_os = "windows"))]
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 
 use crate::identity::APP_SLUG;
 
@@ -18,6 +21,8 @@ mod win;
 mod win_clipboard;
 #[cfg(target_os = "windows")]
 mod win_cursor;
+#[cfg(target_os = "windows")]
+mod win_hotkey;
 #[cfg(target_os = "windows")]
 mod win_snip;
 #[cfg(target_os = "linux")]
@@ -39,6 +44,7 @@ impl From<crate::keymap::GlobalCmd> for DesktopCmd {
     }
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 struct Grab {
     chord: String,
     hotkey: HotKey,
@@ -108,56 +114,70 @@ pub fn rebind_globals(over: &crate::keymap::Overrides) {
             })
             .collect();
 
-        let mut added: Vec<Grab> = Vec::new();
-        for (chord, cmd) in &desired {
-            if svc.grabs.by_chord.iter().any(|g| &g.chord == chord) {
-                continue;
+        #[cfg(target_os = "windows")]
+        {
+            win_hotkey::set_chords(&desired);
+            svc.grabs.by_chord.clear();
+            match GRABS.write() {
+                Ok(mut g) => g.clear(),
+                Err(poisoned) => poisoned.into_inner().clear(),
             }
-            let Some(hotkey) = crate::keymap::to_global_hotkey(chord) else {
-                continue;
-            };
-            if let Err(err) = manager.register(hotkey) {
-                eprintln!("{APP_SLUG}: register global hotkey {chord}: {err}");
-                for g in &added {
-                    if let Err(err) = manager.unregister(g.hotkey) {
-                        eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
-                    }
-                }
-                return;
-            }
-            eprintln!("{APP_SLUG}: global hotkey {chord} registered");
-            added.push(Grab {
-                chord: chord.clone(),
-                hotkey,
-                cmd: *cmd,
-            });
+            let _ = manager;
         }
 
-        let mut next = Vec::new();
-        for grab in svc.grabs.by_chord.drain(..) {
-            if let Some((_, cmd)) = desired.iter().find(|(c, _)| c == &grab.chord) {
-                next.push(Grab {
-                    chord: grab.chord,
-                    hotkey: grab.hotkey,
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut added: Vec<Grab> = Vec::new();
+            for (chord, cmd) in &desired {
+                if svc.grabs.by_chord.iter().any(|g| &g.chord == chord) {
+                    continue;
+                }
+                let Some(hotkey) = crate::keymap::to_global_hotkey(chord) else {
+                    continue;
+                };
+                if let Err(err) = manager.register(hotkey) {
+                    eprintln!("{APP_SLUG}: register global hotkey {chord}: {err}");
+                    for g in &added {
+                        if let Err(err) = manager.unregister(g.hotkey) {
+                            eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
+                        }
+                    }
+                    return;
+                }
+                eprintln!("{APP_SLUG}: global hotkey {chord} registered");
+                added.push(Grab {
+                    chord: chord.clone(),
+                    hotkey,
                     cmd: *cmd,
                 });
-            } else if let Err(err) = manager.unregister(grab.hotkey) {
-                eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
             }
-        }
-        next.extend(added);
-        svc.grabs.by_chord = next;
 
-        let published: Vec<(u32, DesktopCmd)> = svc
-            .grabs
-            .by_chord
-            .iter()
-            .map(|g| (g.hotkey.id(), g.cmd))
-            .collect();
-        match GRABS.write() {
-            Ok(mut g) => *g = published,
-            Err(poisoned) => {
-                *poisoned.into_inner() = published;
+            let mut next = Vec::new();
+            for grab in svc.grabs.by_chord.drain(..) {
+                if let Some((_, cmd)) = desired.iter().find(|(c, _)| c == &grab.chord) {
+                    next.push(Grab {
+                        chord: grab.chord,
+                        hotkey: grab.hotkey,
+                        cmd: *cmd,
+                    });
+                } else if let Err(err) = manager.unregister(grab.hotkey) {
+                    eprintln!("{APP_SLUG}: unregister global hotkey: {err}");
+                }
+            }
+            next.extend(added);
+            svc.grabs.by_chord = next;
+
+            let published: Vec<(u32, DesktopCmd)> = svc
+                .grabs
+                .by_chord
+                .iter()
+                .map(|g| (g.hotkey.id(), g.cmd))
+                .collect();
+            match GRABS.write() {
+                Ok(mut g) => *g = published,
+                Err(poisoned) => {
+                    *poisoned.into_inner() = published;
+                }
             }
         }
     });
@@ -171,33 +191,43 @@ fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
             return None;
         }
     };
-    thread::spawn(move || {
-        let receiver = GlobalHotKeyEvent::receiver();
-        while let Ok(event) = receiver.recv() {
-            if event.state != HotKeyState::Pressed {
-                continue;
+    #[cfg(target_os = "windows")]
+    {
+        // RegisterHotKey + MOD_NOREPEAT stops posting WM_HOTKEY once the
+        // main window is focused with Alt still down (L becomes SYSKEY).
+        win_hotkey::install_chord_hook(tx);
+        return Some(manager);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        thread::spawn(move || {
+            let receiver = GlobalHotKeyEvent::receiver();
+            while let Ok(event) = receiver.recv() {
+                if event.state != HotKeyState::Pressed {
+                    continue;
+                }
+                let cmd = match GRABS.read() {
+                    Ok(g) => g
+                        .iter()
+                        .find(|(id, _)| *id == event.id)
+                        .map(|(_, cmd)| *cmd),
+                    Err(poisoned) => poisoned
+                        .into_inner()
+                        .iter()
+                        .find(|(id, _)| *id == event.id)
+                        .map(|(_, cmd)| *cmd),
+                };
+                let Some(cmd) = cmd else {
+                    continue;
+                };
+                if let Err(err) = tx.send(cmd) {
+                    eprintln!("{APP_SLUG}: hotkey send: {err}");
+                    break;
+                }
             }
-            let cmd = match GRABS.read() {
-                Ok(g) => g
-                    .iter()
-                    .find(|(id, _)| *id == event.id)
-                    .map(|(_, cmd)| *cmd),
-                Err(poisoned) => poisoned
-                    .into_inner()
-                    .iter()
-                    .find(|(id, _)| *id == event.id)
-                    .map(|(_, cmd)| *cmd),
-            };
-            let Some(cmd) = cmd else {
-                continue;
-            };
-            if let Err(err) = tx.send(cmd) {
-                eprintln!("{APP_SLUG}: hotkey send: {err}");
-                break;
-            }
-        }
-    });
-    Some(manager)
+        });
+        Some(manager)
+    }
 }
 
 #[cfg(target_os = "windows")]
