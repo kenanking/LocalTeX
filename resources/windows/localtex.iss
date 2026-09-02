@@ -65,6 +65,7 @@ var
   TasksGroupLabel: TNewStaticText;
   LaunchCheck: TNewCheckBox;
   LaunchCheckLabel: TNewStaticText;
+  UninstallWipeCheck: TNewCheckBox;
 
 procedure HideNativeCheckList(List: TNewCheckListBox);
 begin
@@ -233,18 +234,88 @@ begin
     SyncRunFromLaunchCheck();
 end;
 
+procedure PlaceSeparatedCheck(
+  Owner: TComponent; Parent: TWinControl;
+  var Box: TNewCheckBox; var Caption: TNewStaticText;
+  Left, Top: Integer; const Text: String; DefaultChecked: Boolean);
+begin
+  Box := TNewCheckBox.Create(Owner);
+  Box.Parent := Parent;
+  Box.Left := Left;
+  Box.Top := Top;
+  Box.Width := ScaleX(20);
+  Box.Height := ScaleY(20);
+  Box.Caption := '';
+  Box.Checked := DefaultChecked;
+
+  Caption := TNewStaticText.Create(Owner);
+  Caption.Parent := Parent;
+  Caption.Left := Box.Left + Box.Width + ScaleX(8);
+  Caption.Top := Box.Top + ScaleY(2);
+  Caption.AutoSize := True;
+  Caption.Caption := Text;
+end;
+
+procedure UninstallWipeLabelClick(Sender: TObject);
+begin
+  UninstallWipeCheck.Checked := not UninstallWipeCheck.Checked;
+end;
+
+function ConfirmUninstall(var WipeData: Boolean): Boolean;
+var
+  Form: TSetupForm;
+  WipeLabel: TNewStaticText;
+  OKButton, CancelButton: TNewButton;
+  W: Integer;
+begin
+  WipeData := False;
+  Form := CreateCustomForm(ScaleX(480), ScaleY(140), False, True);
+  try
+    Form.Caption := 'Uninstall LocalTeX';
+
+    PlaceSeparatedCheck(
+      Form, Form, UninstallWipeCheck, WipeLabel,
+      ScaleX(16), ScaleY(16),
+      'Also delete my LocalTeX settings and snip library', False);
+    WipeLabel.OnClick := @UninstallWipeLabelClick;
+
+    OKButton := TNewButton.Create(Form);
+    OKButton.Parent := Form;
+    OKButton.Caption := 'OK';
+    OKButton.Height := ScaleY(23);
+    OKButton.ModalResult := mrOk;
+    OKButton.Default := True;
+
+    CancelButton := TNewButton.Create(Form);
+    CancelButton.Parent := Form;
+    CancelButton.Caption := 'Cancel';
+    CancelButton.Height := ScaleY(23);
+    CancelButton.ModalResult := mrCancel;
+    CancelButton.Cancel := True;
+
+    W := Form.CalculateButtonWidth([OKButton.Caption, CancelButton.Caption]);
+    OKButton.Width := W;
+    CancelButton.Width := W;
+    CancelButton.Left := Form.ClientWidth - ScaleX(10) - W;
+    CancelButton.Top := Form.ClientHeight - ScaleY(23 + 10);
+    OKButton.Left := CancelButton.Left - ScaleX(6) - W;
+    OKButton.Top := CancelButton.Top;
+
+    Result := Form.ShowModal() = mrOk;
+    if Result then
+      WipeData := UninstallWipeCheck.Checked;
+  finally
+    Form.Free();
+  end;
+end;
+
 function InitializeUninstall(): Boolean;
 begin
   Result := True;
   DeleteUserData := False;
-  if not UninstallSilent then
-  begin
-    if MsgBox(
-         'Do you also want to delete your LocalTeX settings and snip library?'#13#10#13#10
-         'Choose No to keep them for a future install.',
-         mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-      DeleteUserData := True;
-  end;
+  if UninstallSilent then
+    Exit;
+  Result := ConfirmUninstall(DeleteUserData);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
