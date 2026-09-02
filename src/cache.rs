@@ -83,15 +83,13 @@ impl MediaCache {
         })
     }
 
-    pub fn ensure_full(&mut self, id: Uuid, pixels: &RgbaImage) -> Arc<RenderImage> {
-        if let Some(existing) = self.fulls.get(&id) {
-            return existing.clone();
+    pub fn put_full(&mut self, id: Uuid, render: Arc<RenderImage>) {
+        if self.fulls.contains_key(&id) {
+            return;
         }
-        let render = imgutil::gpu_display_image(pixels);
-        self.fulls.insert(id, render.clone());
+        self.fulls.insert(id, render);
         self.full_order.retain(|x| *x != id);
         self.full_order.push_back(id);
-        render
     }
 
     pub fn math_image(&mut self, svg: &str, _cx: &mut App) -> Arc<Image> {
@@ -159,6 +157,20 @@ impl MediaCache {
             };
             self.evict_math(old, cx);
         }
+    }
+
+    pub fn clear(&mut self, cx: &mut App) {
+        for (_, image) in self.thumbs.drain() {
+            cx.drop_image(image, None);
+        }
+        for (_, image) in self.fulls.drain() {
+            cx.drop_image(image, None);
+        }
+        self.full_order.clear();
+        for (_, slot) in self.math.drain() {
+            ImageSource::Image(slot.image).remove_asset(cx);
+        }
+        self.math_order.clear();
     }
 
     fn drop_full(&mut self, id: Uuid, cx: &mut App) {

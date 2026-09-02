@@ -2,13 +2,11 @@ use std::path::Path;
 #[cfg(any(test, target_os = "linux"))]
 use std::path::PathBuf;
 
-use crate::identity::{APP_ID, APP_NAME, APP_SLUG};
+use crate::identity::{APP_ID, APP_NAME};
 
-/// Align the OS login-item with `enabled`. Safe to call twice. Failures log.
-pub fn apply(enabled: bool) {
-    if let Err(err) = platform_apply(enabled) {
-        eprintln!("{APP_SLUG}: autostart: {err}");
-    }
+/// Align the OS login-item with `enabled`. Safe to call twice.
+pub fn apply(enabled: bool) -> anyhow::Result<()> {
+    platform_apply(enabled)
 }
 
 #[cfg(target_os = "linux")]
@@ -34,9 +32,13 @@ pub(crate) fn quoted_command(exe: &Path) -> String {
     format!("\"{}\"", raw.replace('"', "\\\""))
 }
 
+fn autostart_command(exe: &Path) -> String {
+    format!("{} --autostart", quoted_command(exe))
+}
+
 #[cfg(any(test, target_os = "linux"))]
 fn linux_desktop_entry(exe: &Path) -> String {
-    let exec = quoted_command(exe);
+    let exec = autostart_command(exe);
     format!(
         "\
 [Desktop Entry]
@@ -67,7 +69,11 @@ fn apply_linux_at(enabled: bool, desktop: &Path, exe: &Path) -> std::io::Result<
         if let Some(parent) = desktop.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(desktop, linux_desktop_entry(exe))
+        let desired = linux_desktop_entry(exe);
+        if std::fs::read_to_string(desktop).is_ok_and(|current| current == desired) {
+            return Ok(());
+        }
+        std::fs::write(desktop, desired)
     } else {
         match std::fs::remove_file(desktop) {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -105,7 +111,7 @@ fn apply_windows(enabled: bool, exe: &Path) -> anyhow::Result<()> {
 
     let name: Vec<u16> = APP_NAME.encode_utf16().chain(std::iter::once(0)).collect();
     let result = if enabled {
-        let command = quoted_command(exe);
+        let command = autostart_command(exe);
         let bytes = reg_sz_bytes(&command);
         let status =
             unsafe { RegSetValueExW(key, PCWSTR(name.as_ptr()), None, REG_SZ, Some(&bytes)) };
@@ -175,7 +181,7 @@ mod tests {
     fn linux_desktop_entry_points_at_this_exe() {
         let text = linux_desktop_entry(Path::new("/opt/LocalTeX/bin/localtex"));
         assert!(text.contains("Name=LocalTeX"));
-        assert!(text.contains("Exec=\"/opt/LocalTeX/bin/localtex\""));
+        assert!(text.contains("Exec=\"/opt/LocalTeX/bin/localtex\" --autostart"));
         assert!(text.contains("Icon=com.localtex.app"));
         assert!(text.contains("X-GNOME-Autostart-enabled=true"));
     }
@@ -187,7 +193,7 @@ mod tests {
         let exe = Path::new("/opt/LocalTeX/bin/localtex");
         apply_linux_at(true, &desktop, exe).unwrap();
         let raw = fs::read_to_string(&desktop).unwrap();
-        assert!(raw.contains("Exec=\"/opt/LocalTeX/bin/localtex\""));
+        assert!(raw.contains("Exec=\"/opt/LocalTeX/bin/localtex\" --autostart"));
         apply_linux_at(true, &desktop, exe).unwrap();
         apply_linux_at(false, &desktop, exe).unwrap();
         assert!(!desktop.exists());

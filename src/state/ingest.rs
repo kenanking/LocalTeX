@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::doc::{Block, DocStatus, Document, ImageSlot, PersistState, SnipKind};
 use crate::export::CopyKind;
 use crate::identity::APP_SLUG;
-use crate::store::WriteResult;
+use crate::store::{WriteEvent, WriteKind, WriteResult};
 
 use super::session::Capture;
 use super::AppState;
@@ -191,6 +191,7 @@ impl AppState {
                     }
                 }
                 this.ingest.ocr.finish(id);
+                this.schedule_engine_release(cx);
                 let ready = this
                     .library
                     .get(id)
@@ -313,19 +314,19 @@ impl AppState {
         self.ingest.ocr.remove(id);
         self.library.remove(id);
         self.ingest.thumb_inflight.remove(&id);
+        self.ingest.thumb_failed.remove(&id);
         self.ingest.blocks_inflight.remove(&id);
         self.ingest.png_inflight.remove(&id);
+        self.ingest.persist_retry_counts.remove(&id);
+        self.ingest.persist_retry_pending.remove(&id);
         if self.library.is_empty() {
             self.ingest.ocr.cancel_remaining();
         }
         if let Some(writer) = self.store_writer() {
-            let reply = writer.delete(id);
-            cx.background_spawn(async move {
-                if let Err(err) = recv_write(reply) {
-                    eprintln!("{APP_SLUG}: delete snip: {err}");
-                }
-            })
-            .detach();
+            if let Err(err) = writer.delete(id) {
+                eprintln!("{APP_SLUG}: queue delete snip: {err:#}");
+                self.flash_capture_error("Couldn't delete that snip", cx);
+            }
         }
         if let Some(id) = self.library.selected() {
             self.ensure_detail(id, cx);
@@ -341,24 +342,24 @@ impl AppState {
         }
         self.ingest.file_queue.clear();
         self.ingest.thumb_inflight.clear();
+        self.ingest.thumb_failed.clear();
         self.ingest.blocks_inflight.clear();
         self.ingest.png_inflight.clear();
+        self.ingest.persist_retry_counts.clear();
+        self.ingest.persist_retry_pending.clear();
         self.search.bump();
         self.library.clear();
         if let Some(writer) = self.store_writer() {
-            let reply = writer.wipe();
-            cx.background_spawn(async move {
-                if let Err(err) = recv_write(reply) {
-                    eprintln!("{APP_SLUG}: wipe library: {err}");
-                }
-            })
-            .detach();
+            if let Err(err) = writer.wipe() {
+                eprintln!("{APP_SLUG}: queue wipe library: {err:#}");
+                self.flash_capture_error("Couldn't clear the snip library", cx);
+            }
         }
         cx.notify();
     }
 
     pub fn request_thumb(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.ingest.thumb_inflight.contains(&id) {
+        if self.ingest.thumb_inflight.contains(&id) || self.ingest.thumb_failed.contains(&id) {
             return;
         }
         let Some(doc) = self.library.get(id) else {
@@ -383,7 +384,10 @@ impl AppState {
                             doc.thumb_jpeg = bytes;
                         }
                     }
-                    Err(err) => eprintln!("{APP_SLUG}: load thumb: {err}"),
+                    Err(err) => {
+                        this.ingest.thumb_failed.insert(id);
+                        eprintln!("{APP_SLUG}: load thumb: {err}");
+                    }
                 }
                 cx.notify();
             }) {
@@ -393,6 +397,17 @@ impl AppState {
         .detach();
     }
 
+    pub fn thumbnail_failed(&self, id: Uuid) -> bool {
+        self.ingest.thumb_failed.contains(&id)
+    }
+
+    pub fn mark_thumbnail_failed(&mut self, id: Uuid) {
+        self.ingest.thumb_failed.insert(id);
+        if let Some(doc) = self.library.get_mut(id) {
+            doc.thumb_jpeg.clear();
+        }
+    }
+
     fn persist_ready(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(writer) = self.store_writer() else {
             return;
@@ -400,7 +415,7 @@ impl AppState {
         let Some(doc) = self.library.get(id) else {
             return;
         };
-        if !matches!(doc.status, DocStatus::Ready) || doc.image.pixels().is_none() {
+        if !matches!(doc.status, DocStatus::Ready) {
             return;
         }
         let revision = doc.revision;
@@ -409,6 +424,9 @@ impl AppState {
             PersistState::InsertPending { .. } => return,
             PersistState::Stored => true,
         };
+        if !stored && doc.image.pixels().is_none() {
+            return;
+        }
         if !stored {
             if let Some(doc) = self.library.get_mut(id) {
                 doc.persist = PersistState::InsertPending { revision };
@@ -417,46 +435,21 @@ impl AppState {
         let Some(doc) = self.library.get(id).cloned() else {
             return;
         };
-        let reply = if stored {
+        let queued = if stored {
             writer.update_ocr(doc)
         } else {
             writer.insert(doc)
         };
-        cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { recv_write(reply) }).await;
-            if let Err(err) = this.update(cx, |this, cx| {
-                match result {
-                    Ok(WriteResult::Inserted(thumb)) => {
-                        let mut changed_during_insert = false;
-                        if let Some(d) = this.library.get_mut(id) {
-                            if d.insert_pending_revision() == Some(revision) {
-                                changed_during_insert = d.revision != revision;
-                                d.persist = PersistState::Stored;
-                                d.thumb_jpeg = thumb;
-                            }
-                        }
-                        this.library.touch_lru(id);
-                        if changed_during_insert {
-                            this.persist_edits(id, cx);
-                        }
-                        this.schedule_filter(cx);
-                    }
-                    Ok(WriteResult::Done) => {}
-                    Err(err) => {
-                        if let Some(d) = this.library.get_mut(id) {
-                            if d.insert_pending_revision() == Some(revision) {
-                                d.persist = PersistState::New;
-                            }
-                        }
-                        eprintln!("{APP_SLUG}: persist snip: {err}");
-                    }
+        if let Err(err) = queued {
+            if let Some(d) = self.library.get_mut(id) {
+                if d.insert_pending_revision() == Some(revision) {
+                    d.persist = PersistState::New;
                 }
-                cx.notify();
-            }) {
-                eprintln!("{APP_SLUG}: persist task: {err}");
             }
-        })
-        .detach();
+            eprintln!("{APP_SLUG}: queue persist snip: {err:#}");
+            self.flash_capture_error("Couldn't save that snip", cx);
+            self.schedule_persist_retry(id, cx);
+        }
     }
 
     pub fn apply_parsed_source(&mut self, id: Uuid, blocks: Vec<Block>, cx: &mut Context<Self>) {
@@ -498,19 +491,11 @@ impl AppState {
         if !doc.is_persisted() || !matches!(doc.status, DocStatus::Ready) {
             return;
         }
-        let reply = writer.update_blocks(doc);
-        cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { recv_write(reply) }).await;
-            if let Err(err) = this.update(cx, |_, cx| {
-                if let Err(err) = result {
-                    eprintln!("{APP_SLUG}: persist edits: {err}");
-                }
-                cx.notify();
-            }) {
-                eprintln!("{APP_SLUG}: persist edits task: {err}");
-            }
-        })
-        .detach();
+        if let Err(err) = writer.update_blocks(doc) {
+            eprintln!("{APP_SLUG}: queue persist edits: {err:#}");
+            self.flash_capture_error("Couldn't save those edits", cx);
+            self.schedule_persist_retry(id, cx);
+        }
     }
 
     fn load_png_then_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -642,14 +627,117 @@ impl AppState {
         })
         .detach();
     }
-}
 
-fn recv_write(
-    reply: std::sync::mpsc::Receiver<anyhow::Result<WriteResult>>,
-) -> anyhow::Result<WriteResult> {
-    reply
-        .recv()
-        .map_err(|_| anyhow::anyhow!("store writer stopped"))?
+    pub(super) fn pump_store_events(
+        &mut self,
+        mut events: std::sync::mpsc::Receiver<WriteEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| loop {
+            let (next, event) = cx
+                .background_spawn(async move {
+                    let event = events.recv();
+                    (events, event)
+                })
+                .await;
+            events = next;
+            let Ok(event) = event else {
+                break;
+            };
+            if this
+                .update(cx, |this, cx| this.handle_store_event(event, cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn handle_store_event(&mut self, event: WriteEvent, cx: &mut Context<Self>) {
+        match (event.kind, event.result) {
+            (WriteKind::Insert { id, revision }, Ok(WriteResult::Inserted(thumb))) => {
+                let mut changed_during_insert = false;
+                if let Some(doc) = self.library.get_mut(id) {
+                    if doc.insert_pending_revision() == Some(revision) {
+                        changed_during_insert = doc.revision != revision;
+                        doc.persist = PersistState::Stored;
+                        doc.thumb_jpeg = thumb;
+                    }
+                }
+                self.library.touch_lru(id);
+                self.ingest.persist_retry_counts.remove(&id);
+                self.ingest.persist_retry_pending.remove(&id);
+                if changed_during_insert {
+                    self.persist_edits(id, cx);
+                }
+                self.schedule_filter(cx);
+            }
+            (WriteKind::Insert { id, revision }, Err(err)) => {
+                if let Some(doc) = self.library.get_mut(id) {
+                    if doc.insert_pending_revision() == Some(revision) {
+                        doc.persist = PersistState::New;
+                    }
+                }
+                eprintln!("{APP_SLUG}: persist snip: {err:#}");
+                self.flash_capture_error("Couldn't save that snip", cx);
+                self.schedule_persist_retry(id, cx);
+            }
+            (WriteKind::UpdateOcr { id }, Err(err)) => {
+                eprintln!("{APP_SLUG}: persist OCR {id}: {err:#}");
+                self.flash_capture_error("Couldn't update that snip", cx);
+                self.schedule_persist_retry(id, cx);
+            }
+            (WriteKind::UpdateBlocks { id }, Err(err)) => {
+                eprintln!("{APP_SLUG}: persist edits {id}: {err:#}");
+                self.flash_capture_error("Couldn't save those edits", cx);
+                self.schedule_persist_retry(id, cx);
+            }
+            (WriteKind::Delete { id }, Err(err)) => {
+                eprintln!("{APP_SLUG}: delete snip {id}: {err:#}");
+                self.flash_capture_error("Couldn't remove all snip files", cx);
+            }
+            (WriteKind::Wipe, Err(err)) => {
+                eprintln!("{APP_SLUG}: wipe library: {err:#}");
+                self.flash_capture_error("Couldn't clear the snip library", cx);
+            }
+            (
+                WriteKind::UpdateOcr { id } | WriteKind::UpdateBlocks { id },
+                Ok(WriteResult::Done),
+            ) => {
+                self.ingest.persist_retry_counts.remove(&id);
+                self.ingest.persist_retry_pending.remove(&id);
+            }
+            (_, Ok(WriteResult::Done)) => {}
+            (kind, Ok(result)) => {
+                eprintln!("{APP_SLUG}: unexpected store result {kind:?}: {result:?}");
+            }
+        }
+        cx.notify();
+    }
+
+    fn schedule_persist_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.ingest.persist_retry_pending.contains(&id) {
+            return;
+        }
+        let count = self.ingest.persist_retry_counts.entry(id).or_default();
+        if *count >= 3 {
+            return;
+        }
+        *count += 1;
+        let delay = std::time::Duration::from_secs(1 << (*count - 1));
+        self.ingest.persist_retry_pending.insert(id);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                let still_pending = this.ingest.persist_retry_pending.remove(&id);
+                if still_pending && this.library.get(id).is_some() {
+                    this.persist_ready(id, cx);
+                }
+            });
+        })
+        .detach();
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{Local, NaiveDate, TimeZone};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use uuid::Uuid;
 
 use crate::doc::{decode_blocks_json, encode_blocks_json, Block, Document, OcrMeta};
@@ -17,14 +17,13 @@ mod writer;
 
 pub use date::{CivilDate, DateRange};
 use migrate::migrate;
-pub use writer::{StoreWriter, WriteResult};
+pub use writer::{StoreWriter, WriteEvent, WriteKind, WriteResult};
 
 #[derive(Clone)]
 pub struct SnipListItem {
     pub id: Uuid,
     pub created_at: SystemTime,
     pub first_line: String,
-    pub thumb_jpeg: Vec<u8>,
     pub ocr: Option<OcrMeta>,
 }
 
@@ -71,7 +70,13 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id_s, ms, first_line, ocr_s, confidence) = row?;
-            let id = Uuid::parse_str(&id_s).map_err(|e| anyhow!("uuid: {e}"))?;
+            let id = match Uuid::parse_str(&id_s) {
+                Ok(id) => id,
+                Err(err) => {
+                    eprintln!("{APP_SLUG}: skip invalid snip id {id_s:?}: {err}");
+                    continue;
+                }
+            };
             let ocr = match (ocr_s, confidence) {
                 (Some(elapsed_s), Some(confidence)) => Some(OcrMeta {
                     elapsed_s: elapsed_s as f32,
@@ -83,7 +88,6 @@ impl Store {
                 id,
                 created_at: system_time_from_ms(ms),
                 first_line,
-                thumb_jpeg: Vec::new(),
                 ocr,
             });
         }
@@ -100,25 +104,17 @@ impl Store {
         .map_err(|e| anyhow!("load thumb: {e}"))
     }
 
-    fn image_path(&self, id: Uuid) -> Result<PathBuf> {
-        let rel = {
-            let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-            conn.query_row(
-                "SELECT image_relpath FROM snips WHERE id = ?1",
-                params![id.to_string()],
-                |row| row.get::<_, String>(0),
-            )?
-        };
-        Ok(self.root.join(rel))
+    fn image_path(&self, id: Uuid) -> PathBuf {
+        self.root.join(format!("snips/{id}.png"))
     }
 
     #[cfg(test)]
     pub fn png_missing(&self, id: Uuid) -> Result<bool> {
-        Ok(!self.image_path(id)?.is_file())
+        Ok(!self.image_path(id).is_file())
     }
 
     pub fn png_path(&self, id: Uuid) -> Result<PathBuf> {
-        let path = self.image_path(id)?;
+        let path = self.image_path(id);
         if !path.is_file() {
             return Err(anyhow!("png missing"));
         }
@@ -132,16 +128,13 @@ impl Store {
 
     pub fn load_block_pair(&self, id: Uuid) -> Result<(Vec<Block>, Vec<Block>)> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-        let (json, ocr_json): (String, Option<String>) = conn.query_row(
+        let (json, ocr_json): (String, String) = conn.query_row(
             "SELECT blocks_json, ocr_blocks_json FROM snips WHERE id = ?1",
             params![id.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let blocks = decode_blocks_json(&json).context("blocks_json")?;
-        let ocr_blocks = match ocr_json.as_deref().filter(|s| !s.is_empty()) {
-            Some(raw) => decode_blocks_json(raw).context("ocr_blocks_json")?,
-            None => blocks.clone(),
-        };
+        let ocr_blocks = decode_blocks_json(&ocr_json).context("ocr_blocks_json")?;
         Ok((blocks, ocr_blocks))
     }
 
@@ -156,9 +149,8 @@ impl Store {
             .ok_or_else(|| anyhow!("insert requires loaded pixels"))?;
         let png = imgutil::encode_png_fast(pixels)?;
         let thumb = imgutil::encode_thumb_jpeg(pixels)?;
-        let rel = format!("snips/{}.png", doc.id);
         let tmp = self.root.join(format!("snips/{}.png.tmp", doc.id));
-        let dest = self.root.join(&rel);
+        let dest = self.image_path(doc.id);
         std::fs::write(&tmp, &png).with_context(|| "write png tmp")?;
         std::fs::rename(&tmp, &dest).with_context(|| "rename png")?;
         if let Err(err) = match &doc.ink {
@@ -179,8 +171,8 @@ impl Store {
         let first_line = doc.first_line();
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let sql = conn.execute(
-            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath, ocr_s, confidence, ocr_blocks_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, ocr_s, confidence, ocr_blocks_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 doc.id.to_string(),
                 unix_ms(doc.created_at),
@@ -188,7 +180,6 @@ impl Store {
                 blocks_json,
                 search_text,
                 thumb.clone(),
-                rel,
                 doc.ocr.map(|m| m.elapsed_s as f64),
                 doc.ocr.map(|m| m.confidence as f64),
                 ocr_json,
@@ -243,23 +234,12 @@ impl Store {
     }
 
     pub fn delete(&self, id: Uuid) -> Result<()> {
-        let rel: Option<String> = {
-            let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-            conn.query_row(
-                "SELECT image_relpath FROM snips WHERE id = ?1",
-                params![id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?
-        };
         {
             let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
             conn.execute("DELETE FROM snips WHERE id = ?1", params![id.to_string()])?;
         }
-        if let Some(rel) = rel {
-            let _ = std::fs::remove_file(self.root.join(rel));
-        }
-        let _ = std::fs::remove_file(self.ink_path(id));
+        remove_if_present(&self.image_path(id)).with_context(|| "remove snip png")?;
+        remove_if_present(&self.ink_path(id)).with_context(|| "remove snip ink")?;
         Ok(())
     }
 
@@ -335,9 +315,24 @@ impl Store {
             Ok(ids) => Ok(ids),
             Err(err) => {
                 eprintln!("{APP_SLUG}: fts query: {err}");
-                Ok(Vec::new())
+                let like = format!("%{q}%");
+                let mut fallback = conn.prepare(
+                    "SELECT id FROM snips
+                     WHERE created_at >= ?1 AND created_at < ?2
+                       AND search_text LIKE ?3
+                     ORDER BY created_at DESC
+                     LIMIT 200",
+                )?;
+                collect_ids(&mut fallback, params![start_ms, end_ms, like])
             }
         }
+    }
+}
+
+fn remove_if_present(path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
     }
 }
 
@@ -480,7 +475,6 @@ mod tests {
         let store = Store::open(_root.clone()).unwrap();
         let list = store.list().unwrap();
         assert_eq!(list.len(), 1);
-        assert!(list[0].thumb_jpeg.is_empty());
         assert!(!store.load_thumb(id).unwrap().is_empty());
         assert!(!store.png_missing(id).unwrap());
         let blocks = store.load_blocks(id).unwrap();

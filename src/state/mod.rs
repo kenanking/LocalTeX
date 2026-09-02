@@ -1,5 +1,6 @@
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gpui::{App, AppContext, Context, Window, WindowHandle};
 use uuid::Uuid;
@@ -10,7 +11,7 @@ use crate::identity::APP_SLUG;
 use crate::keymap::{self, AssignError, ShortcutId};
 use crate::library::Library;
 use crate::ocr::Engine;
-use crate::prefs::{Prefs, WindowCloseAction};
+use crate::prefs::{Prefs, PrefsWriter, WindowCloseAction};
 use crate::store::{Store, StoreWriter};
 use crate::ui::MainWindow;
 
@@ -26,6 +27,9 @@ use session::{CaptureSession, IngestPump, SearchFilter};
 
 pub use crate::library::DatePreset;
 
+const OCR_IDLE_RELEASE: Duration = Duration::from_secs(15 * 60);
+const HIDDEN_MEDIA_RELEASE: Duration = Duration::from_secs(5 * 60);
+
 enum PersistenceState {
     Loading,
     Ready {
@@ -33,13 +37,19 @@ enum PersistenceState {
         writer: StoreWriter,
     },
     RamOnly,
+    ShuttingDown,
 }
 
 pub struct AppState {
     pub library: Library,
     export_fmt: ExportFmt,
     pub prefs: Prefs,
+    prefs_writer: Option<PrefsWriter>,
+    autostart_pending: bool,
+    capture_after_bootstrap: bool,
     engine: Arc<Engine>,
+    engine_release_task: Option<gpui::Task<()>>,
+    hidden_media_release_task: Option<gpui::Task<()>>,
     persistence: PersistenceState,
     search: SearchFilter,
     ingest: IngestPump,
@@ -47,15 +57,25 @@ pub struct AppState {
     orig_copy_flash: Option<Uuid>,
     orig_copy_flash_gen: u64,
     pub main_window: Option<WindowHandle<MainWindow>>,
+    pub(crate) main_window_opening: bool,
+    pub(crate) main_window_visible: bool,
 }
 
 impl AppState {
     pub fn new(prefs: Prefs) -> Self {
+        let prefs_writer = PrefsWriter::start()
+            .map_err(|err| eprintln!("{APP_SLUG}: {err:#}"))
+            .ok();
         Self {
             library: Library::new(),
             export_fmt: prefs.default_fmt,
             prefs,
+            prefs_writer,
+            autostart_pending: false,
+            capture_after_bootstrap: false,
             engine: Engine::load(),
+            engine_release_task: None,
+            hidden_media_release_task: None,
             persistence: PersistenceState::Loading,
             search: SearchFilter::new(),
             ingest: IngestPump::new(),
@@ -63,10 +83,12 @@ impl AppState {
             orig_copy_flash: None,
             orig_copy_flash_gen: 0,
             main_window: None,
+            main_window_opening: false,
+            main_window_visible: false,
         }
     }
 
-    pub fn bootstrap_store(&mut self, cx: &mut Context<Self>) {
+    pub fn bootstrap_store(&mut self, hydrate_selected: bool, cx: &mut Context<Self>) {
         if !matches!(self.persistence, PersistenceState::Loading) {
             return;
         }
@@ -75,21 +97,27 @@ impl AppState {
                 .background_spawn(async move {
                     let store = Arc::new(Store::open_default()?);
                     let items = store.list()?;
-                    let writer = StoreWriter::start(store.clone())?;
-                    anyhow::Ok((store, writer, items))
+                    let (writer, events) = StoreWriter::start(store.clone())?;
+                    anyhow::Ok((store, writer, events, items))
                 })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 match opened {
-                    Ok((store, writer, items)) => {
+                    Ok((store, writer, events, items)) => {
                         this.library = Library::from_list(items);
                         this.persistence = PersistenceState::Ready { store, writer };
-                        this.boot_selected(cx);
+                        this.pump_store_events(events, cx);
+                        if hydrate_selected || this.main_window_visible {
+                            this.boot_selected(cx);
+                        }
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: snip store unavailable (RAM-only): {err:#}");
                         this.persistence = PersistenceState::RamOnly;
                     }
+                }
+                if std::mem::take(&mut this.capture_after_bootstrap) {
+                    this.request_capture(cx);
                 }
                 cx.notify();
             }) {
@@ -106,25 +134,62 @@ impl AppState {
     fn store(&self) -> Option<Arc<Store>> {
         match &self.persistence {
             PersistenceState::Ready { store, .. } => Some(store.clone()),
-            PersistenceState::Loading | PersistenceState::RamOnly => None,
+            PersistenceState::Loading
+            | PersistenceState::RamOnly
+            | PersistenceState::ShuttingDown => None,
         }
     }
 
     fn store_writer(&self) -> Option<StoreWriter> {
         match &self.persistence {
             PersistenceState::Ready { writer, .. } => Some(writer.clone()),
-            PersistenceState::Loading | PersistenceState::RamOnly => None,
+            PersistenceState::Loading
+            | PersistenceState::RamOnly
+            | PersistenceState::ShuttingDown => None,
         }
     }
 
     pub fn persist_prefs(&mut self) {
-        self.prefs.save();
+        if let Some(writer) = &self.prefs_writer {
+            if let Err(err) = writer.save(self.prefs.clone()) {
+                eprintln!("{APP_SLUG}: queue prefs: {err:#}");
+            }
+        } else if let Err(err) = self.prefs.save() {
+            eprintln!("{APP_SLUG}: save prefs: {err:#}");
+        }
     }
 
     pub fn update_prefs(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Prefs)) {
         f(&mut self.prefs);
         self.persist_prefs();
         cx.notify();
+    }
+
+    pub fn set_launch_at_startup(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.autostart_pending || self.prefs.launch_at_startup == enabled {
+            return;
+        }
+        self.autostart_pending = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { crate::autostart::apply(enabled) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.autostart_pending = false;
+                match result {
+                    Ok(()) => {
+                        this.prefs.launch_at_startup = enabled;
+                        this.persist_prefs();
+                    }
+                    Err(err) => {
+                        eprintln!("{APP_SLUG}: autostart: {err:#}");
+                        this.flash_capture_error("Couldn't change launch at startup", cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn bind_shortcut(
@@ -169,7 +234,12 @@ impl AppState {
     /// holds its `RefCell`; calling [`App::quit`] here re-enters `with_common`
     /// and aborts (`RefCell already borrowed`). Close the window now, then stop
     /// the loop after this event handler returns.
-    pub fn handle_main_close(action: WindowCloseAction, window: &mut Window, cx: &mut App) -> bool {
+    pub fn handle_main_close(
+        &mut self,
+        action: WindowCloseAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match action {
             WindowCloseAction::Minimize => {
                 crate::desktop::hide_main_to_tray();
@@ -178,18 +248,78 @@ impl AppState {
                 false
             }
             WindowCloseAction::Quit => {
-                cx.spawn(async move |cx| {
-                    cx.background_spawn(async {}).await;
-                    cx.update(|cx| cx.quit());
-                })
-                .detach();
-                true
+                self.request_quit(cx);
+                false
             }
         }
     }
 
+    pub fn request_quit(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.persistence, PersistenceState::ShuttingDown) {
+            return;
+        }
+        let writer = self.store_writer();
+        let prefs_writer = self.prefs_writer.take();
+        self.persistence = PersistenceState::ShuttingDown;
+        cx.spawn(async move |_, cx| {
+            let result = match writer {
+                Some(writer) => cx.background_spawn(async move { writer.shutdown() }).await,
+                None => {
+                    // Leave the current window callback before stopping GPUI.
+                    cx.background_spawn(async {}).await;
+                    Ok(())
+                }
+            };
+            if let Err(err) = result {
+                eprintln!("{APP_SLUG}: store shutdown: {err:#}");
+            }
+            if let Some(writer) = prefs_writer {
+                if let Err(err) = cx.background_spawn(async move { writer.shutdown() }).await {
+                    eprintln!("{APP_SLUG}: prefs shutdown: {err:#}");
+                }
+            }
+            cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+
     pub fn engine_status(&self) -> crate::ocr::EngineStatus {
         self.engine.status()
+    }
+
+    fn schedule_engine_release(&mut self, cx: &mut Context<Self>) {
+        let engine = self.engine.clone();
+        let generation = engine.usage_generation();
+        self.engine_release_task = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor().timer(OCR_IDLE_RELEASE).await;
+            let released = cx
+                .background_spawn(async move { engine.release_if_idle(generation) })
+                .await;
+            if released {
+                eprintln!("{APP_SLUG}: released idle OCR sessions");
+            }
+        }));
+    }
+
+    pub(super) fn schedule_hidden_media_release(&mut self, cx: &mut Context<Self>) {
+        self.hidden_media_release_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HIDDEN_MEDIA_RELEASE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.main_window_visible {
+                    return;
+                }
+                this.library.release_persisted_images();
+                let handle = this.main_window;
+                cx.defer(move |cx| {
+                    if let Some(handle) = handle {
+                        let _ = handle.update(cx, |window, _, cx| {
+                            window.release_hidden_media(cx);
+                        });
+                    }
+                });
+                cx.notify();
+            });
+        }));
     }
 
     pub fn selected(&self) -> Option<Uuid> {
@@ -270,7 +400,7 @@ impl AppState {
                     self.restore_main(cx);
                 }
             }
-            DesktopCmd::Quit => cx.quit(),
+            DesktopCmd::Quit => self.request_quit(cx),
         }
     }
 }

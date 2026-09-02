@@ -57,7 +57,7 @@ impl Rect {
 }
 
 /// Layout role. Orthogonal to [`BlockKind`]: kind is payload grammar,
-/// role is structural weight. Serde default keeps old library rows as Body.
+/// Structural weight used by export and preview layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockRole {
@@ -80,9 +80,7 @@ pub struct Block {
     pub bbox: Rect,
     pub text: String,
     /// Layout `display_formula`, or OCR wrapped the body in `$$`.
-    #[serde(default)]
     pub display: bool,
-    #[serde(default)]
     pub role: BlockRole,
 }
 
@@ -110,18 +108,7 @@ impl Block {
 }
 
 pub fn decode_blocks_json(json: &str) -> Result<Vec<Block>, serde_json::Error> {
-    let value: serde_json::Value = serde_json::from_str(json)?;
-    let mut blocks: Vec<Block> = if value.is_array() {
-        serde_json::from_value(value)?
-    } else if let Some(blocks) = value.get("blocks") {
-        serde_json::from_value(blocks.clone())?
-    } else {
-        serde_json::from_value(value)?
-    };
-    for b in &mut blocks {
-        b.promote_html_table();
-    }
-    Ok(blocks)
+    serde_json::from_str(json)
 }
 
 pub fn encode_blocks_json(blocks: &[Block]) -> Result<String, serde_json::Error> {
@@ -216,7 +203,7 @@ impl Document {
             blocks: Vec::new(),
             status: DocStatus::Ready,
             first_line: item.first_line,
-            thumb_jpeg: item.thumb_jpeg,
+            thumb_jpeg: Vec::new(),
             persist: PersistState::Stored,
             blocks_loaded: false,
             ocr: item.ocr,
@@ -601,23 +588,6 @@ mod tests {
     }
 
     #[test]
-    fn old_blocks_json_array_is_layout_body() {
-        let json = r#"[{"kind":"Text","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"Hello"}]"#;
-        let blocks = decode_blocks_json(json).expect("array");
-        assert_eq!(blocks[0].role, BlockRole::Body);
-        assert_eq!(blocks[0].text, "Hello");
-    }
-
-    #[test]
-    fn legacy_formula_envelope_still_loads_blocks() {
-        let json = r#"{"rec":"formula","blocks":[{"kind":"Formula","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"x^2"}]}"#;
-        let blocks = decode_blocks_json(json).expect("envelope");
-        assert_eq!(blocks[0].text, "x^2");
-        let encoded = encode_blocks_json(&blocks).expect("enc");
-        assert!(encoded.starts_with('['), "{encoded}");
-    }
-
-    #[test]
     fn table_plus_caption_is_table_snip() {
         let html = "<table><tr><td>a</td></tr></table>";
         let blocks = vec![
@@ -678,26 +648,6 @@ mod tests {
         );
         b.promote_html_table();
         assert_eq!(b.kind, BlockKind::Table);
-    }
-
-    #[test]
-    fn decode_promotes_legacy_html_text_rows() {
-        let json = r#"[{"kind":"Text","bbox":{"x":0,"y":0,"w":1,"h":1},"text":"<table><tr><td>a</td></tr></table>"}]"#;
-        let blocks = decode_blocks_json(json).expect("json");
-        assert_eq!(blocks[0].kind, BlockKind::Table);
-        assert_eq!(snip_kind(&blocks), SnipKind::Table);
-        let prefs = crate::prefs::Prefs::default();
-        let rows = copy_rows(&blocks, &prefs);
-        assert!(rows.iter().any(|r| r.kind == CopyKind::MdTable));
-        assert!(rows.iter().any(|r| r.kind == CopyKind::LatexTable));
-        assert!(rows.iter().any(|r| r.kind == CopyKind::Tsv));
-        let preview = crate::preview::document_preview(&blocks);
-        assert!(
-            preview
-                .iter()
-                .any(|b| matches!(b, crate::preview::PreviewBlock::Table(_))),
-            "promoted HTML must typeset as a table, got {preview:?}"
-        );
     }
 
     #[test]

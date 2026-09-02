@@ -31,7 +31,8 @@ mod ui;
 #[cfg(target_os = "linux")]
 use gpui::WindowDecorations;
 use gpui::{
-    px, size, App, AppContext, Bounds, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
+    px, size, App, AppContext, Bounds, Entity, Menu, MenuItem, TitlebarOptions, WindowBounds,
+    WindowOptions,
 };
 
 use crate::actions::{
@@ -42,47 +43,47 @@ use crate::identity::{APP_ID, APP_NAME};
 use crate::state::AppState;
 use crate::ui::MainWindow;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupMode {
+    Interactive,
+    Autostart,
+}
+
+impl StartupMode {
+    fn from_args() -> Self {
+        if std::env::args_os().skip(1).any(|arg| arg == "--autostart") {
+            Self::Autostart
+        } else {
+            Self::Interactive
+        }
+    }
+}
+
 fn main() {
+    let startup_mode = StartupMode::from_args();
     pin_display_vulkan();
     crate::icon::install_desktop_identity();
     gpui_platform::application()
         .with_assets(crate::icon::Assets)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             let prefs = crate::prefs::Prefs::load();
-            crate::autostart::apply(prefs.launch_at_startup);
+            let launch_at_startup = prefs.launch_at_startup;
+            cx.background_spawn(async move {
+                if let Err(err) = crate::autostart::apply(launch_at_startup) {
+                    eprintln!("{}: autostart: {err:#}", crate::identity::APP_SLUG);
+                }
+            })
+            .detach();
             crate::state::bind_keys(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
             let state = cx.new(|_| AppState::new(prefs));
-            let bounds = Bounds::centered(None, size(px(800.), px(560.)), cx);
-            let handle = cx
-                .open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
-                        titlebar: Some(TitlebarOptions {
-                            title: Some(APP_NAME.into()),
-                            ..Default::default()
-                        }),
-                        app_id: Some(APP_ID.into()),
-                        window_min_size: Some(size(px(520.), px(400.))),
-                        window_background: gpui::WindowBackgroundAppearance::Opaque,
-                        // GNOME leaves server-decorated X11 clients unmapped when
-                        // its mutter-x11-frames helper dies. Own the Linux frame.
-                        #[cfg(target_os = "linux")]
-                        window_decorations: Some(WindowDecorations::Client),
-                        ..Default::default()
-                    },
-                    {
-                        let state = state.clone();
-                        move |window, cx| cx.new(|cx| MainWindow::new(state, window, cx))
-                    },
-                )
-                .expect("open main window");
-
-            state.update(cx, |state, _| {
-                state.main_window = Some(handle);
+            if startup_mode == StartupMode::Interactive {
+                open_main_window(state.clone(), false, cx).expect("open main window");
+            }
+            state.update(cx, |state, cx| {
+                state.bootstrap_store(startup_mode == StartupMode::Interactive, cx)
             });
-            state.update(cx, |state, cx| state.bootstrap_store(cx));
 
             // Hotkey manager must be created on this GPUI UI thread (Windows
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.
@@ -90,9 +91,54 @@ fn main() {
             state.update(cx, |state, _| {
                 desktop::rebind_globals(&state.prefs.shortcuts);
             });
-            state::pump_desktop_events(state, rx, cx);
-            cx.activate(true);
+            state::pump_desktop_events(state.clone(), rx, cx);
+            if startup_mode == StartupMode::Interactive {
+                cx.activate(true);
+            }
         });
+}
+
+pub(crate) fn open_main_window(
+    state: Entity<AppState>,
+    activate: bool,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    if state.read(cx).main_window.is_some() {
+        return Ok(());
+    }
+    let bounds = Bounds::centered(None, size(px(800.), px(560.)), cx);
+    let handle = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some(APP_NAME.into()),
+                ..Default::default()
+            }),
+            focus: activate,
+            app_id: Some(APP_ID.into()),
+            window_min_size: Some(size(px(520.), px(400.))),
+            window_background: gpui::WindowBackgroundAppearance::Opaque,
+            // GNOME leaves server-decorated X11 clients unmapped when
+            // its mutter-x11-frames helper dies. Own the Linux frame.
+            #[cfg(target_os = "linux")]
+            window_decorations: Some(WindowDecorations::Client),
+            ..Default::default()
+        },
+        {
+            let state = state.clone();
+            move |window, cx| cx.new(|cx| MainWindow::new(state, window, cx))
+        },
+    )?;
+    state.update(cx, |state, cx| {
+        state.main_window = Some(handle);
+        state.main_window_opening = false;
+        state.main_window_visible = true;
+        state.boot_selected(cx);
+    });
+    if activate {
+        handle.update(cx, |_, window, _| window.activate_window())?;
+    }
+    Ok(())
 }
 
 fn pin_display_vulkan() {

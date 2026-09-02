@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+#[cfg(any(test, target_os = "windows"))]
 use anyhow::{anyhow, Result};
 use gpui::RenderImage;
 use image::codecs::jpeg::JpegEncoder;
@@ -66,6 +67,7 @@ pub fn cap_megapixels_at(img: RgbaImage, max_px: u64) -> RgbaImage {
 
 /// Windows CF_DIB / CF_DIBV5 payload: BITMAPINFO header + bits, no BITMAPFILEHEADER.
 /// 32-bit high byte is unused on BI_RGB clipboard dumps, so alpha is forced opaque.
+#[cfg(any(test, target_os = "windows"))]
 pub fn decode_dib(data: &[u8]) -> Result<RgbaImage> {
     if data.len() < 40 {
         return Err(anyhow!("DIB too small"));
@@ -107,6 +109,7 @@ pub fn decode_dib(data: &[u8]) -> Result<RgbaImage> {
     }
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn decode_dib_bgra(
     width: u32,
     height: u32,

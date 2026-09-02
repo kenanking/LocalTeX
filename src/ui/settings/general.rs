@@ -1,9 +1,9 @@
 use gpui::{div, prelude::*, AnyElement, Entity};
 
 use super::super::widgets::settings_group;
-use super::bool_row;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-use super::bool_row_apply;
+use super::super::widgets::{setting_row, switch};
+use super::bool_row;
 use crate::prefs::{Prefs, WindowCloseAction};
 use crate::state::AppState;
 
@@ -62,14 +62,19 @@ fn window_rows(state: &Entity<AppState>, prefs: &Prefs) -> Vec<AnyElement> {
         },
     )];
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    rows.push(bool_row_apply(
-        state,
-        "pref-autostart",
-        "Launch at startup",
-        "Opens LocalTeX when you sign in to this account.",
-        prefs.launch_at_startup,
-        |p, v| p.launch_at_startup = v,
-        |p| crate::autostart::apply(p.launch_at_startup),
-    ));
+    rows.push(autostart_row(state, prefs.launch_at_startup));
     rows
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn autostart_row(state: &Entity<AppState>, value: bool) -> AnyElement {
+    let state = state.clone();
+    setting_row(
+        "Launch at startup",
+        "Keeps LocalTeX ready in the tray when you sign in.",
+        switch("pref-autostart", value, move |_, cx| {
+            state.update(cx, |state, cx| state.set_launch_at_startup(!value, cx));
+        }),
+    )
+    .into_any_element()
 }

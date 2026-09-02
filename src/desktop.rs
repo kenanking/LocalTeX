@@ -200,17 +200,12 @@ fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     Some(manager)
 }
 
+#[cfg(target_os = "windows")]
 pub fn read_clipboard_image() -> Vec<Vec<u8>> {
-    #[cfg(target_os = "windows")]
-    {
-        win_clipboard::read()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Vec::new()
-    }
+    win_clipboard::read()
 }
 
+#[cfg(any(test, target_os = "windows"))]
 pub fn decode_clipboard_image(bytes: Vec<u8>) -> anyhow::Result<image::RgbaImage> {
     match image::load_from_memory(&bytes) {
         Ok(img) => Ok(img.to_rgba8()),

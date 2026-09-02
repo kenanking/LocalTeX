@@ -131,18 +131,27 @@ pub fn install_desktop_identity() {
 pub fn install_desktop_identity() {}
 
 #[cfg(any(test, target_os = "linux"))]
-fn write_hicolor_icons(hicolor: &std::path::Path) -> Result<(), String> {
+fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<bool, String> {
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return Ok(false);
+    }
+    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[cfg(any(test, target_os = "linux"))]
+fn write_hicolor_icons(hicolor: &std::path::Path) -> Result<bool, String> {
+    let mut changed = false;
     let scalable = hicolor.join("scalable/apps");
     std::fs::create_dir_all(&scalable).map_err(|e| e.to_string())?;
-    std::fs::write(scalable.join(format!("{APP_ID}.svg")), APP_ICON_SVG)
-        .map_err(|e| e.to_string())?;
+    changed |= write_if_changed(&scalable.join(format!("{APP_ID}.svg")), APP_ICON_SVG)?;
     for &size in HICOLOR_PNG_SIZES {
         let dir = hicolor.join(format!("{size}x{size}/apps"));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let png = png_bytes(size).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join(format!("{APP_ID}.png")), png).map_err(|e| e.to_string())?;
+        changed |= write_if_changed(&dir.join(format!("{APP_ID}.png")), &png)?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 #[cfg(target_os = "linux")]
@@ -150,7 +159,8 @@ fn install_desktop_identity_inner() -> Result<(), String> {
     let data = dirs::data_dir().ok_or_else(|| "no XDG data dir".to_string())?;
     let app_dir = data.join("applications");
     std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
-    write_hicolor_icons(&data.join("icons/hicolor"))?;
+    let hicolor = data.join("icons/hicolor");
+    let icons_changed = write_hicolor_icons(&hicolor)?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exec = exe.display().to_string().replace('"', "\\\"");
@@ -169,16 +179,22 @@ StartupWMClass={APP_ID}
 StartupNotify=true
 "
     );
-    std::fs::write(app_dir.join(format!("{APP_ID}.desktop")), desktop)
-        .map_err(|e| e.to_string())?;
+    let desktop_changed = write_if_changed(
+        &app_dir.join(format!("{APP_ID}.desktop")),
+        desktop.as_bytes(),
+    )?;
 
-    let _ = std::process::Command::new("update-desktop-database")
-        .arg(&app_dir)
-        .status();
-    let _ = std::process::Command::new("gtk-update-icon-cache")
-        .args(["-f", "-t"])
-        .arg(data.join("icons/hicolor"))
-        .status();
+    if desktop_changed {
+        let _ = std::process::Command::new("update-desktop-database")
+            .arg(&app_dir)
+            .status();
+    }
+    if icons_changed {
+        let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["-f", "-t"])
+            .arg(hicolor)
+            .status();
+    }
     Ok(())
 }
 

@@ -38,6 +38,7 @@ impl AppState {
 
     pub fn request_capture(&mut self, cx: &mut Context<Self>) {
         if self.is_bootstrapping() {
+            self.capture_after_bootstrap = true;
             return;
         }
         if self.capture.is_grabbing() {
@@ -131,29 +132,53 @@ impl AppState {
         if self.is_bootstrapping() {
             return;
         }
-        if self.is_capturing() {
+        if self.is_capturing() || self.ingest.clipboard_loading {
             return;
         }
+        #[cfg(target_os = "windows")]
+        {
+            self.ingest.clipboard_loading = true;
+            cx.spawn(async move |this, cx| {
+                let candidates = cx
+                    .background_spawn(async { crate::desktop::read_clipboard_image() })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.ingest.clipboard_loading = false;
+                    if candidates.is_empty() {
+                        this.request_paste_fallback(cx);
+                    } else {
+                        this.decode_native_clipboard(candidates, cx);
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+        #[cfg(not(target_os = "windows"))]
+        self.request_paste_fallback(cx);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn decode_native_clipboard(&mut self, candidates: Vec<Vec<u8>>, cx: &mut Context<Self>) {
         // Windows: GPUI skips CF_DIB/CF_BITMAP and can return text when a
         // bitmap is also present. Try every native candidate (PNG may be a
         // stub; DIB/HBITMAP still work).
-        let candidates = crate::desktop::read_clipboard_image();
-        if !candidates.is_empty() {
-            self.spawn_paste_image(
-                move || {
-                    let mut last = None;
-                    for raw in candidates {
-                        match crate::desktop::decode_clipboard_image(raw) {
-                            Ok(img) => return Ok(img),
-                            Err(err) => last = Some(err),
-                        }
+        self.spawn_paste_image(
+            move || {
+                let mut last = None;
+                for raw in candidates {
+                    match crate::desktop::decode_clipboard_image(raw) {
+                        Ok(img) => return Ok(img),
+                        Err(err) => last = Some(err),
                     }
-                    Err(last.unwrap_or_else(|| anyhow::anyhow!("no clipboard image")))
-                },
-                cx,
-            );
-            return;
-        }
+                }
+                Err(last.unwrap_or_else(|| anyhow::anyhow!("no clipboard image")))
+            },
+            cx,
+        );
+    }
+
+    fn request_paste_fallback(&mut self, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
             self.flash_capture_error("Clipboard is empty — copy an image first", cx);
             return;
@@ -226,7 +251,9 @@ impl AppState {
         });
     }
 
-    pub(super) fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
+        self.main_window_visible = false;
+        self.schedule_hidden_media_release(cx);
         crate::desktop::hide_main_to_tray();
         #[cfg(not(target_os = "windows"))]
         {
@@ -266,6 +293,26 @@ impl AppState {
 
     pub(super) fn restore_main(&mut self, cx: &mut Context<Self>) {
         self.capture.force_show();
+        self.main_window_visible = true;
+        self.hidden_media_release_task = None;
+        if self.main_window.is_none() {
+            if self.main_window_opening {
+                return;
+            }
+            self.main_window_opening = true;
+            let state = cx.entity();
+            cx.defer(move |cx| {
+                if let Err(err) = crate::open_main_window(state.clone(), true, cx) {
+                    eprintln!("{APP_SLUG}: open main window: {err:#}");
+                    state.update(cx, |state, cx| {
+                        state.main_window_opening = false;
+                        state.flash_capture_error("Couldn't open the main window", cx);
+                    });
+                }
+            });
+            return;
+        }
+        self.boot_selected(cx);
         crate::desktop::deiconify_main_window();
         let handle = self.main_window;
         cx.defer(move |cx| {

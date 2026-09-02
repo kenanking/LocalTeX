@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use uuid::Uuid;
@@ -69,9 +69,13 @@ pub(crate) struct IngestPump {
     pub ocr: OcrQueue,
     pub file_queue: VecDeque<PathBuf>,
     pub file_loading: bool,
+    pub clipboard_loading: bool,
     pub thumb_inflight: HashSet<Uuid>,
+    pub thumb_failed: HashSet<Uuid>,
     pub blocks_inflight: HashSet<Uuid>,
     pub png_inflight: HashSet<Uuid>,
+    pub persist_retry_counts: HashMap<Uuid, u8>,
+    pub persist_retry_pending: HashSet<Uuid>,
 }
 
 impl IngestPump {
@@ -80,9 +84,13 @@ impl IngestPump {
             ocr: OcrQueue::new(),
             file_queue: VecDeque::new(),
             file_loading: false,
+            clipboard_loading: false,
             thumb_inflight: HashSet::new(),
+            thumb_failed: HashSet::new(),
             blocks_inflight: HashSet::new(),
             png_inflight: HashSet::new(),
+            persist_retry_counts: HashMap::new(),
+            persist_retry_pending: HashSet::new(),
         }
     }
 }

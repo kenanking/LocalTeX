@@ -171,7 +171,9 @@ impl MainWindow {
                     .into_any_element(),
                 move |window, cx| {
                     let action = close_state.read(cx).prefs.close_action;
-                    AppState::handle_main_close(action, window, cx);
+                    close_state.update(cx, |state, cx| {
+                        state.handle_main_close(action, window, cx);
+                    });
                 },
             ))
     }

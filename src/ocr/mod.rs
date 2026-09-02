@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -50,6 +51,7 @@ pub struct Engine {
     inner: Mutex<Sessions>,
     opendoc_ok: bool,
     ink_ok: bool,
+    usage_generation: AtomicU64,
 }
 
 impl Engine {
@@ -87,6 +89,7 @@ impl Engine {
             }),
             opendoc_ok,
             ink_ok,
+            usage_generation: AtomicU64::new(0),
         })
     }
 
@@ -107,6 +110,7 @@ impl Engine {
                 opendoc_dir(&self.dir).display()
             );
         }
+        self.usage_generation.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.lock().expect("ocr mutex");
         if guard.page.is_none() {
             guard.page = Some(load_pipeline(&self.dir)?);
@@ -127,6 +131,7 @@ impl Engine {
                 handwriting_dir(&self.dir).display()
             );
         }
+        self.usage_generation.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.lock().expect("ocr mutex");
         if guard.ink.is_none() {
             guard.ink = Some(load_ink(&self.dir)?);
@@ -140,6 +145,26 @@ impl Engine {
             image_size,
             (out.encode_s + out.decode_s) as f32,
         ))
+    }
+
+    pub fn usage_generation(&self) -> u64 {
+        self.usage_generation.load(Ordering::Relaxed)
+    }
+
+    /// Drop lazily loaded sessions only if no newer inference started.
+    /// Session destruction can be expensive, so callers run this off the UI thread.
+    pub fn release_if_idle(&self, generation: u64) -> bool {
+        if self.usage_generation() != generation {
+            return false;
+        }
+        let mut guard = self.inner.lock().expect("ocr mutex");
+        if self.usage_generation() != generation {
+            return false;
+        }
+        let loaded = guard.page.is_some() || guard.ink.is_some();
+        guard.page = None;
+        guard.ink = None;
+        loaded
     }
 }
 
@@ -383,6 +408,7 @@ mod tests {
             }),
             opendoc_ok: false,
             ink_ok: false,
+            usage_generation: AtomicU64::new(0),
         };
         assert!(matches!(
             engine.status(),

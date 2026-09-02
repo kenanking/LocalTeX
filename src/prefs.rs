@@ -1,5 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
 
@@ -118,27 +121,16 @@ impl Prefs {
         })
     }
 
-    pub fn save(&self) {
+    pub(crate) fn save(&self) -> anyhow::Result<()> {
         let path = prefs_path();
         if let Some(parent) = path.parent() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                eprintln!("{APP_SLUG}: prefs dir: {err}");
-                return;
-            }
+            fs::create_dir_all(parent)?;
         }
-        match serde_json::to_string_pretty(self) {
-            Ok(raw) => {
-                let tmp = path.with_extension("json.tmp");
-                if let Err(err) = fs::write(&tmp, raw) {
-                    eprintln!("{APP_SLUG}: write prefs: {err}");
-                    return;
-                }
-                if let Err(err) = replace_file(&tmp, &path) {
-                    eprintln!("{APP_SLUG}: replace prefs: {err}");
-                }
-            }
-            Err(err) => eprintln!("{APP_SLUG}: encode prefs: {err}"),
-        }
+        let raw = serde_json::to_string_pretty(self)?;
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, raw)?;
+        replace_file(&tmp, &path)?;
+        Ok(())
     }
 
     pub fn wrap_inline(&self, body: &str) -> String {
@@ -157,16 +149,94 @@ impl Prefs {
     }
 }
 
-fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
-    match fs::rename(tmp, path) {
-        Ok(()) => Ok(()),
-        #[cfg(target_os = "windows")]
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(path)?;
-            fs::rename(tmp, path)
-        }
-        Err(err) => Err(err),
+enum PrefsCommand {
+    Save(Prefs),
+    Shutdown(Sender<anyhow::Result<()>>),
+}
+
+#[derive(Clone)]
+pub struct PrefsWriter {
+    tx: Sender<PrefsCommand>,
+    thread: Arc<Mutex<Option<JoinHandle<()>>>>,
+}
+
+impl PrefsWriter {
+    pub fn start() -> anyhow::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("localtex-prefs-writer".into())
+            .spawn(move || {
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        PrefsCommand::Save(prefs) => {
+                            if let Err(err) = prefs.save() {
+                                eprintln!("{APP_SLUG}: save prefs: {err:#}");
+                            }
+                        }
+                        PrefsCommand::Shutdown(reply) => {
+                            let _ = reply.send(Ok(()));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|err| anyhow::anyhow!("spawn prefs writer: {err}"))?;
+        Ok(Self {
+            tx,
+            thread: Arc::new(Mutex::new(Some(thread))),
+        })
     }
+
+    pub fn save(&self, prefs: Prefs) -> anyhow::Result<()> {
+        self.tx
+            .send(PrefsCommand::Save(prefs))
+            .map_err(|_| anyhow::anyhow!("prefs writer stopped"))
+    }
+
+    pub fn shutdown(&self) -> anyhow::Result<()> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(PrefsCommand::Shutdown(reply))
+            .map_err(|_| anyhow::anyhow!("prefs writer stopped"))?;
+        rx.recv()
+            .map_err(|_| anyhow::anyhow!("prefs writer stopped"))??;
+        let thread = self
+            .thread
+            .lock()
+            .map_err(|_| anyhow::anyhow!("prefs writer join lock"))?
+            .take();
+        if let Some(thread) = thread {
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("prefs writer panicked"))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    fs::rename(tmp, path)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(from.as_ptr()),
+            PCWSTR(to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 fn prefs_path() -> PathBuf {

@@ -129,6 +129,7 @@ pub struct MainWindow {
     source_flush_task: Option<gpui::Task<()>>,
     pub(crate) source_lang: &'static str,
     thumb_inflight: Rc<RefCell<HashSet<Uuid>>>,
+    full_inflight: HashSet<Uuid>,
 }
 
 impl MainWindow {
@@ -143,7 +144,7 @@ impl MainWindow {
         let state_for_close = state.clone();
         window.on_window_should_close(cx, move |window, cx| {
             let action = state_for_close.read(cx).prefs.close_action;
-            AppState::handle_main_close(action, window, cx)
+            state_for_close.update(cx, |state, cx| state.handle_main_close(action, window, cx))
         });
         cx.observe(&state, |this, _, cx| {
             this.ensure_selected_full(cx);
@@ -163,7 +164,6 @@ impl MainWindow {
                 .update(cx, |state, cx| state.set_search_query(query, cx));
         })
         .detach();
-        state.update(cx, |state, cx| state.boot_selected(cx));
         let settings = cx.new(|_| SettingsPane::new());
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let win_w: f32 = window.bounds().size.width.into();
@@ -262,6 +262,7 @@ impl MainWindow {
             source_flush_task: None,
             source_lang: "LaTeX",
             thumb_inflight: Rc::new(RefCell::new(HashSet::new())),
+            full_inflight: HashSet::new(),
         };
         this.schedule_derived(window, cx);
         this
@@ -587,12 +588,14 @@ impl MainWindow {
     }
 
     fn quit(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
-        cx.quit();
+        self.state.update(cx, |state, cx| state.request_quit(cx));
     }
 
     fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
         let action = self.state.read(cx).prefs.close_action;
-        AppState::handle_main_close(action, window, cx);
+        self.state.update(cx, |state, cx| {
+            state.handle_main_close(action, window, cx);
+        });
     }
 
     pub(crate) fn full(&self, id: Uuid) -> Option<Arc<RenderImage>> {
@@ -628,6 +631,14 @@ impl MainWindow {
         });
     }
 
+    pub(crate) fn release_hidden_media(&mut self, cx: &mut Context<Self>) {
+        self.full_inflight.clear();
+        self.thumb_inflight.borrow_mut().clear();
+        self.derived = None;
+        self.media.borrow_mut().clear(cx);
+        cx.notify();
+    }
+
     pub(crate) fn ensure_thumbs(&self, ids: &[Uuid], cx: &mut Context<Self>) {
         let mut request = Vec::new();
         let mut jobs = Vec::new();
@@ -637,6 +648,9 @@ impl MainWindow {
             let mut inflight = self.thumb_inflight.borrow_mut();
             for &id in ids {
                 if media.thumb(id).is_some() || inflight.contains(&id) {
+                    continue;
+                }
+                if state.thumbnail_failed(id) {
                     continue;
                 }
                 let Some(doc) = state.library.get(id) else {
@@ -678,6 +692,9 @@ impl MainWindow {
                     if let Some(render) = render {
                         this.media.borrow_mut().put_thumb(id, render);
                         cx.notify();
+                    } else {
+                        this.state
+                            .update(cx, |state, _| state.mark_thumbnail_failed(id));
                     }
                 }) {
                     eprintln!("thumb decode: {err}");
@@ -687,15 +704,36 @@ impl MainWindow {
         }
     }
 
-    pub(crate) fn ensure_selected_full(&self, cx: &App) {
-        let state = self.state.read(cx);
-        let Some(doc) = state.selected_doc() else {
-            return;
+    pub(crate) fn ensure_selected_full(&mut self, cx: &mut Context<Self>) {
+        let (id, pixels) = {
+            let state = self.state.read(cx);
+            let Some(doc) = state.selected_doc() else {
+                return;
+            };
+            let Some(pixels) = doc.image.pixels() else {
+                return;
+            };
+            (doc.id, pixels.clone())
         };
-        let Some(pixels) = doc.image.pixels() else {
+        if self.media.borrow().full(id).is_some() || !self.full_inflight.insert(id) {
             return;
-        };
-        self.media.borrow_mut().ensure_full(doc.id, pixels);
+        }
+        cx.spawn(async move |this, cx| {
+            let render = cx
+                .background_spawn(async move { crate::imgutil::gpu_display_image(pixels.as_ref()) })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.full_inflight.remove(&id);
+                if this.state.read(cx).library.get(id).is_some() {
+                    this.media.borrow_mut().put_full(id, render);
+                    this.schedule_media_gc(cx);
+                    cx.notify();
+                }
+            }) {
+                eprintln!("full image prepare: {err}");
+            }
+        })
+        .detach();
     }
 
     fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {

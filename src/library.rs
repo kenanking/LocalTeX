@@ -195,6 +195,15 @@ impl Library {
         self.docs.get(&id).and_then(|d| d.image.pixels().cloned())
     }
 
+    pub fn release_persisted_images(&mut self) {
+        for doc in self.docs.values_mut() {
+            if doc.is_persisted() && matches!(doc.image, ImageSlot::Loaded(_)) {
+                doc.image = ImageSlot::OnDisk;
+            }
+        }
+        self.loaded_lru.clear();
+    }
+
     /// Returns true when the selected id changed.
     pub fn select(&mut self, id: Uuid) -> bool {
         if self.selected == Some(id) || !self.docs.contains_key(&id) {
@@ -355,5 +364,25 @@ mod tests {
         assert_eq!(lib.selected(), None);
         assert!(lib.visible_ids.is_empty());
         assert_eq!(lib.date_preset(), DatePreset::Last7Days);
+    }
+
+    #[test]
+    fn hidden_release_keeps_unsaved_pixels() {
+        let mut lib = Library::new();
+        let mut stored = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        stored.persist = crate::doc::PersistState::Stored;
+        let stored_id = stored.id;
+        let pending = Document::pending(Arc::new(RgbaImage::new(4, 4)));
+        let pending_id = pending.id;
+        lib.insert_newest(stored);
+        lib.insert_newest(pending);
+
+        lib.release_persisted_images();
+
+        assert!(matches!(
+            lib.get(stored_id).unwrap().image,
+            ImageSlot::OnDisk
+        ));
+        assert!(lib.get(pending_id).unwrap().image.pixels().is_some());
     }
 }

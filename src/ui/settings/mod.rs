@@ -279,18 +279,6 @@ fn bool_row(
     value: bool,
     set: fn(&mut Prefs, bool),
 ) -> AnyElement {
-    bool_row_apply(state, id, title, hint, value, set, |_| {})
-}
-
-fn bool_row_apply(
-    state: &Entity<AppState>,
-    id: &'static str,
-    title: &'static str,
-    hint: &'static str,
-    value: bool,
-    set: fn(&mut Prefs, bool),
-    after: fn(&Prefs),
-) -> AnyElement {
     let state = state.clone();
     setting_row(
         title,
@@ -298,7 +286,6 @@ fn bool_row_apply(
         switch(id, value, move |_, cx| {
             state.update(cx, |s, cx| {
                 s.update_prefs(cx, |p| set(p, !value));
-                after(&s.prefs);
             });
         }),
     )

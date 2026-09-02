@@ -3,12 +3,6 @@ use rusqlite::{params, Connection};
 
 pub(super) const SCHEMA_VERSION: i32 = 2;
 
-enum SnipsShape {
-    Current,
-    PreMetrics,
-    Unknown,
-}
-
 pub(super) fn migrate(conn: &Connection) -> Result<()> {
     if !snips_table_exists(conn)? {
         conn.execute_batch(SNIPS_TABLE)?;
@@ -17,7 +11,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
         return Ok(());
     }
 
-    let mut version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         return Err(anyhow!(
             "snips.db schema version {version} is newer than this app ({SCHEMA_VERSION})"
@@ -25,67 +19,19 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
     }
 
     let names = snips_column_names(conn)?;
-    match classify_snips(&names) {
-        SnipsShape::Current => {}
-        SnipsShape::PreMetrics => upgrade_pre_metrics(conn, &names)?,
-        SnipsShape::Unknown => {
-            return Err(anyhow!(
-                "unrecognized snips schema (columns: {})",
-                names.join(", ")
-            ));
-        }
+    let missing: Vec<_> = SNIPS_COLUMNS
+        .iter()
+        .copied()
+        .filter(|column| !names.iter().any(|name| name == column))
+        .collect();
+    if !missing.is_empty() {
+        return Err(anyhow!(
+            "snips schema is missing required columns: {}",
+            missing.join(", ")
+        ));
     }
     ensure_aux(conn)?;
-
-    while version < SCHEMA_VERSION {
-        version = migrate_from(conn, version)?;
-        conn.pragma_update(None, "user_version", version)?;
-    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    Ok(())
-}
-
-fn migrate_from(conn: &Connection, from: i32) -> Result<i32> {
-    match from {
-        0 => Ok(1),
-        1 => {
-            let names = snips_column_names(conn)?;
-            if !names.iter().any(|n| n == "ocr_blocks_json") {
-                conn.execute("ALTER TABLE snips ADD COLUMN ocr_blocks_json TEXT", [])?;
-            }
-            conn.execute(
-                "UPDATE snips SET ocr_blocks_json = blocks_json WHERE ocr_blocks_json IS NULL",
-                [],
-            )?;
-            Ok(2)
-        }
-        other => Err(anyhow!("no migration from schema version {other}")),
-    }
-}
-
-fn classify_snips(names: &[String]) -> SnipsShape {
-    if has_all(names, &SNIPS_COLUMNS) {
-        return SnipsShape::Current;
-    }
-    if has_all(names, &PRE_METRICS_COLUMNS)
-        && names.iter().all(|n| SNIPS_COLUMNS.contains(&n.as_str()))
-    {
-        return SnipsShape::PreMetrics;
-    }
-    SnipsShape::Unknown
-}
-
-fn has_all(names: &[String], required: &[&str]) -> bool {
-    required.iter().all(|col| names.iter().any(|n| n == col))
-}
-
-fn upgrade_pre_metrics(conn: &Connection, names: &[String]) -> Result<()> {
-    if !names.iter().any(|n| n == "ocr_s") {
-        conn.execute("ALTER TABLE snips ADD COLUMN ocr_s REAL", [])?;
-    }
-    if !names.iter().any(|n| n == "confidence") {
-        conn.execute("ALTER TABLE snips ADD COLUMN confidence REAL", [])?;
-    }
     Ok(())
 }
 
@@ -96,19 +42,9 @@ const SNIPS_COLUMNS: [&str; 9] = [
     "blocks_json",
     "search_text",
     "thumb_jpeg",
-    "image_relpath",
     "ocr_s",
     "confidence",
-];
-
-const PRE_METRICS_COLUMNS: [&str; 7] = [
-    "id",
-    "created_at",
-    "first_line",
-    "blocks_json",
-    "search_text",
-    "thumb_jpeg",
-    "image_relpath",
+    "ocr_blocks_json",
 ];
 
 const SNIPS_TABLE: &str = "
@@ -119,10 +55,9 @@ const SNIPS_TABLE: &str = "
           blocks_json TEXT NOT NULL,
           search_text TEXT NOT NULL,
           thumb_jpeg BLOB NOT NULL,
-          image_relpath TEXT NOT NULL,
           ocr_s REAL,
           confidence REAL,
-          ocr_blocks_json TEXT
+          ocr_blocks_json TEXT NOT NULL
         );
         ";
 
@@ -139,25 +74,37 @@ fn snips_table_exists(conn: &Connection) -> Result<bool> {
 }
 
 fn master_table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    master_object_exists(conn, "table", name)
+}
+
+fn master_object_exists(conn: &Connection, kind: &str, name: &str) -> Result<bool> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-        params![name],
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+        params![kind, name],
         |row| row.get(0),
     )?;
     Ok(n > 0)
 }
 
 fn ensure_aux(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS snips_created_at ON snips (created_at DESC)",
-        [],
-    )?;
-    if master_table_exists(conn, "snips_fts")? {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "
-        CREATE VIRTUAL TABLE snips_fts USING fts5(
+    let fts_exists = master_table_exists(conn, "snips_fts")?;
+    let triggers_complete = ["snips_ai", "snips_ad", "snips_au"]
+        .into_iter()
+        .map(|name| master_object_exists(conn, "trigger", name))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .all(|exists| exists);
+    let needs_rebuild = !fts_exists || !triggers_complete;
+
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<()> {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS snips_created_at ON snips (created_at DESC)",
+            [],
+        )?;
+        conn.execute_batch(
+            "
+        CREATE VIRTUAL TABLE IF NOT EXISTS snips_fts USING fts5(
           search_text,
           content='snips',
           content_rowid='rowid',
@@ -175,10 +122,20 @@ fn ensure_aux(conn: &Connection) -> Result<()> {
             VALUES('delete', old.rowid, old.search_text);
           INSERT INTO snips_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
         END;
-        INSERT INTO snips_fts(snips_fts) VALUES('rebuild');
         ",
-    )?;
-    Ok(())
+        )?;
+        if needs_rebuild {
+            conn.execute("INSERT INTO snips_fts(snips_fts) VALUES('rebuild')", [])?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(Into::into),
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -188,7 +145,7 @@ mod tests {
     use crate::store::{DateRange, Store};
     use image::{Rgba, RgbaImage};
     use rusqlite::{params, Connection};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::SystemTime;
     use uuid::Uuid;
@@ -229,59 +186,24 @@ mod tests {
         (Store::open(root.clone()).unwrap(), root)
     }
 
-    const PRE_METRICS_ID: &str = "00000000-0000-0000-0000-000000000001";
-
-    fn write_pre_metrics_db(root: &Path, user_version: i32) {
-        std::fs::create_dir_all(root.join("snips")).unwrap();
-        let conn = Connection::open(root.join("snips.db")).unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE snips (
-              id TEXT PRIMARY KEY NOT NULL,
-              created_at INTEGER NOT NULL,
-              first_line TEXT NOT NULL,
-              blocks_json TEXT NOT NULL,
-              search_text TEXT NOT NULL,
-              thumb_jpeg BLOB NOT NULL,
-              image_relpath TEXT NOT NULL
-            );
-            ",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, image_relpath)
-             VALUES (?1, 0, 'old', '[]', 'old', x'00', 'snips/none.png')",
-            params![PRE_METRICS_ID],
-        )
-        .unwrap();
-        conn.pragma_update(None, "user_version", user_version)
-            .unwrap();
-        std::fs::write(root.join("snips/none.png"), b"x").unwrap();
-    }
-
-    fn snips_user_version(root: &Path) -> i32 {
-        let conn = Connection::open(root.join("snips.db")).unwrap();
-        conn.pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap()
-    }
-
     #[test]
-    fn pre_metrics_schema_is_upgraded_in_place() {
-        let root = std::env::temp_dir().join(format!("localtex-store-old-{}", Uuid::new_v4()));
-        write_pre_metrics_db(&root, 1);
-        let png = root.join("snips/none.png");
-        let store = Store::open(root.clone()).unwrap();
-        let list = store.list().unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].id.to_string(), PRE_METRICS_ID);
-        assert!(list[0].ocr.is_none());
-        assert!(png.exists());
-        assert_eq!(snips_user_version(&root), SCHEMA_VERSION);
-        store.load_blocks(list[0].id).unwrap();
-        assert_eq!(
-            store.query_ids("old", DateRange::default()).unwrap().len(),
-            1
-        );
+    fn fresh_schema_contains_only_current_columns() {
+        let (store, root) = tmp_store();
+        drop(store);
+        let conn = Connection::open(root.join("snips.db")).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(snips)").unwrap();
+        let columns: Vec<(String, bool)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, i32>(3)? != 0))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert!(!columns.iter().any(|(name, _)| name == "image_relpath"));
+        assert!(columns
+            .iter()
+            .any(|(name, not_null)| name == "ocr_blocks_json" && *not_null));
     }
 
     #[test]
@@ -328,20 +250,29 @@ mod tests {
     }
 
     #[test]
-    fn partial_pre_metrics_upgrade_converges() {
-        let root = std::env::temp_dir().join(format!("localtex-store-partial-{}", Uuid::new_v4()));
-        write_pre_metrics_db(&root, 0);
+    fn missing_fts_trigger_is_repaired_and_rebuilt() {
+        let (store, root) = tmp_store();
+        let doc = sample_doc("before repair", SystemTime::now());
+        let id = doc.id;
+        store.insert_ready(&doc).unwrap();
+        drop(store);
         {
             let conn = Connection::open(root.join("snips.db")).unwrap();
-            conn.execute("ALTER TABLE snips ADD COLUMN ocr_s REAL", [])
-                .unwrap();
-            conn.execute("ALTER TABLE snips ADD COLUMN confidence REAL", [])
-                .unwrap();
+            conn.execute_batch("DROP TRIGGER snips_au;").unwrap();
+            conn.execute(
+                "UPDATE snips SET search_text = 'after repair' WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .unwrap();
         }
-        let store = Store::open(root.clone()).unwrap();
-        assert_eq!(store.list().unwrap().len(), 1);
-        assert!(root.join("snips/none.png").exists());
-        assert_eq!(snips_user_version(&root), SCHEMA_VERSION);
+
+        let store = Store::open(root).unwrap();
+        assert_eq!(
+            store
+                .query_ids("after repair", DateRange::default())
+                .unwrap(),
+            vec![id]
+        );
     }
 
     #[test]
@@ -360,7 +291,7 @@ mod tests {
             Ok(_) => panic!("expected open to fail"),
             Err(e) => e,
         };
-        assert!(err.to_string().contains("unrecognized"));
+        assert!(err.to_string().contains("missing required columns"));
         assert!(root.join("snips/keep.png").exists());
     }
 }
