@@ -125,6 +125,9 @@ pub fn parse_source(src: &str, _prefs: &Prefs) -> Result<Vec<Block>, ParseError>
             Island::Markdown(md) => blocks.extend(parse_markdown_chunk(&md)),
         }
     }
+    for (i, b) in blocks.iter_mut().enumerate() {
+        b.bbox.y = i as u32;
+    }
     Ok(blocks)
 }
 
@@ -282,7 +285,7 @@ fn collapse_inline_only(islands: Vec<Island>) -> Vec<Island> {
             }
         }
         let (body, display) = unwrap_formula(t);
-        if display {
+        if display && t.starts_with(r"\begin{") {
             return vec![Island::Display(body)];
         }
         if !t.contains('\n') && !t.starts_with('#') && !t.contains('|') {
@@ -388,6 +391,37 @@ mod tests {
         let out = blocks_to_source(&parsed, &prefs);
         assert!(out.contains("$$\nE=mc^2\n$$"), "{out}");
         assert!(!out.contains("$$E=mc^2$$"), "{out}");
+    }
+
+    #[test]
+    fn multiline_prose_stays_text_blocks() {
+        let prefs = Prefs::default();
+        let parsed = parse_source("First paragraph.\n\nSecond paragraph.", &prefs).expect("parse");
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.iter().all(|b| b.kind == BlockKind::Text));
+        assert_eq!(snip_kind(&parsed), SnipKind::Mixed);
+
+        let titled = parse_source("# Title\n\nBody text.", &prefs).expect("parse");
+        assert_eq!(titled[0].role, BlockRole::DocTitle);
+        assert_eq!(titled[1].kind, BlockKind::Text);
+
+        let inline = parse_source("Let $x$ be.\n\nThen $y$.", &prefs).expect("parse");
+        assert!(inline.iter().all(|b| b.kind == BlockKind::Text));
+
+        let env =
+            parse_source("\\begin{aligned}a&=b\\\\c&=d\\end{aligned}", &prefs).expect("parse");
+        assert_eq!(env[0].kind, BlockKind::Formula);
+        assert!(env[0].display);
+    }
+
+    #[test]
+    fn edited_paragraphs_export_on_separate_rows() {
+        let prefs = Prefs::default();
+        let blocks = parse_source("First paragraph.\n\nSecond paragraph.", &prefs).expect("parse");
+        let md = crate::export::export_blocks(&blocks, crate::doc::ExportFmt::Markdown, &prefs);
+        assert!(!md.contains("paragraph. Second"), "space-joined: {md:?}");
+        assert!(md.starts_with("First paragraph.\n"), "{md:?}");
+        assert!(blocks[0].bbox.bottom() <= blocks[1].bbox.y);
     }
 
     #[test]

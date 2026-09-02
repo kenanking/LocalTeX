@@ -292,11 +292,11 @@ impl Store {
             return collect_ids(&mut stmt, params![start_ms, end_ms]);
         }
         if q.chars().count() < 3 {
-            let like = format!("%{q}%");
+            let like = like_literal(q);
             let mut stmt = conn.prepare(
                 "SELECT id FROM snips
                  WHERE created_at >= ?1 AND created_at < ?2
-                   AND search_text LIKE ?3
+                   AND search_text LIKE ?3 ESCAPE '\\'
                  ORDER BY created_at DESC
                  LIMIT 200",
             )?;
@@ -315,11 +315,11 @@ impl Store {
             Ok(ids) => Ok(ids),
             Err(err) => {
                 eprintln!("{APP_SLUG}: fts query: {err}");
-                let like = format!("%{q}%");
+                let like = like_literal(q);
                 let mut fallback = conn.prepare(
                     "SELECT id FROM snips
                      WHERE created_at >= ?1 AND created_at < ?2
-                       AND search_text LIKE ?3
+                       AND search_text LIKE ?3 ESCAPE '\\'
                      ORDER BY created_at DESC
                      LIMIT 200",
                 )?;
@@ -353,6 +353,18 @@ fn collect_ids(
         out.push(Uuid::parse_str(&s).map_err(|e| anyhow!("uuid: {e}"))?);
     }
     Ok(out)
+}
+
+fn like_literal(q: &str) -> String {
+    let mut out = String::from("%");
+    for c in q.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
 }
 
 fn fts_literal(q: &str) -> String {
@@ -555,6 +567,24 @@ mod tests {
         assert_eq!(ids, vec![doc.id]);
         let ids = store.query_ids(r"\frac", DateRange::default()).unwrap();
         assert_eq!(ids, vec![doc.id]);
+    }
+
+    #[test]
+    fn short_query_like_escapes_wildcards() {
+        let (store, _) = tmp_store();
+        let now = SystemTime::now();
+        let plain = sample_doc("xy formula", now);
+        let sub = sample_doc("x_1 formula", now + Duration::from_secs(1));
+        store.insert_ready(&plain).unwrap();
+        store.insert_ready(&sub).unwrap();
+        assert_eq!(
+            store.query_ids("x_", DateRange::default()).unwrap(),
+            vec![sub.id]
+        );
+        assert!(store
+            .query_ids("%", DateRange::default())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

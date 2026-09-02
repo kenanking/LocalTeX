@@ -79,6 +79,7 @@ impl MainWindow {
 
     fn render_caption(&self, window: &Window) -> impl IntoElement {
         let close_state = self.state.clone();
+        let minimize_state = self.state.clone();
         // Move only after the pointer actually travels. Starting a compositor
         // move on mouse-down swallows the second click of a title-bar double-click.
         let pending_move = self.caption_pending_move.clone();
@@ -143,9 +144,10 @@ impl MainWindow {
                     .h(px(1.))
                     .bg(rgb(theme::TEXT))
                     .into_any_element(),
-                |window, _| {
-                    crate::desktop::iconify_main_window();
-                    window.minimize_window();
+                move |window, cx| {
+                    minimize_state.update(cx, |state, cx| {
+                        state.minimize_main(window, cx);
+                    });
                 },
             ))
             .child(window_control(
@@ -531,6 +533,23 @@ mod client_frame_tests {
             resize_edge(point(px(1.), px(1.)), px(5.), window, Tiling::tiled()),
             None
         );
+    }
+
+    #[test]
+    fn caption_minimize_updates_tracked_visibility() {
+        let src = include_str!("chrome.rs");
+        let caption = src
+            .split("fn render_caption")
+            .nth(1)
+            .expect("render_caption")
+            .split("fn render_toolbar")
+            .next()
+            .expect("body");
+        assert!(
+            !caption.contains("window.minimize_window()"),
+            "caption minimize must go through AppState so main_window_visible stays in sync"
+        );
+        assert!(caption.contains("minimize_main"));
     }
 
     #[test]

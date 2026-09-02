@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{App, AppContext, Context, WindowHandle};
+use gpui::{App, AppContext, Context, Window, WindowHandle};
 use image::RgbaImage;
 
 use super::ingest::IngestSource;
@@ -10,6 +10,19 @@ use super::AppState;
 use crate::identity::APP_SLUG;
 
 const SHEET_DISMISS_SETTLE: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Copy)]
+struct HidePlan {
+    push_hide: bool,
+    await_iconify: bool,
+}
+
+fn capture_hide_plan(hide_pref: bool, has_window: bool) -> HidePlan {
+    HidePlan {
+        push_hide: hide_pref,
+        await_iconify: hide_pref && has_window,
+    }
+}
 
 impl AppState {
     pub fn is_capturing(&self) -> bool {
@@ -49,13 +62,16 @@ impl AppState {
         self.dismiss_main_sheet(cx);
         crate::desktop::prepare_snip_input();
 
-        let hide = self.prefs.hide_on_capture;
-        if hide {
-            self.hide_main(cx);
+        let plan = capture_hide_plan(self.prefs.hide_on_capture, self.main_window.is_some());
+        if plan.push_hide {
+            self.capture.push_hide();
+        }
+        if plan.await_iconify {
+            self.iconify_main(cx);
         }
 
         cx.spawn(async move |this, cx| {
-            if hide {
+            if plan.await_iconify {
                 if let Err(err) = cx
                     .background_spawn(async { crate::desktop::wait_until_iconified() })
                     .await
@@ -230,11 +246,6 @@ impl AppState {
         .detach();
     }
 
-    fn hide_main(&mut self, cx: &mut Context<Self>) {
-        self.capture.push_hide();
-        self.iconify_main(cx);
-    }
-
     pub(super) fn iconify_main(&mut self, cx: &mut Context<Self>) {
         // EWMH HIDDEN does not nest `handle.update` (in-app Snip runs while the
         // main window is already on GPUI's update stack).
@@ -249,6 +260,16 @@ impl AppState {
                 }
             }
         });
+    }
+
+    pub fn minimize_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.main_window_visible = false;
+        self.schedule_hidden_media_release(cx);
+        crate::desktop::hide_main_to_tray();
+        #[cfg(not(target_os = "windows"))]
+        window.minimize_window();
+        #[cfg(target_os = "windows")]
+        let _ = window;
     }
 
     pub(crate) fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
@@ -345,5 +366,21 @@ fn activate_window<V: 'static>(handle: WindowHandle<V>, cx: &mut App) {
         window.activate_window();
     }) {
         eprintln!("{APP_SLUG}: activate window: {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_hide_plan_skips_iconify_wait_without_window() {
+        let p = capture_hide_plan(true, false);
+        assert!(p.push_hide, "still restore/open the window after the snip");
+        assert!(!p.await_iconify, "nothing to iconify without a window");
+        let p = capture_hide_plan(true, true);
+        assert!(p.push_hide && p.await_iconify);
+        let p = capture_hide_plan(false, true);
+        assert!(!p.push_hide && !p.await_iconify);
     }
 }
