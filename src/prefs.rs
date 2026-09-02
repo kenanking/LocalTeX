@@ -27,6 +27,25 @@ pub enum BlockDelim {
     Equation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingWidth {
+    Narrow,
+    #[default]
+    Medium,
+    Wide,
+}
+
+impl ReadingWidth {
+    pub fn cap_px(self) -> f32 {
+        match self {
+            Self::Narrow => 576.0,
+            Self::Medium => 720.0,
+            Self::Wide => 896.0,
+        }
+    }
+}
+
 /// What the main window close button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +89,8 @@ pub struct Prefs {
     /// Catalog overrides only. Missing key = default. `null` = unbound.
     #[serde(default)]
     pub shortcuts: keymap::Overrides,
+    #[serde(default)]
+    pub reading_width: ReadingWidth,
 }
 
 fn default_true() -> bool {
@@ -100,6 +121,7 @@ impl Default for Prefs {
             orig_strip_h: default_orig_strip_h(),
             sidebar_pinned_collapsed: false,
             shortcuts: keymap::Overrides::new(),
+            reading_width: ReadingWidth::Medium,
         }
     }
 }
@@ -329,5 +351,25 @@ mod tests {
         let raw = serde_json::to_string(&p).unwrap();
         let q: Prefs = serde_json::from_str(&raw).unwrap();
         assert!(q.sidebar_pinned_collapsed);
+    }
+
+    #[test]
+    fn reading_width_defaults_medium_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.reading_width, ReadingWidth::Medium);
+        assert_eq!(p.reading_width.cap_px(), 720.0);
+    }
+
+    #[test]
+    fn reading_width_round_trips() {
+        let p = Prefs {
+            reading_width: ReadingWidth::Narrow,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert_eq!(q.reading_width, ReadingWidth::Narrow);
+        assert_eq!(q.reading_width.cap_px(), 576.0);
+        assert_eq!(ReadingWidth::Wide.cap_px(), 896.0);
     }
 }

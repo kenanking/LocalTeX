@@ -57,12 +57,14 @@ impl MainWindow {
                 .into_any_element();
         }
 
-        // Pane-width column: paragraphs wrap here. Wide tables / display
+        // Reading-width column: paragraphs wrap here. Wide tables / display
         // math scroll inside their own `h_scroll_pane` instead of stretching
         // this column (which would also stretch wrapped text).
+        let cap = px(self.state.read(cx).prefs.reading_width.cap_px());
         let mut col = div()
             .id("preview-doc")
             .w_full()
+            .max_w(cap)
             .min_w_0()
             .overflow_x_hidden()
             .flex()

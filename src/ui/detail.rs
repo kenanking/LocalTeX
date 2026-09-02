@@ -187,6 +187,9 @@ impl MainWindow {
                                 .px_4()
                                 .py_3()
                                 .overflow_y_scroll()
+                                .flex()
+                                .flex_col()
+                                .items_center()
                                 .track_scroll(&self.preview.vscroll)
                                 .capture_any_mouse_down({
                                     let sel = self.preview.sel.clone();
@@ -271,6 +274,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let entity = cx.entity();
+        let cap = px(self.state.read(cx).prefs.reading_width.cap_px());
         let src_w = (pane_w * self.source_split).max(140.0);
         div()
             .id("source-panel")
@@ -293,7 +297,16 @@ impl MainWindow {
                     .id("source-scroll")
                     .size_full()
                     .overflow_y_scroll()
-                    .child(self.source.clone()),
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(cap)
+                            .min_w_0()
+                            .child(self.source.clone()),
+                    ),
             )
             .child(
                 div()

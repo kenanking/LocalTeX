@@ -2,7 +2,7 @@ use gpui::{div, prelude::*, Entity};
 
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{patch_prefs, picker};
-use crate::prefs::{BlockDelim, InlineDelim, Prefs};
+use crate::prefs::{BlockDelim, InlineDelim, Prefs, ReadingWidth};
 use crate::state::AppState;
 
 pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
@@ -101,5 +101,57 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
                 )
                 .into_any_element(),
             ],
+        ))
+        .child(settings_group(
+            "Preview",
+            vec![setting_row(
+                "Reading width",
+                "Caps the copy column in a wide window. Tables and display math can still scroll.",
+                picker(
+                    210.,
+                    [
+                        seg_item(
+                            "pref-read-n",
+                            "Narrow",
+                            prefs.reading_width == ReadingWidth::Narrow,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.reading_width = ReadingWidth::Narrow
+                                    })
+                                }
+                            },
+                        ),
+                        seg_item(
+                            "pref-read-m",
+                            "Medium",
+                            prefs.reading_width == ReadingWidth::Medium,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.reading_width = ReadingWidth::Medium
+                                    })
+                                }
+                            },
+                        ),
+                        seg_item(
+                            "pref-read-w",
+                            "Wide",
+                            prefs.reading_width == ReadingWidth::Wide,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.reading_width = ReadingWidth::Wide
+                                    })
+                                }
+                            },
+                        ),
+                    ],
+                ),
+            )
+            .into_any_element()],
         ))
 }
