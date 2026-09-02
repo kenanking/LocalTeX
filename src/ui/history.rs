@@ -9,7 +9,10 @@ use gpui::{
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
-use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
+use super::scroll::{
+    overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar, ScrollAxis,
+    ScrollThumbDrag, ScrollbarTone,
+};
 use super::theme;
 use super::widgets::{
     icon_btn_sized, missing_image_slot, section_label, seg_item, segmented, IconBtnSize, IconKind,
@@ -256,9 +259,17 @@ impl MainWindow {
             .overflow_hidden()
             .px(px(if collapsed { 6. } else { 8. }))
             .pb(px(if collapsed { 4. } else { 8. }))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if this.history.hover != *hovered {
-                    this.history.hover = *hovered;
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                let next = overlay_chrome_hovered(
+                    *hovered,
+                    overlay_pointer_in_pane(
+                        &this.history.scroll_base(),
+                        ScrollAxis::Vertical,
+                        window.mouse_position(),
+                    ),
+                );
+                if this.history.hover != next {
+                    this.history.hover = next;
                     cx.notify();
                 }
             }))

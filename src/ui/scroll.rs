@@ -5,8 +5,9 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, App, DispatchPhase, Element, EntityId, LayoutId, MouseButton,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Style, Window,
+    div, prelude::*, px, AnyElement, App, Bounds, DispatchPhase, Element, EntityId, LayoutId,
+    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Style,
+    Window,
 };
 
 use super::theme;
@@ -207,6 +208,28 @@ impl Element for ThumbDragCatcher {
             },
         );
     }
+}
+
+pub(crate) const OVERLAY_THUMB_GUTTER: f32 = 8.0;
+
+pub(crate) fn overlay_chrome_hovered(hitbox_hovered: bool, pointer_in_pane: bool) -> bool {
+    hitbox_hovered || pointer_in_pane
+}
+
+pub(crate) fn overlay_pane_bounds(mut bounds: Bounds<Pixels>, axis: ScrollAxis) -> Bounds<Pixels> {
+    match axis {
+        ScrollAxis::Horizontal => bounds.size.height += px(OVERLAY_THUMB_GUTTER),
+        ScrollAxis::Vertical => bounds.size.width += px(OVERLAY_THUMB_GUTTER),
+    }
+    bounds
+}
+
+pub(crate) fn overlay_pointer_in_pane(
+    handle: &ScrollHandle,
+    axis: ScrollAxis,
+    mouse: Point<Pixels>,
+) -> bool {
+    overlay_pane_bounds(handle.bounds(), axis).contains(&mouse)
 }
 
 fn thumb_visible(hovered: bool, drag: &RefCell<Option<ScrollThumbDrag>>, vertical: bool) -> bool {
@@ -426,19 +449,28 @@ pub fn h_scroll_pane(
         .relative()
         .w_full()
         .min_w_0()
-        .pb(px(8.))
+        .pb(px(OVERLAY_THUMB_GUTTER))
         .on_hover({
             let hover = hover.clone();
             let pane_key = pane_key.clone();
-            move |hovered, _, cx| {
+            let handle = handle.clone();
+            move |hovered, window, cx| {
                 let mut set = hover.borrow_mut();
                 let was = set.contains(&pane_key);
-                if *hovered {
+                let next = overlay_chrome_hovered(
+                    *hovered,
+                    overlay_pointer_in_pane(
+                        &handle,
+                        ScrollAxis::Horizontal,
+                        window.mouse_position(),
+                    ),
+                );
+                if next {
                     set.insert(pane_key.clone());
                 } else {
                     set.remove(&pane_key);
                 }
-                if was != *hovered {
+                if was != next {
                     cx.notify(view);
                 }
             }
@@ -464,6 +496,7 @@ pub fn hscroll_should_center(content_w: f32, view_w: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{bounds, point, size};
 
     #[test]
     fn hscroll_centers_only_when_content_fits_a_measured_pane() {
@@ -471,5 +504,27 @@ mod tests {
         assert!(!hscroll_should_center(800.0, 400.0));
         assert!(!hscroll_should_center(800.0, 0.0));
         assert!(!hscroll_should_center(120.0, 0.0));
+    }
+
+    #[test]
+    fn overlay_chrome_stays_hovered_when_an_occluding_thumb_covers_the_pane() {
+        assert!(overlay_chrome_hovered(true, false));
+        assert!(overlay_chrome_hovered(true, true));
+        assert!(overlay_chrome_hovered(false, true));
+        assert!(!overlay_chrome_hovered(false, false));
+    }
+
+    #[test]
+    fn overlay_pane_bounds_include_the_thumb_gutter() {
+        let pane = bounds(point(px(10.), px(20.)), size(px(100.), px(40.)));
+        let on_h_thumb = point(px(50.), px(64.));
+        let on_v_thumb = point(px(114.), px(40.));
+        assert!(!pane.contains(&on_h_thumb));
+        assert!(!pane.contains(&on_v_thumb));
+        assert!(overlay_pane_bounds(pane, ScrollAxis::Horizontal).contains(&on_h_thumb));
+        assert!(!overlay_pane_bounds(pane, ScrollAxis::Horizontal).contains(&on_v_thumb));
+        assert!(overlay_pane_bounds(pane, ScrollAxis::Vertical).contains(&on_v_thumb));
+        assert!(!overlay_pane_bounds(pane, ScrollAxis::Vertical).contains(&on_h_thumb));
+        assert!(overlay_pane_bounds(pane, ScrollAxis::Vertical).contains(&point(px(50.), px(30.))));
     }
 }

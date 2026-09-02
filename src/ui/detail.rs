@@ -9,7 +9,9 @@ use super::orig_view::{
     clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_done_disc, source_hud_bar,
     source_hud_disc, source_hud_sep, OrigStripFrame,
 };
-use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
+use super::scroll::{
+    overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar, ScrollAxis, ScrollbarTone,
+};
 use super::theme;
 use super::widgets::{btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, IconKind};
 use super::window_drag::WindowDrag;
@@ -174,9 +176,17 @@ impl MainWindow {
                         .border_color(rgb(theme::BORDER))
                         .bg(rgb(theme::BG))
                         .overflow_hidden()
-                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                            if this.preview.hover != *hovered {
-                                this.preview.hover = *hovered;
+                        .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                            let next = overlay_chrome_hovered(
+                                *hovered,
+                                overlay_pointer_in_pane(
+                                    &this.preview.vscroll,
+                                    ScrollAxis::Vertical,
+                                    window.mouse_position(),
+                                ),
+                            );
+                            if this.preview.hover != next {
+                                this.preview.hover = next;
                                 cx.notify();
                             }
                         }))
