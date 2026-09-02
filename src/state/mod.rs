@@ -242,6 +242,8 @@ impl AppState {
     ) -> bool {
         match action {
             WindowCloseAction::Minimize => {
+                self.main_window_visible = false;
+                self.schedule_hidden_media_release(cx);
                 crate::desktop::hide_main_to_tray();
                 #[cfg(not(target_os = "windows"))]
                 window.minimize_window();
@@ -390,11 +392,7 @@ impl AppState {
         match cmd {
             DesktopCmd::Capture => self.request_capture(cx),
             DesktopCmd::Show => {
-                let active = self
-                    .main_window
-                    .and_then(|handle| handle.is_active(cx))
-                    .unwrap_or(false);
-                if active {
+                if self.main_window_visible {
                     self.hide_to_tray(cx);
                 } else {
                     self.restore_main(cx);
