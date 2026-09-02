@@ -474,6 +474,7 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
     let formula_only = matches!(snip_kind(blocks), SnipKind::Formula);
     let mut out = Vec::new();
     let mut para: Vec<InlineSeg> = Vec::new();
+    let mut prev_body_text = false;
     let flush_para = |para: &mut Vec<InlineSeg>, blocks: &mut Vec<PreviewBlock>| {
         if para.iter().any(seg_is_visible) {
             blocks.push(PreviewBlock::Paragraph(std::mem::take(para)));
@@ -489,20 +490,24 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
         match block.kind {
             BlockKind::Table => {
                 flush_para(&mut para, &mut out);
+                prev_body_text = false;
                 push_table_block(&block.text, &mut out, dpr);
             }
             BlockKind::Formula => {
                 let (body, unwrapped_display) = crate::math::unwrap_formula(&block.text);
                 if formula_only || block.display || unwrapped_display {
                     flush_para(&mut para, &mut out);
+                    prev_body_text = false;
                     push_display(&body, &body, dpr, &mut out);
                 } else {
                     push_inline(&mut para, &body, MathStyle::Text, dpr);
+                    prev_body_text = false;
                 }
             }
             BlockKind::Text => {
                 if block.role.interrupts_prose() {
                     flush_para(&mut para, &mut out);
+                    prev_body_text = false;
                     let segs = segs_from_text(&block.text, MathStyle::Text, dpr);
                     if segs.iter().any(seg_is_visible) {
                         match block.role {
@@ -518,6 +523,10 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                     }
                     continue;
                 }
+                if prev_body_text {
+                    flush_para(&mut para, &mut out);
+                }
+                prev_body_text = true;
                 for run in split_math(&block.text) {
                     match run {
                         MathRun::Text(t) => {

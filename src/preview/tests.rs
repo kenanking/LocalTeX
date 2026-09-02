@@ -118,6 +118,75 @@ fn title_and_body_are_separate_preview_blocks() {
     );
 }
 
+fn paragraph_texts(preview: &[PreviewBlock]) -> Vec<String> {
+    preview
+        .iter()
+        .filter_map(|b| match b {
+            PreviewBlock::Paragraph(segs) => Some(
+                segs.iter()
+                    .filter_map(|s| match s {
+                        InlineSeg::Text(t) => Some(t.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn stacked_body_texts_are_separate_paragraphs() {
+    let top = crate::doc::Rect {
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 20,
+    };
+    let below = crate::doc::Rect {
+        x: 0,
+        y: 40,
+        w: 200,
+        h: 20,
+    };
+    let blocks = vec![
+        Block::new(BlockKind::Text, top, "First paragraph of the snip."),
+        Block::new(BlockKind::Text, below, "Second paragraph of the snip."),
+    ];
+    let preview = document_preview(&blocks);
+    assert_eq!(
+        paragraph_texts(&preview),
+        [
+            "First paragraph of the snip.".to_string(),
+            "Second paragraph of the snip.".to_string(),
+        ],
+        "stacked OCR body blocks must not weld, got {preview:?}"
+    );
+}
+
+#[test]
+fn editor_unit_rect_body_texts_are_separate_paragraphs() {
+    let r = crate::doc::Rect {
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+    };
+    let blocks = vec![
+        Block::new(BlockKind::Text, r, "Edited first paragraph."),
+        Block::new(BlockKind::Text, r, "Edited second paragraph."),
+    ];
+    let preview = document_preview(&blocks);
+    assert_eq!(
+        paragraph_texts(&preview),
+        [
+            "Edited first paragraph.".to_string(),
+            "Edited second paragraph.".to_string(),
+        ],
+        "source-parsed body blocks share a unit rect and must still split, got {preview:?}"
+    );
+}
+
 #[test]
 fn short_formula_block_stays_inline_with_neighbors() {
     let r = crate::doc::Rect {
