@@ -117,7 +117,11 @@ impl Engine {
         }
         let pipeline = guard.page.as_mut().expect("ocr just loaded");
         let mut rgb = rgba_to_rgb(image)?;
-        pipeline.infer(&mut rgb)
+        let result = pipeline.infer(&mut rgb);
+        drop(rgb);
+        drop(guard);
+        trim_process_heap();
+        result
     }
 
     pub fn recognize_ink(
@@ -139,12 +143,13 @@ impl Engine {
         let ink = guard.ink.as_mut().expect("inktex just loaded");
         let mut traces = traces.to_vec();
         inktex::deburst(&mut traces);
-        let out = ink.recognize(&traces)?;
-        Ok(ink_formula_result(
-            out.text,
-            image_size,
-            (out.encode_s + out.decode_s) as f32,
-        ))
+        let result = ink.recognize(&traces).map(|out| {
+            ink_formula_result(out.text, image_size, (out.encode_s + out.decode_s) as f32)
+        });
+        drop(traces);
+        drop(guard);
+        trim_process_heap();
+        result
     }
 
     pub fn usage_generation(&self) -> u64 {
@@ -164,9 +169,25 @@ impl Engine {
         let loaded = guard.page.is_some() || guard.ink.is_some();
         guard.page = None;
         guard.ink = None;
+        drop(guard);
+        if loaded {
+            trim_process_heap();
+        }
         loaded
     }
 }
+
+/// Return allocator pages made idle by OCR to the kernel. ORT work and session
+/// destruction both run off the UI thread; non-glibc targets need no analogue.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn trim_process_heap() {
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn trim_process_heap() {}
 
 fn pack_present(dir: &Path, files: &[&str]) -> bool {
     files.iter().all(|name| dir.join(name).is_file())
