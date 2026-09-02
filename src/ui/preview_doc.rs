@@ -11,6 +11,7 @@ use super::selectable::{selectable_run, selectable_text, PreviewSel};
 use super::theme;
 use crate::doc::DocStatus;
 use crate::math::ScriptKind;
+use crate::prefs::ContentFontSize;
 use crate::preview::{
     segs_lines, Eqno, InlineSeg, PreviewBlock, PreviewLayout, ScriptGlyph, SvgMath,
 };
@@ -61,7 +62,10 @@ impl MainWindow {
         // Reading-width column: paragraphs wrap here. Wide tables / display
         // math scroll inside their own `h_scroll_pane` instead of stretching
         // this column (which would also stretch wrapped text).
-        let cap = px(self.state.read(cx).prefs.reading_width.cap_px());
+        let (cap, font) = {
+            let prefs = &self.state.read(cx).prefs;
+            (px(prefs.reading_width.cap_px()), prefs.content_font)
+        };
         let mut col = div()
             .id("preview-doc")
             .w_full()
@@ -104,7 +108,7 @@ impl MainWindow {
         self.preview.sel.borrow_mut().set_flow(flow);
 
         for (i, block) in blocks.iter().enumerate() {
-            col = col.child(self.render_preview_block(i, block, view, cx));
+            col = col.child(self.render_preview_block(i, block, view, font, cx));
         }
         col.into_any_element()
     }
@@ -114,8 +118,10 @@ impl MainWindow {
         i: usize,
         block: &PreviewBlock,
         view: EntityId,
+        font: ContentFontSize,
         cx: &mut App,
     ) -> impl IntoElement {
+        let m = font.metrics();
         match block {
             PreviewBlock::Paragraph(segs) => {
                 let has_math = segs_have_glyphs(segs);
@@ -124,12 +130,12 @@ impl MainWindow {
                     .w_full()
                     .min_w_0()
                     .when(!has_math, |d| {
-                        d.text_sm()
-                            .line_height(px(22.))
+                        d.text_size(px(m.body))
+                            .line_height(px(m.body_line))
                             .text_color(rgb(theme::INK))
                             .whitespace_normal()
                     })
-                    .child(self.render_segs(format!("p-{i}"), segs, true, cx))
+                    .child(self.render_segs(format!("p-{i}"), segs, true, font, cx))
                     .into_any()
             }
             PreviewBlock::Heading { role, segs } => {
@@ -142,34 +148,34 @@ impl MainWindow {
                     .when(doc_title, |d| {
                         d.pt(px(2.))
                             .pb(px(6.))
-                            .text_xl()
-                            .line_height(px(28.))
+                            .text_size(px(m.title))
+                            .line_height(px(m.title_line))
                             .font_weight(gpui::FontWeight::BOLD)
                     })
                     .when(!doc_title, |d| {
                         d.pt(px(12.))
                             .pb(px(4.))
-                            .text_lg()
-                            .line_height(px(24.))
+                            .text_size(px(m.heading))
+                            .line_height(px(m.heading_line))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                     })
-                    .child(self.render_segs(format!("p-{i}"), segs, false, cx))
+                    .child(self.render_segs(format!("p-{i}"), segs, false, font, cx))
                     .into_any()
             }
             PreviewBlock::Caption(segs) => div()
                 .id(SharedString::from(format!("p-{i}")))
                 .w_full()
                 .min_w_0()
-                .text_xs()
+                .text_size(px(m.caption))
                 .text_color(rgb(theme::INK))
-                .child(self.render_segs(format!("p-{i}"), segs, false, cx))
+                .child(self.render_segs(format!("p-{i}"), segs, false, font, cx))
                 .into_any(),
             PreviewBlock::Display { math, eqno } => {
-                self.render_display_math(i, math, eqno.as_ref(), view, cx)
+                self.render_display_math(i, math, eqno.as_ref(), view, font, cx)
             }
             PreviewBlock::Table(layout) => {
                 let handle = self.preview.hscroll_handle(&format!("tbl-{i}"));
-                let table_el = self.render_table_preview(i, layout, cx);
+                let table_el = self.render_table_preview(i, layout, font, cx);
                 h_scroll_pane(
                     format!("tbl-{i}"),
                     ScrollChrome {
@@ -189,7 +195,7 @@ impl MainWindow {
                 .id(SharedString::from(format!("f-{i}")))
                 .w_full()
                 .min_w_0()
-                .text_sm()
+                .text_size(px(m.body))
                 .whitespace_normal()
                 .text_color(rgb(theme::INK))
                 .child(selectable_text(
@@ -207,6 +213,7 @@ impl MainWindow {
         math: &SvgMath,
         eqno: Option<&Eqno>,
         view: EntityId,
+        font: ContentFontSize,
         cx: &mut App,
     ) -> AnyElement {
         let handle = self.preview.hscroll_handle(&format!("d-{i}"));
@@ -223,7 +230,7 @@ impl MainWindow {
             let content_w = math.width + EQNO_GAP + tag_w.max(1.0);
             let content_h = math.height.max(eqno.height());
             let img = self.math_img(math, cx);
-            let number = self.eqno_el(eqno, cx);
+            let number = self.eqno_el(eqno, font, cx);
             let row = div()
                 .flex()
                 .flex_row()
@@ -278,19 +285,20 @@ impl MainWindow {
                     .h(px(math.height.max(1.0)))
                     .flex()
                     .items_center()
-                    .child(self.eqno_el(eqno, cx)),
+                    .child(self.eqno_el(eqno, font, cx)),
             );
         }
         div().w_full().min_w_0().py_3().child(inner).into_any()
     }
 
-    fn eqno_el(&mut self, eqno: &Eqno, cx: &mut App) -> AnyElement {
+    fn eqno_el(&mut self, eqno: &Eqno, font: ContentFontSize, cx: &mut App) -> AnyElement {
         if let Some(math) = &eqno.math {
             self.math_img(math, cx).into_any_element()
         } else {
+            let m = font.metrics();
             div()
-                .text_size(px(18.))
-                .line_height(px(22.))
+                .text_size(px(m.display_math as f32))
+                .line_height(px(m.display_math as f32 + 4.0))
                 .text_color(rgb(theme::INK))
                 .child(SharedString::from(crate::math::format_eqno(&eqno.raw)))
                 .into_any()
@@ -301,6 +309,7 @@ impl MainWindow {
         &mut self,
         i: usize,
         layout: &PreviewLayout,
+        font: ContentFontSize,
         cx: &mut App,
     ) -> impl IntoElement {
         let mut wrap = div()
@@ -328,11 +337,17 @@ impl MainWindow {
                     .items_start()
                     .gap_0();
                 for (k, line) in lines.iter().enumerate() {
-                    col = col.child(self.render_segs(format!("{cell_id}-{k}"), line, false, cx));
+                    col = col.child(self.render_segs(
+                        format!("{cell_id}-{k}"),
+                        line,
+                        false,
+                        font,
+                        cx,
+                    ));
                 }
                 col.into_any()
             } else {
-                self.render_segs(cell_id.clone(), &cell.segs, false, cx)
+                self.render_segs(cell_id.clone(), &cell.segs, false, font, cx)
             };
             wrap = wrap.child(
                 div()
@@ -355,7 +370,7 @@ impl MainWindow {
                         d.bg(rgb(theme::BG_SUNKEN))
                             .font_weight(gpui::FontWeight::MEDIUM)
                     })
-                    .text_xs()
+                    .text_size(px(font.metrics().caption))
                     .text_color(rgb(theme::INK))
                     .child(body),
             );
@@ -368,6 +383,7 @@ impl MainWindow {
         id: String,
         segs: &[InlineSeg],
         paragraph: bool,
+        font: ContentFontSize,
         cx: &mut App,
     ) -> AnyElement {
         if !segs_have_glyphs(segs) {
@@ -387,6 +403,7 @@ impl MainWindow {
                 .into_any();
         }
         let (para_text, ranges) = concat_inline_segs(segs);
+        let m = font.metrics();
         let mut row = div()
             .id(SharedString::from(format!("{id}-row")))
             .w_full()
@@ -396,10 +413,16 @@ impl MainWindow {
             .flex_wrap()
             .items_end()
             .when(paragraph, |d| {
-                d.text_sm().line_height(px(16.)).text_color(rgb(theme::INK))
+                d.text_size(px(m.body))
+                    .line_height(px(m.inline_line))
+                    .text_color(rgb(theme::INK))
             });
         let sel = self.preview.sel.clone();
-        let line_h = if paragraph { 16.0 } else { 18.0 };
+        let line_h = if paragraph {
+            m.inline_line
+        } else {
+            m.table_line
+        };
         for (j, seg) in segs.iter().enumerate() {
             let glue = next_text_starts_with_space(segs.get(j + 1));
             let math_on = {
@@ -424,6 +447,7 @@ impl MainWindow {
                                 paragraph,
                             },
                             sel.clone(),
+                            font,
                         ));
                     }
                 }
@@ -439,7 +463,7 @@ impl MainWindow {
                                 .flex_shrink_0()
                                 .when(math_on, |d| d.bg(theme::accent_soft()))
                                 .child(self.script_el(glyph, line_h, cx))
-                                .when(glue, |d| d.child(glue_el(paragraph))),
+                                .when(glue, |d| d.child(glue_el(paragraph, font))),
                         );
                         continue;
                     }
@@ -457,6 +481,7 @@ impl MainWindow {
                                 paragraph,
                             },
                             sel.clone(),
+                            font,
                         );
                         if Some(k) == last {
                             row = row.child(
@@ -469,7 +494,7 @@ impl MainWindow {
                                     .when(math_on, |d| d.bg(theme::accent_soft()))
                                     .child(run)
                                     .child(self.script_el(glyph, line_h, cx))
-                                    .when(glue, |d| d.child(glue_el(paragraph))),
+                                    .when(glue, |d| d.child(glue_el(paragraph, font))),
                             );
                         } else {
                             row = row.child(run);
@@ -498,7 +523,7 @@ impl MainWindow {
                             .px(px(1.))
                             .when(math_on, |d| d.bg(theme::accent_soft()))
                             .child(glyph)
-                            .when(glue, |d| d.child(glue_el(paragraph))),
+                            .when(glue, |d| d.child(glue_el(paragraph, font))),
                     );
                 }
             }
@@ -506,14 +531,24 @@ impl MainWindow {
         row.into_any()
     }
 
-    fn text_run_el(&self, spec: TextRunSpec, sel: Rc<RefCell<PreviewSel>>) -> impl IntoElement {
+    fn text_run_el(
+        &self,
+        spec: TextRunSpec,
+        sel: Rc<RefCell<PreviewSel>>,
+        font: ContentFontSize,
+    ) -> impl IntoElement {
+        let m = font.metrics();
         div()
             .id(SharedString::from(spec.run_id.clone()))
             .flex_shrink_0()
             .when(spec.paragraph, |d| {
-                d.text_sm().line_height(px(16.)).text_color(rgb(theme::INK))
+                d.text_size(px(m.body))
+                    .line_height(px(m.inline_line))
+                    .text_color(rgb(theme::INK))
             })
-            .when(!spec.paragraph, |d| d.text_xs().text_color(rgb(theme::INK)))
+            .when(!spec.paragraph, |d| {
+                d.text_size(px(m.caption)).text_color(rgb(theme::INK))
+            })
             .child(selectable_run(
                 spec.run_id,
                 spec.block_id,
@@ -592,12 +627,15 @@ fn next_text_starts_with_space(next: Option<&InlineSeg>) -> bool {
     text.chars().next().is_some_and(char::is_whitespace)
 }
 
-fn glue_el(paragraph: bool) -> gpui::Div {
+fn glue_el(paragraph: bool, font: ContentFontSize) -> gpui::Div {
+    let m = font.metrics();
     // A flex item whose only text is U+0020 collapses to zero width.
     div()
         .flex_shrink_0()
-        .when(paragraph, |d| d.text_sm().line_height(px(16.)))
-        .when(!paragraph, |d| d.text_xs())
+        .when(paragraph, |d| {
+            d.text_size(px(m.body)).line_height(px(m.inline_line))
+        })
+        .when(!paragraph, |d| d.text_size(px(m.caption)))
         .child("\u{00A0}")
 }
 

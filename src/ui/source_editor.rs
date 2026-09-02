@@ -3,13 +3,14 @@ use std::ops::Range;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, AvailableSpace,
     Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
+    EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
     Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
 };
 
 use super::text_buffer::TextBuffer;
 use super::theme;
+use crate::prefs::ContentFontSize;
 
 actions!(
     source_editor,
@@ -45,19 +46,24 @@ pub struct SourceEditor {
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
     skip_undo: bool,
+    font_px: f32,
+    line_px: f32,
 }
 
 impl SourceEditor {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let m = ContentFontSize::Medium.metrics();
         Self {
             focus_handle: cx.focus_handle(),
             buf: TextBuffer::new(),
             last_lines: Vec::new(),
             last_bounds: None,
-            last_line_height: px(16.),
+            last_line_height: px(m.body_line),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             skip_undo: false,
+            font_px: m.body,
+            line_px: m.body_line,
         }
     }
 
@@ -71,6 +77,16 @@ impl SourceEditor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
+    }
+
+    pub fn set_content_font(&mut self, size: ContentFontSize, cx: &mut Context<Self>) {
+        let m = size.metrics();
+        if self.font_px == m.body && self.line_px == m.body_line {
+            return;
+        }
+        self.font_px = m.body;
+        self.line_px = m.body_line;
+        cx.notify();
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -438,13 +454,13 @@ fn shape_wrapped(
     window: &mut Window,
     content: SharedString,
     wrap_width: Option<Pixels>,
+    font: Font,
+    font_size: Pixels,
+    line_height: Pixels,
 ) -> (Vec<(usize, WrappedLine)>, Pixels) {
-    let style = window.text_style();
-    let font_size = style.font_size.to_pixels(window.rem_size());
-    let line_height = window.line_height();
     let run = TextRun {
         len: content.len(),
-        font: style.font(),
+        font,
         color: rgb(theme::TEXT).into(),
         background_color: None,
         underline: None,
@@ -516,6 +532,7 @@ impl Element for FieldElement {
         _cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let input = self.input.clone();
+        let font = window.text_style().font();
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         let id = window.request_measured_layout(style, move |known, available, window, cx| {
@@ -523,8 +540,18 @@ impl Element for FieldElement {
                 AvailableSpace::Definite(w) => Some(w),
                 AvailableSpace::MinContent | AvailableSpace::MaxContent => None,
             });
-            let content = input.read(cx).buf.content.clone();
-            let (_, height) = shape_wrapped(window, content, wrap_width);
+            let ed = input.read(cx);
+            let content = ed.buf.content.clone();
+            let font_size = px(ed.font_px);
+            let line_height = px(ed.line_px);
+            let (_, height) = shape_wrapped(
+                window,
+                content,
+                wrap_width,
+                font.clone(),
+                font_size,
+                line_height,
+            );
             let width = wrap_width.unwrap_or(px(0.));
             Size { width, height }
         });
@@ -544,13 +571,16 @@ impl Element for FieldElement {
         let content = input.buf.content.clone();
         let selected_range = input.buf.selected_range.clone();
         let cursor = input.cursor_offset();
-        let line_height = window.line_height();
+        let font_size = px(input.font_px);
+        let line_height = px(input.line_px);
+        let font = window.text_style().font();
         let wrap_width = if bounds.size.width > px(0.) {
             Some(bounds.size.width)
         } else {
             None
         };
-        let (lines, height) = shape_wrapped(window, content, wrap_width);
+        let (lines, height) =
+            shape_wrapped(window, content, wrap_width, font, font_size, line_height);
         let mut selection = Vec::new();
         let mut cursor_quad = None;
         let mut y = bounds.top();
@@ -641,7 +671,7 @@ impl Element for FieldElement {
         for quad in prepaint.selection.drain(..) {
             window.paint_quad(quad);
         }
-        let line_height = window.line_height();
+        let line_height = px(self.input.read(cx).line_px);
         let mut origin = bounds.origin;
         for (_, line) in prepaint.lines.iter() {
             let _ = line.paint(
@@ -701,10 +731,9 @@ impl Render for SourceEditor {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .w_full()
             .min_w_0()
-            .px_2()
-            .pt_2()
             .pb(px(52.))
-            .text_xs()
+            .text_size(px(self.font_px))
+            .line_height(px(self.line_px))
             .font_family("monospace")
             .text_color(rgb(theme::TEXT))
             .child(FieldElement { input: cx.entity() })

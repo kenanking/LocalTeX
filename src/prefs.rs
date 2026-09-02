@@ -46,6 +46,80 @@ impl ReadingWidth {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentFontSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ContentFontMetrics {
+    pub body: f32,
+    pub heading: f32,
+    pub title: f32,
+    pub caption: f32,
+    pub inline_math: f64,
+    pub display_math: f64,
+    pub script: f64,
+    pub body_line: f32,
+    pub inline_line: f32,
+    pub heading_line: f32,
+    pub title_line: f32,
+    pub table_line: f32,
+}
+
+impl ContentFontSize {
+    pub fn metrics(self) -> ContentFontMetrics {
+        match self {
+            Self::Small => ContentFontMetrics {
+                body: 12.0,
+                heading: 16.0,
+                title: 18.0,
+                caption: 10.0,
+                inline_math: 14.0,
+                display_math: 16.0,
+                script: 10.0,
+                body_line: 18.0,
+                inline_line: 14.0,
+                heading_line: 20.0,
+                title_line: 24.0,
+                table_line: 16.0,
+            },
+            Self::Medium => ContentFontMetrics {
+                body: 14.0,
+                heading: 18.0,
+                title: 20.0,
+                caption: 12.0,
+                inline_math: 16.0,
+                display_math: 18.0,
+                script: 11.5,
+                body_line: 22.0,
+                inline_line: 16.0,
+                heading_line: 24.0,
+                title_line: 28.0,
+                table_line: 18.0,
+            },
+            Self::Large => ContentFontMetrics {
+                body: 16.0,
+                heading: 20.0,
+                title: 22.0,
+                caption: 14.0,
+                inline_math: 18.0,
+                display_math: 20.0,
+                script: 13.0,
+                body_line: 26.0,
+                inline_line: 18.0,
+                heading_line: 28.0,
+                title_line: 32.0,
+                table_line: 20.0,
+            },
+        }
+    }
+}
+
 /// What the main window close button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +165,8 @@ pub struct Prefs {
     pub shortcuts: keymap::Overrides,
     #[serde(default)]
     pub reading_width: ReadingWidth,
+    #[serde(default)]
+    pub content_font: ContentFontSize,
 }
 
 fn default_true() -> bool {
@@ -122,6 +198,7 @@ impl Default for Prefs {
             sidebar_pinned_collapsed: false,
             shortcuts: keymap::Overrides::new(),
             reading_width: ReadingWidth::Medium,
+            content_font: ContentFontSize::Medium,
         }
     }
 }
@@ -371,5 +448,31 @@ mod tests {
         assert_eq!(q.reading_width, ReadingWidth::Narrow);
         assert_eq!(q.reading_width.cap_px(), 576.0);
         assert_eq!(ReadingWidth::Wide.cap_px(), 896.0);
+    }
+
+    #[test]
+    fn content_font_defaults_medium_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.content_font, ContentFontSize::Medium);
+        assert_eq!(p.content_font.metrics().body, 14.0);
+    }
+
+    #[test]
+    fn content_font_round_trips_small() {
+        let p = Prefs {
+            content_font: ContentFontSize::Small,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert_eq!(q.content_font, ContentFontSize::Small);
+    }
+
+    #[test]
+    fn content_font_medium_metrics_match_preview() {
+        let m = ContentFontSize::Medium.metrics();
+        assert_eq!(m.body, 14.0);
+        assert_eq!(m.inline_math, 16.0);
+        assert_eq!(m.display_math, 18.0);
     }
 }

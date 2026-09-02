@@ -285,7 +285,13 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let entity = cx.entity();
-        let cap = px(self.state.read(cx).prefs.reading_width.cap_px());
+        let (cap, font) = {
+            let prefs = &self.state.read(cx).prefs;
+            (px(prefs.reading_width.cap_px()), prefs.content_font)
+        };
+        self.source_panel
+            .editor
+            .update(cx, |ed, cx| ed.set_content_font(font, cx));
         let src_w = (pane_w * self.source_panel.split).max(140.0);
         div()
             .id("source-panel")
@@ -307,6 +313,8 @@ impl MainWindow {
                 div()
                     .id("source-scroll")
                     .size_full()
+                    .px_4()
+                    .pt_3()
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()

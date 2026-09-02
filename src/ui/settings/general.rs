@@ -1,10 +1,10 @@
 use gpui::{div, prelude::*, AnyElement, Entity};
 
-use super::super::widgets::settings_group;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-use super::super::widgets::{setting_row, switch};
-use super::bool_row;
-use crate::prefs::{Prefs, WindowCloseAction};
+use super::super::widgets::switch;
+use super::super::widgets::{seg_item, setting_row, settings_group};
+use super::{bool_row, patch_prefs, picker};
+use crate::prefs::{ContentFontSize, Prefs, WindowCloseAction};
 use crate::state::AppState;
 
 pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
@@ -14,6 +14,58 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
         .gap_4()
         .w_full()
         .min_w_0()
+        .child(settings_group(
+            "Appearance",
+            vec![setting_row(
+                "Font size",
+                "Source editor and preview use the same size.",
+                picker(
+                    210.,
+                    [
+                        seg_item(
+                            "pref-font-s",
+                            "Small",
+                            prefs.content_font == ContentFontSize::Small,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.content_font = ContentFontSize::Small
+                                    })
+                                }
+                            },
+                        ),
+                        seg_item(
+                            "pref-font-m",
+                            "Medium",
+                            prefs.content_font == ContentFontSize::Medium,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.content_font = ContentFontSize::Medium
+                                    })
+                                }
+                            },
+                        ),
+                        seg_item(
+                            "pref-font-l",
+                            "Large",
+                            prefs.content_font == ContentFontSize::Large,
+                            {
+                                let state = state.clone();
+                                move |_, cx| {
+                                    patch_prefs(&state, cx, |p| {
+                                        p.content_font = ContentFontSize::Large
+                                    })
+                                }
+                            },
+                        ),
+                    ],
+                ),
+            )
+            .into_any_element()],
+        ))
         .child(settings_group(
             "Capture",
             vec![

@@ -1,14 +1,21 @@
+use crate::prefs::ContentFontSize;
 use crate::table::{self, Slot, Table};
 
 use super::{segs_from_cell, PlacedCell, PreviewLayout};
 
-pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
+pub(crate) fn table_preview_layout(
+    table: &Table,
+    dpr: f64,
+    font: ContentFontSize,
+) -> PreviewLayout {
     const PAD_X: f32 = 16.0;
     const PAD_Y: f32 = 8.0;
     const MIN_COL: f32 = 56.0;
     const MAX_COL: f32 = 220.0;
-    const LINE: f32 = 18.0;
     const MIN_ROW: f32 = 28.0;
+    let m = font.metrics();
+    let line = m.table_line;
+    let caption = m.caption;
 
     let slots = table.slot_grid();
     if slots.is_empty() {
@@ -25,7 +32,9 @@ pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
         for (c, slot) in row.iter().enumerate() {
             if let Slot::Origin { text, colspan, .. } = slot {
                 if *colspan <= 1 {
-                    col_w[c] = col_w[c].max(estimate_text_width(text) + PAD_X).min(MAX_COL);
+                    col_w[c] = col_w[c]
+                        .max(estimate_text_width(text, caption) + PAD_X)
+                        .min(MAX_COL);
                 }
             }
         }
@@ -36,7 +45,8 @@ pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
             match &row[c] {
                 Slot::Origin { text, colspan, .. } if *colspan > 1 => {
                     let span = (*colspan).min(cols.saturating_sub(c)).max(1);
-                    let need = (estimate_text_width(text) + PAD_X).min(MAX_COL * span as f32);
+                    let need =
+                        (estimate_text_width(text, caption) + PAD_X).min(MAX_COL * span as f32);
                     let have: f32 = col_w[c..c + span].iter().sum();
                     if need > have {
                         let extra = (need - have) / span as f32;
@@ -60,11 +70,11 @@ pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
                 .filter(|l| !l.trim().is_empty())
                 .count()
                 .max(1);
-            return (n as f32) * LINE + PAD_Y;
+            return (n as f32) * line + PAD_Y;
         }
         let inner = (w - PAD_X).max(24.0);
-        let lines = ((estimate_text_width(&display) / inner).ceil() as usize).max(1);
-        (lines as f32) * LINE + PAD_Y
+        let lines = ((estimate_text_width(&display, caption) / inner).ceil() as usize).max(1);
+        (lines as f32) * line + PAD_Y
     };
 
     let mut row_h = vec![MIN_ROW; rows];
@@ -157,7 +167,7 @@ pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
                         y: ys[r],
                         w,
                         h,
-                        segs: segs_from_cell(text, dpr),
+                        segs: segs_from_cell(text, dpr, font),
                         header: r < header_rows,
                         numeric: looks_numeric(text),
                         colspan: cs,
@@ -176,17 +186,18 @@ pub(crate) fn table_preview_layout(table: &Table, dpr: f64) -> PreviewLayout {
     }
 }
 
-fn estimate_text_width(s: &str) -> f32 {
+fn estimate_text_width(s: &str, caption: f32) -> f32 {
+    let scale = caption / 12.0;
     s.lines()
         .map(|line| {
             line.chars()
                 .map(|ch| {
                     if ch == '$' {
-                        5.0
+                        5.0 * scale
                     } else if ch.is_ascii() {
-                        7.2
+                        7.2 * scale
                     } else {
-                        12.0
+                        12.0 * scale
                     }
                 })
                 .sum::<f32>()

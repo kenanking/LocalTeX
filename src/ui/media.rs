@@ -227,7 +227,7 @@ impl MainWindow {
         cx.spawn(async move |this, cx| {
             let built = cx
                 .background_spawn(async move {
-                    let preview = document_preview_with_dpr(&blocks, dpr);
+                    let preview = document_preview_with_dpr(&blocks, dpr, prefs.content_font);
                     let rows = derived_copy_rows(&blocks, &prefs);
                     DocDerived {
                         id,
@@ -235,6 +235,7 @@ impl MainWindow {
                         dpr,
                         inline_delim: prefs.inline_delim,
                         block_delim: prefs.block_delim,
+                        content_font: prefs.content_font,
                         preview: preview.into(),
                         copy_rows: rows,
                     }

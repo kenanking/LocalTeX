@@ -7,6 +7,7 @@ fn dummy_derived(id: Uuid) -> DocDerived {
         dpr: 1.0,
         inline_delim: InlineDelim::Dollar,
         block_delim: BlockDelim::Dollars,
+        content_font: ContentFontSize::Medium,
         preview: Arc::from([]),
         copy_rows: Vec::new(),
     }
@@ -27,6 +28,16 @@ fn should_spawn_derived_retries_after_busy() {
     assert!(should_spawn_derived(true, false, false));
     assert!(!should_spawn_derived(true, true, false));
     assert!(!should_spawn_derived(false, false, false));
+}
+
+#[test]
+fn derived_matches_false_when_content_font_differs() {
+    let id = Uuid::new_v4();
+    let derived = dummy_derived(id);
+    let mut prefs = Prefs::default();
+    assert!(derived.matches(id, 1, 1.0, &prefs));
+    prefs.content_font = ContentFontSize::Large;
+    assert!(!derived.matches(id, 1, 1.0, &prefs));
 }
 
 #[test]
@@ -420,7 +431,8 @@ fn section_title_is_heading_not_paragraph() {
 fn table_list_cell_keeps_item_breaks() {
     let html = "<table><tr><td>- one\n- two</td></tr></table>";
     let table = table::parse_html(html).unwrap();
-    let layout = table_layout::table_preview_layout(&table, raster_dpr(1.0));
+    let layout =
+        table_layout::table_preview_layout(&table, raster_dpr(1.0), ContentFontSize::Medium);
     assert_eq!(layout.cells.len(), 1);
     let lines = segs_lines(&layout.cells[0].segs);
     assert_eq!(lines.len(), 2, "got {lines:?}");
@@ -562,7 +574,7 @@ fn preview_layout_merges_header_spans() {
 <tr><td>OpenCLIP</td><td>ViT-B/32</td><td>11.1</td><td>22.2</td><td>33.3</td></tr>
 </table>"#;
     let t = table::parse_html(html).unwrap();
-    let lay = table_layout::table_preview_layout(&t, raster_dpr(1.0));
+    let lay = table_layout::table_preview_layout(&t, raster_dpr(1.0), ContentFontSize::Medium);
     let method = lay
         .cells
         .iter()

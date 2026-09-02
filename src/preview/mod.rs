@@ -9,16 +9,13 @@ use ratex_types::math_style::MathStyle;
 use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, MathRun, SnipKind};
 use crate::export::CopyKind;
 use crate::math::ScriptKind;
-use crate::prefs::{BlockDelim, InlineDelim, Prefs};
+use crate::prefs::{BlockDelim, ContentFontSize, InlineDelim, Prefs};
 use crate::table;
 use std::sync::Arc;
 use uuid::Uuid;
 
 mod table_layout;
 
-const FONT_SIZE: f64 = 16.0;
-const FONT_SIZE_DISPLAY: f64 = 18.0;
-const FONT_SIZE_SCRIPT: f64 = 11.5;
 const FONT_PAD: f64 = 3.0;
 const FONT_PAD_SCRIPT: f64 = 0.0;
 
@@ -61,8 +58,13 @@ pub struct Eqno {
 }
 
 impl Eqno {
-    fn new(raw: String, dpr: f64) -> Self {
-        let math = try_math(&crate::math::format_eqno(&raw), MathStyle::Display, dpr);
+    fn new(raw: String, dpr: f64, font: ContentFontSize) -> Self {
+        let math = try_math(
+            &crate::math::format_eqno(&raw),
+            MathStyle::Display,
+            dpr,
+            font,
+        );
         Self { raw, math }
     }
 
@@ -120,6 +122,7 @@ pub struct DocDerived {
     pub dpr: f64,
     pub inline_delim: InlineDelim,
     pub block_delim: BlockDelim,
+    pub content_font: ContentFontSize,
     pub preview: Arc<[PreviewBlock]>,
     pub copy_rows: Vec<DerivedCopyRow>,
 }
@@ -156,6 +159,7 @@ impl DocDerived {
             && (self.dpr - dpr).abs() < 1e-6
             && self.inline_delim == prefs.inline_delim
             && self.block_delim == prefs.block_delim
+            && self.content_font == prefs.content_font
     }
 
     pub fn keep_if_selected(self, selected: Option<Uuid>) -> Option<Self> {
@@ -172,14 +176,15 @@ pub fn latex_to_math(latex: &str, style: MathStyle) -> Result<SvgMath> {
     latex_to_math_with_dpr(latex, style, raster_dpr(1.0))
 }
 
+#[cfg(test)]
 pub fn latex_to_math_with_dpr(latex: &str, style: MathStyle, dpr: f64) -> Result<SvgMath> {
-    let display = matches!(style, MathStyle::Display);
-    let font = if display {
-        FONT_SIZE_DISPLAY
-    } else {
-        FONT_SIZE
-    };
-    latex_to_math_sized(latex, style, dpr, font, FONT_PAD)
+    latex_to_math_sized(
+        latex,
+        style,
+        dpr,
+        math_font_size(ContentFontSize::Medium, style),
+        FONT_PAD,
+    )
 }
 
 fn latex_to_math_sized(
@@ -287,8 +292,17 @@ fn strip_env(s: &str, name: &str) -> Option<String> {
     }
 }
 
-fn try_math(latex: &str, style: MathStyle, dpr: f64) -> Option<SvgMath> {
-    latex_to_math_with_dpr(latex, style, dpr).ok()
+fn math_font_size(font: ContentFontSize, style: MathStyle) -> f64 {
+    let m = font.metrics();
+    if matches!(style, MathStyle::Display) {
+        m.display_math
+    } else {
+        m.inline_math
+    }
+}
+
+fn try_math(latex: &str, style: MathStyle, dpr: f64, font: ContentFontSize) -> Option<SvgMath> {
+    latex_to_math_sized(latex, style, dpr, math_font_size(font, style), FONT_PAD).ok()
 }
 
 fn last_attach_char(segs: &[InlineSeg]) -> Option<char> {
@@ -337,8 +351,8 @@ fn attach_script(segs: &mut Vec<InlineSeg>, glyph: ScriptGlyph) -> bool {
     true
 }
 
-fn math_only(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
-    match latex_to_math_sized(tex, style, dpr, FONT_SIZE, FONT_PAD) {
+fn math_only(tex: &str, style: MathStyle, dpr: f64, font: ContentFontSize) -> InlineSeg {
+    match latex_to_math_sized(tex, style, dpr, font.metrics().inline_math, FONT_PAD) {
         Ok(svg) => InlineSeg::Math {
             svg,
             tex: tex.to_string(),
@@ -347,11 +361,17 @@ fn math_only(tex: &str, style: MathStyle, dpr: f64) -> InlineSeg {
     }
 }
 
-fn push_inline(segs: &mut Vec<InlineSeg>, tex: &str, style: MathStyle, dpr: f64) {
+fn push_inline(
+    segs: &mut Vec<InlineSeg>,
+    tex: &str,
+    style: MathStyle,
+    dpr: f64,
+    font: ContentFontSize,
+) {
     if matches!(style, MathStyle::Text) {
         if let Some((kind, body)) = script_glyph_for(last_attach_char(segs), tex) {
             if let Ok(svg) =
-                latex_to_math_sized(&body, style, dpr, FONT_SIZE_SCRIPT, FONT_PAD_SCRIPT)
+                latex_to_math_sized(&body, style, dpr, font.metrics().script, FONT_PAD_SCRIPT)
             {
                 let glyph = ScriptGlyph {
                     svg,
@@ -364,22 +384,28 @@ fn push_inline(segs: &mut Vec<InlineSeg>, tex: &str, style: MathStyle, dpr: f64)
             }
         }
     }
-    segs.push(math_only(tex, style, dpr));
+    segs.push(math_only(tex, style, dpr, font));
 }
 
-fn segs_from_text(text: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
+fn segs_from_text(text: &str, math: MathStyle, dpr: f64, font: ContentFontSize) -> Vec<InlineSeg> {
     segs_from_normalized(
         &text.split_whitespace().collect::<Vec<_>>().join(" "),
         math,
         dpr,
+        font,
     )
 }
 
-fn segs_from_cell(text: &str, dpr: f64) -> Vec<InlineSeg> {
-    segs_from_normalized(&table::cell_display_text(text), MathStyle::Text, dpr)
+fn segs_from_cell(text: &str, dpr: f64, font: ContentFontSize) -> Vec<InlineSeg> {
+    segs_from_normalized(&table::cell_display_text(text), MathStyle::Text, dpr, font)
 }
 
-fn segs_from_normalized(normalized: &str, math: MathStyle, dpr: f64) -> Vec<InlineSeg> {
+fn segs_from_normalized(
+    normalized: &str,
+    math: MathStyle,
+    dpr: f64,
+    font: ContentFontSize,
+) -> Vec<InlineSeg> {
     if normalized.is_empty() {
         return Vec::new();
     }
@@ -388,7 +414,7 @@ fn segs_from_normalized(normalized: &str, math: MathStyle, dpr: f64) -> Vec<Inli
         match run {
             MathRun::Text(t) if !t.is_empty() => segs.push(InlineSeg::Text(t)),
             MathRun::Inline(tex) | MathRun::Display(tex) => {
-                push_inline(&mut segs, &tex, math, dpr);
+                push_inline(&mut segs, &tex, math, dpr, font);
             }
             MathRun::Text(_) => {}
         }
@@ -431,20 +457,31 @@ pub(crate) fn segs_lines(segs: &[InlineSeg]) -> Vec<Vec<InlineSeg>> {
 
 #[cfg(test)]
 pub fn inline_preview(text: &str) -> Vec<InlineSeg> {
-    segs_from_text(text, MathStyle::Text, raster_dpr(1.0))
+    segs_from_text(
+        text,
+        MathStyle::Text,
+        raster_dpr(1.0),
+        ContentFontSize::Medium,
+    )
 }
 
-fn push_table_block(html: &str, out: &mut Vec<PreviewBlock>, dpr: f64) {
+fn push_table_block(html: &str, out: &mut Vec<PreviewBlock>, dpr: f64, font: ContentFontSize) {
     if let Some(table) = table::parse_html(html) {
         out.push(PreviewBlock::Table(table_layout::table_preview_layout(
-            &table, dpr,
+            &table, dpr, font,
         )));
     } else {
         out.push(PreviewBlock::Fallback(html.to_string()));
     }
 }
 
-fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>) {
+fn push_display(
+    tex: &str,
+    fallback: &str,
+    dpr: f64,
+    font: ContentFontSize,
+    out: &mut Vec<PreviewBlock>,
+) {
     let canon = crate::math::canonicalize_tex(tex);
     let (body, tags) = crate::math::split_display_tag(&canon);
     let typeset = if body.is_empty() {
@@ -452,13 +489,13 @@ fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>
     } else {
         body.as_str()
     };
-    match try_math(typeset, MathStyle::Display, dpr) {
+    match try_math(typeset, MathStyle::Display, dpr, font) {
         Some(math) => {
             let eqno = tags
                 .last()
                 .filter(|s| !s.is_empty())
                 .cloned()
-                .map(|raw| Eqno::new(raw, dpr));
+                .map(|raw| Eqno::new(raw, dpr, font));
             out.push(PreviewBlock::Display { math, eqno });
         }
         None => out.push(PreviewBlock::Fallback(fallback.to_string())),
@@ -467,10 +504,14 @@ fn push_display(tex: &str, fallback: &str, dpr: f64, out: &mut Vec<PreviewBlock>
 
 #[cfg(test)]
 pub fn document_preview(blocks: &[Block]) -> Vec<PreviewBlock> {
-    document_preview_with_dpr(blocks, raster_dpr(1.0))
+    document_preview_with_dpr(blocks, raster_dpr(1.0), ContentFontSize::Medium)
 }
 
-pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock> {
+pub fn document_preview_with_dpr(
+    blocks: &[Block],
+    dpr: f64,
+    font: ContentFontSize,
+) -> Vec<PreviewBlock> {
     let formula_only = matches!(snip_kind(blocks), SnipKind::Formula);
     let mut out = Vec::new();
     let mut para: Vec<InlineSeg> = Vec::new();
@@ -491,16 +532,16 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
             BlockKind::Table => {
                 flush_para(&mut para, &mut out);
                 prev_body_text = false;
-                push_table_block(&block.text, &mut out, dpr);
+                push_table_block(&block.text, &mut out, dpr, font);
             }
             BlockKind::Formula => {
                 let (body, unwrapped_display) = crate::math::unwrap_formula(&block.text);
                 if formula_only || block.display || unwrapped_display {
                     flush_para(&mut para, &mut out);
                     prev_body_text = false;
-                    push_display(&body, &body, dpr, &mut out);
+                    push_display(&body, &body, dpr, font, &mut out);
                 } else {
-                    push_inline(&mut para, &body, MathStyle::Text, dpr);
+                    push_inline(&mut para, &body, MathStyle::Text, dpr, font);
                     prev_body_text = false;
                 }
             }
@@ -508,7 +549,7 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                 if block.role.interrupts_prose() {
                     flush_para(&mut para, &mut out);
                     prev_body_text = false;
-                    let segs = segs_from_text(&block.text, MathStyle::Text, dpr);
+                    let segs = segs_from_text(&block.text, MathStyle::Text, dpr, font);
                     if segs.iter().any(seg_is_visible) {
                         match block.role {
                             BlockRole::DocTitle | BlockRole::SectionTitle => {
@@ -545,11 +586,11 @@ pub fn document_preview_with_dpr(blocks: &[Block], dpr: f64) -> Vec<PreviewBlock
                             }
                         }
                         MathRun::Inline(tex) => {
-                            push_inline(&mut para, &tex, MathStyle::Text, dpr);
+                            push_inline(&mut para, &tex, MathStyle::Text, dpr, font);
                         }
                         MathRun::Display(tex) => {
                             flush_para(&mut para, &mut out);
-                            push_display(&tex, &format!("$${tex}$$"), dpr, &mut out);
+                            push_display(&tex, &format!("$${tex}$$"), dpr, font, &mut out);
                         }
                     }
                 }
