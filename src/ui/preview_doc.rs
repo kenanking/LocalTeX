@@ -33,8 +33,9 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity_id();
-        let has_derived = self.derived.as_ref().is_some_and(|d| d.id == doc_id);
-        let blocks: Vec<PreviewBlock> = self
+        let has_derived = self.media.derived.as_ref().is_some_and(|d| d.id == doc_id);
+        let blocks = self
+            .media
             .derived
             .as_ref()
             .filter(|d| d.id == doc_id)

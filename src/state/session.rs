@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use uuid::Uuid;
 
@@ -65,17 +66,22 @@ impl CaptureSession {
     }
 }
 
+#[derive(Default)]
+struct DocRuntime {
+    thumb_inflight: bool,
+    thumb_failed: bool,
+    blocks_inflight: bool,
+    png_inflight: bool,
+    persist_retry_count: u8,
+    persist_retry_pending: bool,
+}
+
 pub(crate) struct IngestPump {
     pub ocr: OcrQueue,
     pub file_queue: VecDeque<PathBuf>,
     pub file_loading: bool,
     pub clipboard_loading: bool,
-    pub thumb_inflight: HashSet<Uuid>,
-    pub thumb_failed: HashSet<Uuid>,
-    pub blocks_inflight: HashSet<Uuid>,
-    pub png_inflight: HashSet<Uuid>,
-    pub persist_retry_counts: HashMap<Uuid, u8>,
-    pub persist_retry_pending: HashSet<Uuid>,
+    runtime: HashMap<Uuid, DocRuntime>,
 }
 
 impl IngestPump {
@@ -85,12 +91,106 @@ impl IngestPump {
             file_queue: VecDeque::new(),
             file_loading: false,
             clipboard_loading: false,
-            thumb_inflight: HashSet::new(),
-            thumb_failed: HashSet::new(),
-            blocks_inflight: HashSet::new(),
-            png_inflight: HashSet::new(),
-            persist_retry_counts: HashMap::new(),
-            persist_retry_pending: HashSet::new(),
+            runtime: HashMap::new(),
+        }
+    }
+
+    pub fn drop_doc(&mut self, id: Uuid) {
+        self.runtime.remove(&id);
+    }
+
+    pub fn clear_docs(&mut self) {
+        self.runtime.clear();
+    }
+
+    pub fn thumb_blocked(&self, id: Uuid) -> bool {
+        self.runtime
+            .get(&id)
+            .is_some_and(|r| r.thumb_inflight || r.thumb_failed)
+    }
+
+    pub fn start_thumb(&mut self, id: Uuid) {
+        self.runtime.entry(id).or_default().thumb_inflight = true;
+    }
+
+    pub fn finish_thumb(&mut self, id: Uuid) {
+        if let Some(r) = self.runtime.get_mut(&id) {
+            r.thumb_inflight = false;
+        }
+    }
+
+    pub fn fail_thumb(&mut self, id: Uuid) {
+        let r = self.runtime.entry(id).or_default();
+        r.thumb_inflight = false;
+        r.thumb_failed = true;
+    }
+
+    pub fn thumb_failed(&self, id: Uuid) -> bool {
+        self.runtime.get(&id).is_some_and(|r| r.thumb_failed)
+    }
+
+    pub fn start_blocks(&mut self, id: Uuid) -> bool {
+        let r = self.runtime.entry(id).or_default();
+        if r.blocks_inflight {
+            false
+        } else {
+            r.blocks_inflight = true;
+            true
+        }
+    }
+
+    pub fn finish_blocks(&mut self, id: Uuid) {
+        if let Some(r) = self.runtime.get_mut(&id) {
+            r.blocks_inflight = false;
+        }
+    }
+
+    pub fn start_png(&mut self, id: Uuid) -> bool {
+        let r = self.runtime.entry(id).or_default();
+        if r.png_inflight {
+            false
+        } else {
+            r.png_inflight = true;
+            true
+        }
+    }
+
+    pub fn finish_png(&mut self, id: Uuid) {
+        if let Some(r) = self.runtime.get_mut(&id) {
+            r.png_inflight = false;
+        }
+    }
+
+    pub fn persist_retry_pending(&self, id: Uuid) -> bool {
+        self.runtime
+            .get(&id)
+            .is_some_and(|r| r.persist_retry_pending)
+    }
+
+    pub fn begin_persist_retry(&mut self, id: Uuid) -> Option<Duration> {
+        if self.persist_retry_pending(id) {
+            return None;
+        }
+        let r = self.runtime.entry(id).or_default();
+        if r.persist_retry_count >= 3 {
+            return None;
+        }
+        r.persist_retry_count += 1;
+        r.persist_retry_pending = true;
+        Some(Duration::from_secs(1 << (r.persist_retry_count - 1)))
+    }
+
+    pub fn finish_persist_retry(&mut self, id: Uuid) -> bool {
+        self.runtime
+            .get_mut(&id)
+            .map(|r| std::mem::replace(&mut r.persist_retry_pending, false))
+            .unwrap_or(false)
+    }
+
+    pub fn clear_persist_retry(&mut self, id: Uuid) {
+        if let Some(r) = self.runtime.get_mut(&id) {
+            r.persist_retry_count = 0;
+            r.persist_retry_pending = false;
         }
     }
 }
@@ -139,5 +239,18 @@ mod tests {
         c.push_hide();
         assert!(c.pop_hide());
         assert!(!c.pop_hide());
+    }
+
+    #[test]
+    fn drop_doc_clears_all_runtime_flags() {
+        let mut pump = IngestPump::new();
+        let id = Uuid::nil();
+        assert!(pump.start_blocks(id));
+        pump.start_thumb(id);
+        pump.fail_thumb(id);
+        assert!(pump.begin_persist_retry(id).is_some());
+        pump.drop_doc(id);
+        assert!(!pump.thumb_blocked(id));
+        assert!(pump.start_blocks(id));
     }
 }

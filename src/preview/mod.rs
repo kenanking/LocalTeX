@@ -120,7 +120,7 @@ pub struct DocDerived {
     pub dpr: f64,
     pub inline_delim: InlineDelim,
     pub block_delim: BlockDelim,
-    pub preview: Vec<PreviewBlock>,
+    pub preview: Arc<[PreviewBlock]>,
     pub copy_rows: Vec<DerivedCopyRow>,
 }
 

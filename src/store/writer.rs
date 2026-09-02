@@ -38,7 +38,7 @@ enum WriteCommand {
 
 enum Request {
     Write {
-        command: WriteCommand,
+        command: Box<WriteCommand>,
         kind: WriteKind,
     },
     Flush(Sender<anyhow::Result<()>>),
@@ -126,7 +126,10 @@ impl StoreWriter {
 
     fn submit(&self, command: WriteCommand, kind: WriteKind) -> anyhow::Result<()> {
         self.tx
-            .send(Request::Write { command, kind })
+            .send(Request::Write {
+                command: Box::new(command),
+                kind,
+            })
             .map_err(|_| anyhow::anyhow!("store writer stopped"))
     }
 }
@@ -142,7 +145,7 @@ fn run(store: Arc<Store>, rx: Receiver<Request>, events: Sender<WriteEvent>) {
     while let Ok(request) = rx.recv() {
         match request {
             Request::Write { command, kind } => {
-                let result = match command {
+                let result = match *command {
                     WriteCommand::Insert(doc) => {
                         store.insert_ready(&doc).map(WriteResult::Inserted)
                     }

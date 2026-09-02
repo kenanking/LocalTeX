@@ -425,6 +425,7 @@ fn gpui_key_to_code(key: &str) -> Option<Code> {
     Code::from_str(name).ok()
 }
 
+#[cfg(any(test, target_os = "windows"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChordParts {
     pub key: String,
@@ -435,6 +436,7 @@ pub(crate) struct ChordParts {
 }
 
 /// Split a catalog chord for OS matching. Requires at least one modifier.
+#[cfg(any(test, target_os = "windows"))]
 pub(crate) fn chord_parts(chord: &str) -> Option<ChordParts> {
     let ks = Keystroke::parse(chord).ok()?;
     if !(ks.modifiers.control || ks.modifiers.alt || ks.modifiers.shift || ks.modifiers.platform) {

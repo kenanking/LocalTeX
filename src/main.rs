@@ -62,7 +62,7 @@ impl StartupMode {
 
 fn main() {
     match instance::claim() {
-        instance::Claim::AlreadyRunning => return,
+        instance::Claim::AlreadyRunning => {}
         instance::Claim::Primary(seat) => run(seat),
     }
 }
@@ -82,7 +82,7 @@ fn run(mut seat: instance::Seat) {
                 }
             })
             .detach();
-            crate::state::bind_keys(cx, &prefs.shortcuts);
+            crate::keymap::apply(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
             let state = cx.new(|_| AppState::new(prefs));
@@ -113,7 +113,7 @@ pub(crate) fn open_main_window(
     activate: bool,
     cx: &mut App,
 ) -> anyhow::Result<()> {
-    if state.read(cx).main_window.is_some() {
+    if state.read(cx).has_main_window() {
         return Ok(());
     }
     let bounds = Bounds::centered(None, size(px(800.), px(560.)), cx);
@@ -140,9 +140,7 @@ pub(crate) fn open_main_window(
         },
     )?;
     state.update(cx, |state, cx| {
-        state.main_window = Some(handle);
-        state.main_window_opening = false;
-        state.main_window_visible = true;
+        state.open_main(handle);
         state.boot_selected(cx);
     });
     if activate {

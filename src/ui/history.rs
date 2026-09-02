@@ -175,10 +175,10 @@ impl MainWindow {
                 })
                 .into_any_element()
         } else {
-            let media = self.media.clone();
+            let media = self.media.cache.clone();
             let state_ent = self.state.clone();
             let list_focus = self.snip_list_focus.clone();
-            let thumb_keep = self.thumb_keep.clone();
+            let thumb_keep = self.media.thumb_keep.clone();
             let window_ent = cx.entity();
             let scroll = self.history.scroll.clone();
             uniform_list(
@@ -198,7 +198,7 @@ impl MainWindow {
                     {
                         let state = state_ent.read(cx);
                         for &id in &ids[keep_start..keep_end] {
-                            let Some(doc) = state.library.get(id) else {
+                            let Some(doc) = state.doc(id) else {
                                 continue;
                             };
                             if media.borrow().thumb(id).is_some() {
@@ -377,7 +377,7 @@ fn history_row(
     list_focus: gpui::FocusHandle,
     state_ent: gpui::Entity<crate::state::AppState>,
 ) -> gpui::AnyElement {
-    let doc = state.library.get(id);
+    let doc = state.doc(id);
     let missing = doc.is_some_and(|d| matches!(d.image, ImageSlot::Missing)) && thumb.is_none();
     let title = doc.map(|d| d.first_line()).unwrap_or_default();
     let age = doc.map(|d| d.age_label()).unwrap_or_default();

@@ -58,6 +58,7 @@ impl MainWindow {
         let failed = matches!(snap.status, DocStatus::Failed(_));
         let ready = snap.ready;
         let copy_rows = self
+            .media
             .derived
             .as_ref()
             .filter(|d| d.id == snap.id && d.revision == snap.revision)
@@ -78,15 +79,15 @@ impl MainWindow {
                 .selected_doc()
                 .is_some_and(|d| d.is_edited());
         let ocr = snap.ocr;
-        let source_open = self.source_open;
-        let lang = self.source_lang;
+        let source_open = self.source_panel.open;
+        let lang = self.source_panel.lang;
         let edited = self
             .state
             .read(cx)
             .selected_doc()
             .is_some_and(|d| d.is_edited());
-        let can_undo = self.source.read(cx).can_undo();
-        let can_redo = self.source.read(cx).can_redo();
+        let can_undo = self.source_panel.editor.read(cx).can_undo();
+        let can_redo = self.source_panel.editor.read(cx).can_redo();
         let (orig_copied, reveal_enabled) = {
             let state = self.state.read(cx);
             (
@@ -285,7 +286,7 @@ impl MainWindow {
     ) -> impl IntoElement {
         let entity = cx.entity();
         let cap = px(self.state.read(cx).prefs.reading_width.cap_px());
-        let src_w = (pane_w * self.source_split).max(140.0);
+        let src_w = (pane_w * self.source_panel.split).max(140.0);
         div()
             .id("source-panel")
             .relative()
@@ -315,7 +316,7 @@ impl MainWindow {
                             .w_full()
                             .max_w(cap)
                             .min_w_0()
-                            .child(self.source.clone()),
+                            .child(self.source_panel.editor.clone()),
                     ),
             )
             .child(
@@ -355,7 +356,7 @@ impl MainWindow {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
-                                            this.source.update(cx, |ed, cx| {
+                                            this.source_panel.editor.update(cx, |ed, cx| {
                                                 ed.undo_click(window, cx);
                                             });
                                         });
@@ -367,7 +368,7 @@ impl MainWindow {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
-                                            this.source.update(cx, |ed, cx| {
+                                            this.source_panel.editor.update(cx, |ed, cx| {
                                                 ed.redo_click(window, cx);
                                             });
                                         });
@@ -387,7 +388,7 @@ impl MainWindow {
     }
 
     fn render_source_split(&self, pane_w: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let start_split = self.source_split;
+        let start_split = self.source_panel.split;
         div()
             .id("source-split")
             .relative()

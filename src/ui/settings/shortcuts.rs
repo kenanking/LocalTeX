@@ -2,9 +2,56 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, App, Entity, SharedString};
 
 use super::super::theme;
 use super::super::widgets::{btn, icon_btn_sized, kbd_chip, settings_group, IconBtnSize, IconKind};
+use super::SettingsPane;
 use crate::keymap::{self, Group, ShortcutId};
 use crate::prefs::Prefs;
 use crate::state::AppState;
+
+pub(crate) fn intercept_recording(
+    settings: Entity<SettingsPane>,
+    state: Entity<AppState>,
+    cx: &mut App,
+) {
+    cx.intercept_keystrokes(move |event, _, cx| {
+        let Some(id) = settings.read(cx).listening() else {
+            return;
+        };
+        cx.stop_propagation();
+        let key = event.keystroke.key.as_str();
+        if key == "escape" {
+            settings.update(cx, |pane, cx| {
+                pane.set_listen(None);
+                cx.notify();
+            });
+            return;
+        }
+        if matches!(
+            key,
+            "control" | "shift" | "alt" | "platform" | "fn" | "function"
+        ) {
+            return;
+        }
+        if matches!(key, "backspace" | "delete") {
+            state.update(cx, |s, cx| {
+                s.unbind_shortcut(id, cx);
+            });
+            settings.update(cx, |pane, cx| {
+                pane.set_listen(None);
+                cx.notify();
+            });
+            return;
+        }
+        let chord = event.keystroke.unparse();
+        state.update(cx, |s, cx| {
+            let _ = s.bind_shortcut(id, chord, cx);
+        });
+        settings.update(cx, |pane, cx| {
+            pane.set_listen(None);
+            cx.notify();
+        });
+    })
+    .detach();
+}
 
 pub(super) fn shortcuts_page(
     state: Entity<AppState>,

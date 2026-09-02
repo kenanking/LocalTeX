@@ -32,7 +32,7 @@ impl AppState {
 
     pub fn copy_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(job) = self.orig_png_job(id) else {
-            self.flash_capture_error("Couldn't copy that image", cx);
+            self.flash_error("Couldn't copy that image", cx);
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -56,7 +56,7 @@ impl AppState {
 
     pub fn save_original_as(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(job) = self.orig_png_job(id) else {
-            self.flash_capture_error("Couldn't save that image", cx);
+            self.flash_error("Couldn't save that image", cx);
             return;
         };
         let stem = self
@@ -90,11 +90,11 @@ impl AppState {
 
     pub fn reveal_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
         if !self.can_reveal_original(id) {
-            self.flash_capture_error("Image isn't saved yet", cx);
+            self.flash_error("Image isn't saved yet", cx);
             return;
         }
         let Some(store) = self.store() else {
-            self.flash_capture_error("Image isn't saved yet", cx);
+            self.flash_error("Image isn't saved yet", cx);
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -167,7 +167,7 @@ fn finish_orig_work(
     if let Err(err) = this.update(cx, |this, cx| {
         if let Err(err) = work(this, cx) {
             eprintln!("{APP_SLUG}: {op}: {err:#}");
-            this.flash_capture_error(fail_msg, cx);
+            this.flash_error(fail_msg, cx);
         }
     }) {
         eprintln!("{APP_SLUG}: {op} task: {err}");

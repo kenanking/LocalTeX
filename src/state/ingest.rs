@@ -40,7 +40,7 @@ impl AppState {
                         if let Some(img) = img {
                             this.ingest_drawing(pts, img, cx);
                         } else {
-                            this.flash_capture_error("That drawing is empty", cx);
+                            this.flash_error("That drawing is empty", cx);
                         }
                     }) {
                         eprintln!("{APP_SLUG}: stroke ingest: {err}");
@@ -103,7 +103,7 @@ impl AppState {
                     Ok(img) => this.ingest_pixels(img, cx),
                     Err(err) => {
                         eprintln!("{APP_SLUG}: open image: {err}");
-                        this.flash_capture_error("Couldn't open that image", cx);
+                        this.flash_error("Couldn't open that image", cx);
                     }
                 }
                 this.pump_file_ingest(cx);
@@ -270,7 +270,7 @@ impl AppState {
         let Some(doc) = self.selected_doc() else {
             return;
         };
-        if !matches!(doc.status, DocStatus::Ready) || !doc.blocks_loaded {
+        if !doc.has_ready_blocks() {
             return;
         }
         let blocks = doc.blocks.clone();
@@ -293,7 +293,7 @@ impl AppState {
                 Err(err) => {
                     eprintln!("{APP_SLUG}: open docx: {err:#}");
                     let _ = this.update(cx, |this, cx| {
-                        this.flash_capture_error("Couldn't open a Word document", cx);
+                        this.flash_error("Couldn't open a Word document", cx);
                     });
                 }
             }
@@ -313,19 +313,14 @@ impl AppState {
         };
         self.ingest.ocr.remove(id);
         self.library.remove(id);
-        self.ingest.thumb_inflight.remove(&id);
-        self.ingest.thumb_failed.remove(&id);
-        self.ingest.blocks_inflight.remove(&id);
-        self.ingest.png_inflight.remove(&id);
-        self.ingest.persist_retry_counts.remove(&id);
-        self.ingest.persist_retry_pending.remove(&id);
+        self.ingest.drop_doc(id);
         if self.library.is_empty() {
             self.ingest.ocr.cancel_remaining();
         }
         if let Some(writer) = self.store_writer() {
             if let Err(err) = writer.delete(id) {
                 eprintln!("{APP_SLUG}: queue delete snip: {err:#}");
-                self.flash_capture_error("Couldn't delete that snip", cx);
+                self.flash_error("Couldn't delete that snip", cx);
             }
         }
         if let Some(id) = self.library.selected() {
@@ -341,25 +336,20 @@ impl AppState {
             self.ingest.ocr.remove(id);
         }
         self.ingest.file_queue.clear();
-        self.ingest.thumb_inflight.clear();
-        self.ingest.thumb_failed.clear();
-        self.ingest.blocks_inflight.clear();
-        self.ingest.png_inflight.clear();
-        self.ingest.persist_retry_counts.clear();
-        self.ingest.persist_retry_pending.clear();
+        self.ingest.clear_docs();
         self.search.bump();
         self.library.clear();
         if let Some(writer) = self.store_writer() {
             if let Err(err) = writer.wipe() {
                 eprintln!("{APP_SLUG}: queue wipe library: {err:#}");
-                self.flash_capture_error("Couldn't clear the snip library", cx);
+                self.flash_error("Couldn't clear the snip library", cx);
             }
         }
         cx.notify();
     }
 
     pub fn request_thumb(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.ingest.thumb_inflight.contains(&id) || self.ingest.thumb_failed.contains(&id) {
+        if self.ingest.thumb_blocked(id) {
             return;
         }
         let Some(doc) = self.library.get(id) else {
@@ -371,13 +361,13 @@ impl AppState {
         let Some(store) = self.store() else {
             return;
         };
-        self.ingest.thumb_inflight.insert(id);
+        self.ingest.start_thumb(id);
         cx.spawn(async move |this, cx| {
             let jpeg = cx
                 .background_spawn(async move { store.load_thumb(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.thumb_inflight.remove(&id);
+                this.ingest.finish_thumb(id);
                 match jpeg {
                     Ok(bytes) => {
                         if let Some(doc) = this.library.get_mut(id) {
@@ -385,7 +375,7 @@ impl AppState {
                         }
                     }
                     Err(err) => {
-                        this.ingest.thumb_failed.insert(id);
+                        this.ingest.fail_thumb(id);
                         eprintln!("{APP_SLUG}: load thumb: {err}");
                     }
                 }
@@ -398,11 +388,11 @@ impl AppState {
     }
 
     pub fn thumbnail_failed(&self, id: Uuid) -> bool {
-        self.ingest.thumb_failed.contains(&id)
+        self.ingest.thumb_failed(id)
     }
 
     pub fn mark_thumbnail_failed(&mut self, id: Uuid) {
-        self.ingest.thumb_failed.insert(id);
+        self.ingest.fail_thumb(id);
         if let Some(doc) = self.library.get_mut(id) {
             doc.thumb_jpeg.clear();
         }
@@ -447,7 +437,7 @@ impl AppState {
                 }
             }
             eprintln!("{APP_SLUG}: queue persist snip: {err:#}");
-            self.flash_capture_error("Couldn't save that snip", cx);
+            self.flash_error("Couldn't save that snip", cx);
             self.schedule_persist_retry(id, cx);
         }
     }
@@ -493,7 +483,7 @@ impl AppState {
         }
         if let Err(err) = writer.update_blocks(doc) {
             eprintln!("{APP_SLUG}: queue persist edits: {err:#}");
-            self.flash_capture_error("Couldn't save those edits", cx);
+            self.flash_error("Couldn't save those edits", cx);
             self.schedule_persist_retry(id, cx);
         }
     }
@@ -552,11 +542,11 @@ impl AppState {
     }
 
     fn load_blocks(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if !self.ingest.blocks_inflight.insert(id) {
+        if !self.ingest.start_blocks(id) {
             return;
         }
         let Some(store) = self.store() else {
-            self.ingest.blocks_inflight.remove(&id);
+            self.ingest.finish_blocks(id);
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -564,7 +554,7 @@ impl AppState {
                 .background_spawn(async move { store.load_block_pair(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.blocks_inflight.remove(&id);
+                this.ingest.finish_blocks(id);
                 match result {
                     Ok((blocks, ocr_blocks)) => {
                         if let Some(doc) = this.library.get_mut(id) {
@@ -592,17 +582,17 @@ impl AppState {
     }
 
     fn load_png(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if !self.ingest.png_inflight.insert(id) {
+        if !self.ingest.start_png(id) {
             return;
         }
         let Some(store) = self.store() else {
-            self.ingest.png_inflight.remove(&id);
+            self.ingest.finish_png(id);
             return;
         };
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { store.load_png(id) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.png_inflight.remove(&id);
+                this.ingest.finish_png(id);
                 if this.library.selected() != Some(id) {
                     return;
                 }
@@ -666,8 +656,7 @@ impl AppState {
                     }
                 }
                 self.library.touch_lru(id);
-                self.ingest.persist_retry_counts.remove(&id);
-                self.ingest.persist_retry_pending.remove(&id);
+                self.ingest.clear_persist_retry(id);
                 if changed_during_insert {
                     self.persist_edits(id, cx);
                 }
@@ -680,33 +669,32 @@ impl AppState {
                     }
                 }
                 eprintln!("{APP_SLUG}: persist snip: {err:#}");
-                self.flash_capture_error("Couldn't save that snip", cx);
+                self.flash_error("Couldn't save that snip", cx);
                 self.schedule_persist_retry(id, cx);
             }
             (WriteKind::UpdateOcr { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: persist OCR {id}: {err:#}");
-                self.flash_capture_error("Couldn't update that snip", cx);
+                self.flash_error("Couldn't update that snip", cx);
                 self.schedule_persist_retry(id, cx);
             }
             (WriteKind::UpdateBlocks { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: persist edits {id}: {err:#}");
-                self.flash_capture_error("Couldn't save those edits", cx);
+                self.flash_error("Couldn't save those edits", cx);
                 self.schedule_persist_retry(id, cx);
             }
             (WriteKind::Delete { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: delete snip {id}: {err:#}");
-                self.flash_capture_error("Couldn't remove all snip files", cx);
+                self.flash_error("Couldn't remove all snip files", cx);
             }
             (WriteKind::Wipe, Err(err)) => {
                 eprintln!("{APP_SLUG}: wipe library: {err:#}");
-                self.flash_capture_error("Couldn't clear the snip library", cx);
+                self.flash_error("Couldn't clear the snip library", cx);
             }
             (
                 WriteKind::UpdateOcr { id } | WriteKind::UpdateBlocks { id },
                 Ok(WriteResult::Done),
             ) => {
-                self.ingest.persist_retry_counts.remove(&id);
-                self.ingest.persist_retry_pending.remove(&id);
+                self.ingest.clear_persist_retry(id);
             }
             (_, Ok(WriteResult::Done)) => {}
             (kind, Ok(result)) => {
@@ -717,20 +705,13 @@ impl AppState {
     }
 
     fn schedule_persist_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.ingest.persist_retry_pending.contains(&id) {
+        let Some(delay) = self.ingest.begin_persist_retry(id) else {
             return;
-        }
-        let count = self.ingest.persist_retry_counts.entry(id).or_default();
-        if *count >= 3 {
-            return;
-        }
-        *count += 1;
-        let delay = std::time::Duration::from_secs(1 << (*count - 1));
-        self.ingest.persist_retry_pending.insert(id);
+        };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |this, cx| {
-                let still_pending = this.ingest.persist_retry_pending.remove(&id);
+                let still_pending = this.ingest.finish_persist_retry(id);
                 if still_pending && this.library.get(id).is_some() {
                     this.persist_ready(id, cx);
                 }

@@ -1,24 +1,25 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
     div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, Image, MouseButton, MouseMoveEvent, RenderImage, ScrollHandle, Window,
+    Focusable, MouseButton, MouseMoveEvent, ScrollHandle, Window,
 };
 use uuid::Uuid;
 
 use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
+use super::media::WindowMedia;
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
 use super::settings::SettingsPane;
 use super::source_editor::SourceEditor;
+use super::source_panel::SourceBinding;
 use super::theme;
 use super::window_drag::{WindowDrag, WindowDragCatcher};
 use crate::actions::{
@@ -26,12 +27,8 @@ use crate::actions::{
     PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource,
     UploadImage,
 };
-use crate::cache::{thumb_retain_ids, MediaCache};
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
-use crate::preview::{
-    derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived,
-};
 use crate::state::AppState;
 
 #[derive(Clone)]
@@ -104,12 +101,7 @@ pub struct MainWindow {
     pub(crate) orig_focus: FocusHandle,
     pub(crate) draw_focus: FocusHandle,
     pub(crate) search: Entity<SearchField>,
-    pub(crate) media: Rc<RefCell<MediaCache>>,
-    pub(crate) derived: Option<DocDerived>,
-    derived_busy: bool,
-    gc_scheduled: bool,
-    last_scale: f32,
-    pub(crate) thumb_keep: Rc<RefCell<Vec<Uuid>>>,
+    pub(crate) media: WindowMedia,
     pub(crate) view: View,
     pub(crate) board: DrawBoard,
     pub(crate) settings: Entity<SettingsPane>,
@@ -121,15 +113,7 @@ pub struct MainWindow {
     pub(crate) window_drag: Option<WindowDrag>,
     pub(crate) caption_pending_move: Rc<Cell<bool>>,
     pub(crate) history: HistoryPane,
-    pub(crate) source_open: bool,
-    pub(crate) source: Entity<SourceEditor>,
-    pub(crate) source_bound: Option<Uuid>,
-    pub(crate) source_last: String,
-    pub(crate) source_split: f32,
-    source_flush_task: Option<gpui::Task<()>>,
-    pub(crate) source_lang: &'static str,
-    thumb_inflight: Rc<RefCell<HashSet<Uuid>>>,
-    full_inflight: HashSet<Uuid>,
+    pub(crate) source_panel: SourceBinding,
 }
 
 impl MainWindow {
@@ -150,6 +134,9 @@ impl MainWindow {
             this.ensure_selected_full(cx);
             this.schedule_derived_from_app(cx);
             this.schedule_media_gc(cx);
+            if this.orig.open && this.state.read(cx).selected().is_none() {
+                this.orig.close();
+            }
             let entity = cx.entity();
             cx.defer(move |cx| {
                 entity.update(cx, |this, cx| this.sync_source_for_selection(cx));
@@ -171,8 +158,8 @@ impl MainWindow {
         let history = HistoryPane::new(win_w, pinned);
         cx.observe_window_bounds(window, |this, window, cx| {
             let scale = window.scale_factor();
-            if (scale - this.last_scale).abs() > f32::EPSILON {
-                this.last_scale = scale;
+            if (scale - this.media.last_scale).abs() > f32::EPSILON {
+                this.media.last_scale = scale;
                 this.schedule_derived(window, cx);
             }
             let now_w: f32 = window.bounds().size.width.into();
@@ -182,49 +169,7 @@ impl MainWindow {
             }
         })
         .detach();
-        let this = cx.entity();
-        cx.intercept_keystrokes(move |event, _, cx| {
-            let settings = this.read(cx).settings.clone();
-            let Some(id) = settings.read(cx).listening() else {
-                return;
-            };
-            cx.stop_propagation();
-            let key = event.keystroke.key.as_str();
-            if key == "escape" {
-                settings.update(cx, |pane, cx| {
-                    pane.set_listen(None);
-                    cx.notify();
-                });
-                return;
-            }
-            if matches!(
-                key,
-                "control" | "shift" | "alt" | "platform" | "fn" | "function"
-            ) {
-                return;
-            }
-            if matches!(key, "backspace" | "delete") {
-                let state = this.read(cx).state.clone();
-                state.update(cx, |s, cx| {
-                    s.unbind_shortcut(id, cx);
-                });
-                settings.update(cx, |pane, cx| {
-                    pane.set_listen(None);
-                    cx.notify();
-                });
-                return;
-            }
-            let chord = event.keystroke.unparse();
-            let state = this.read(cx).state.clone();
-            state.update(cx, |s, cx| {
-                let _ = s.bind_shortcut(id, chord, cx);
-            });
-            settings.update(cx, |pane, cx| {
-                pane.set_listen(None);
-                cx.notify();
-            });
-        })
-        .detach();
+        super::settings::intercept_recording(settings.clone(), state.clone(), cx);
         let source = cx.new(SourceEditor::new);
         cx.observe(&source, |this, _, cx| {
             this.on_source_edit(cx);
@@ -237,12 +182,7 @@ impl MainWindow {
             orig_focus,
             draw_focus,
             search,
-            media: Rc::new(RefCell::new(MediaCache::new())),
-            derived: None,
-            derived_busy: false,
-            gc_scheduled: false,
-            last_scale: window.scale_factor(),
-            thumb_keep: Rc::new(RefCell::new(Vec::new())),
+            media: WindowMedia::new(window.scale_factor()),
             view: View::Library,
             board: DrawBoard::new(),
             settings,
@@ -254,15 +194,7 @@ impl MainWindow {
             window_drag: None,
             caption_pending_move: Rc::new(Cell::new(false)),
             history,
-            source_open: false,
-            source,
-            source_bound: None,
-            source_last: String::new(),
-            source_split: 0.5,
-            source_flush_task: None,
-            source_lang: "LaTeX",
-            thumb_inflight: Rc::new(RefCell::new(HashSet::new())),
-            full_inflight: HashSet::new(),
+            source_panel: SourceBinding::new(source),
         };
         this.schedule_derived(window, cx);
         this
@@ -318,7 +250,7 @@ impl MainWindow {
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, window: &mut Window, cx: &mut Context<Self>) {
-        if self.source_open {
+        if self.source_panel.open {
             self.set_source_open(false, window, cx);
             return;
         }
@@ -451,140 +383,7 @@ impl MainWindow {
     }
 
     fn toggle_source(&mut self, _: &ToggleSource, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_source_open(!self.source_open, window, cx);
-    }
-
-    pub(crate) fn set_source_open(
-        &mut self,
-        on: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let ready = self
-            .state
-            .read(cx)
-            .selected_doc()
-            .is_some_and(|d| matches!(d.status, DocStatus::Ready) && d.blocks_loaded);
-        if on && !ready {
-            return;
-        }
-        if on == self.source_open {
-            if on {
-                self.bind_source(cx);
-                window.focus(&self.source.focus_handle(cx), cx);
-            }
-            return;
-        }
-        if on {
-            self.source_open = true;
-            self.bind_source(cx);
-            window.focus(&self.source.focus_handle(cx), cx);
-        } else {
-            self.close_source(cx);
-            window.focus(&self.snip_list_focus, cx);
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn close_source(&mut self, cx: &mut Context<Self>) {
-        self.source_flush_task.take();
-        if self.source_open {
-            self.flush_source(cx);
-        }
-        self.source_open = false;
-        self.source_bound = None;
-    }
-
-    pub(crate) fn bind_source(&mut self, cx: &mut Context<Self>) {
-        let id = {
-            let state = self.state.read(cx);
-            let Some(doc) = state.selected_doc() else {
-                return;
-            };
-            doc.id
-        };
-        if self.source_bound == Some(id) {
-            return;
-        }
-        if self.source_bound.is_some() {
-            self.flush_source(cx);
-        }
-        let (prefs, blocks) = {
-            let state = self.state.read(cx);
-            let Some(doc) = state.selected_doc() else {
-                return;
-            };
-            (state.prefs.clone(), doc.blocks.clone())
-        };
-        let text = crate::source::blocks_to_source(&blocks, &prefs);
-        self.source_lang = crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
-        self.source_last = text.clone();
-        self.source_bound = Some(id);
-        self.source.update(cx, |ed, cx| ed.set_text(text, cx));
-    }
-
-    fn sync_source_for_selection(&mut self, cx: &mut Context<Self>) {
-        if !self.source_open {
-            return;
-        }
-        let ready = self
-            .state
-            .read(cx)
-            .selected_doc()
-            .is_some_and(|d| matches!(d.status, DocStatus::Ready) && d.blocks_loaded);
-        if !ready {
-            self.close_source(cx);
-            cx.notify();
-            return;
-        }
-        self.bind_source(cx);
-    }
-
-    fn on_source_edit(&mut self, cx: &mut Context<Self>) {
-        if !self.source_open {
-            return;
-        }
-        self.source_flush_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(280))
-                .await;
-            this.update(cx, |this, cx| {
-                this.flush_source(cx);
-            })
-            .ok();
-        }));
-    }
-
-    fn flush_source(&mut self, cx: &mut Context<Self>) {
-        if !self.source_open {
-            return;
-        }
-        let text = self.source.read(cx).text();
-        if text == self.source_last {
-            return;
-        }
-        let prefs = self.state.read(cx).prefs.clone();
-        let Ok(blocks) = crate::source::parse_source(&text, &prefs) else {
-            return;
-        };
-        let Some(id) = self.source_bound else {
-            return;
-        };
-        self.source_lang = crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
-        self.source_last = text;
-        self.state
-            .update(cx, |state, cx| state.apply_parsed_source(id, blocks, cx));
-    }
-
-    pub(crate) fn revert_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.source_bound else {
-            return;
-        };
-        self.state.update(cx, |state, cx| state.revert_ocr(id, cx));
-        self.source_bound = None;
-        self.bind_source(cx);
-        window.focus(&self.source.focus_handle(cx), cx);
-        cx.notify();
+        self.set_source_open(!self.source_panel.open, window, cx);
     }
 
     fn quit(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
@@ -596,224 +395,6 @@ impl MainWindow {
         self.state.update(cx, |state, cx| {
             state.handle_main_close(action, window, cx);
         });
-    }
-
-    pub(crate) fn full(&self, id: Uuid) -> Option<Arc<RenderImage>> {
-        self.media.borrow().full(id)
-    }
-
-    pub(crate) fn math_image(&self, svg: &str, cx: &mut App) -> Arc<Image> {
-        self.media.borrow_mut().math_image(svg, cx)
-    }
-
-    pub(crate) fn schedule_media_gc(&mut self, cx: &mut Context<Self>) {
-        if self.gc_scheduled {
-            return;
-        }
-        self.gc_scheduled = true;
-        let entity = cx.entity();
-        cx.defer(move |cx| {
-            entity.update(cx, |this, cx| {
-                this.gc_scheduled = false;
-                let (keep_thumbs, keep_fulls, pin) = {
-                    let state = this.state.read(cx);
-                    let keep_fulls = state.gpu_full_ids();
-                    let pin = state.selected();
-                    let kept = this.thumb_keep.borrow().clone();
-                    let keep_thumbs = thumb_retain_ids(this.orig.open, &kept, state.visible_ids());
-                    (keep_thumbs, keep_fulls, pin)
-                };
-                let mut media = this.media.borrow_mut();
-                media.retain_thumbs(keep_thumbs.into_iter(), cx);
-                media.retain_fulls(keep_fulls.into_iter(), pin, cx);
-                media.trim_math(cx);
-            });
-        });
-    }
-
-    pub(crate) fn release_hidden_media(&mut self, cx: &mut Context<Self>) {
-        self.full_inflight.clear();
-        self.thumb_inflight.borrow_mut().clear();
-        self.derived = None;
-        self.media.borrow_mut().clear(cx);
-        cx.notify();
-    }
-
-    pub(crate) fn ensure_thumbs(&self, ids: &[Uuid], cx: &mut Context<Self>) {
-        let mut request = Vec::new();
-        let mut jobs = Vec::new();
-        {
-            let state = self.state.read(cx);
-            let media = self.media.borrow();
-            let mut inflight = self.thumb_inflight.borrow_mut();
-            for &id in ids {
-                if media.thumb(id).is_some() || inflight.contains(&id) {
-                    continue;
-                }
-                if state.thumbnail_failed(id) {
-                    continue;
-                }
-                let Some(doc) = state.library.get(id) else {
-                    continue;
-                };
-                if matches!(doc.image, crate::doc::ImageSlot::Missing) {
-                    continue;
-                }
-                if !doc.thumb_jpeg.is_empty() {
-                    inflight.insert(id);
-                    jobs.push((id, doc.thumb_jpeg.clone(), None));
-                } else if let Some(px) = doc.image.pixels() {
-                    inflight.insert(id);
-                    jobs.push((id, Vec::new(), Some(px.clone())));
-                } else {
-                    request.push(id);
-                }
-            }
-        }
-        if !request.is_empty() {
-            let entity = cx.entity();
-            cx.defer(move |cx| {
-                entity.update(cx, |this, cx| {
-                    for id in request {
-                        this.state.update(cx, |s, cx| s.request_thumb(id, cx));
-                    }
-                });
-            });
-        }
-        for (id, jpeg, pixels) in jobs {
-            cx.spawn(async move |this, cx| {
-                let render = cx
-                    .background_spawn(async move {
-                        crate::cache::MediaCache::decode_thumb(&jpeg, pixels.as_deref())
-                    })
-                    .await;
-                if let Err(err) = this.update(cx, |this, cx| {
-                    this.thumb_inflight.borrow_mut().remove(&id);
-                    if let Some(render) = render {
-                        this.media.borrow_mut().put_thumb(id, render);
-                        cx.notify();
-                    } else {
-                        this.state
-                            .update(cx, |state, _| state.mark_thumbnail_failed(id));
-                    }
-                }) {
-                    eprintln!("thumb decode: {err}");
-                }
-            })
-            .detach();
-        }
-    }
-
-    pub(crate) fn ensure_selected_full(&mut self, cx: &mut Context<Self>) {
-        let (id, pixels) = {
-            let state = self.state.read(cx);
-            let Some(doc) = state.selected_doc() else {
-                return;
-            };
-            let Some(pixels) = doc.image.pixels() else {
-                return;
-            };
-            (doc.id, pixels.clone())
-        };
-        if self.media.borrow().full(id).is_some() || !self.full_inflight.insert(id) {
-            return;
-        }
-        cx.spawn(async move |this, cx| {
-            let render = cx
-                .background_spawn(async move { crate::imgutil::gpu_display_image(pixels.as_ref()) })
-                .await;
-            if let Err(err) = this.update(cx, |this, cx| {
-                this.full_inflight.remove(&id);
-                if this.state.read(cx).library.get(id).is_some() {
-                    this.media.borrow_mut().put_full(id, render);
-                    this.schedule_media_gc(cx);
-                    cx.notify();
-                }
-            }) {
-                eprintln!("full image prepare: {err}");
-            }
-        })
-        .detach();
-    }
-
-    fn schedule_derived(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.last_scale = window.scale_factor();
-        self.schedule_derived_from_app(cx);
-    }
-
-    fn schedule_derived_from_app(&mut self, cx: &mut Context<Self>) {
-        let dpr = raster_dpr(self.last_scale);
-        let selected = {
-            let state = self.state.read(cx);
-            state.selected_doc().map(|doc| {
-                (
-                    doc.id,
-                    doc.revision,
-                    matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded,
-                    state.prefs.clone(),
-                )
-            })
-        };
-        let Some((id, revision, ready, prefs)) = selected else {
-            self.derived = None;
-            return;
-        };
-        if self
-            .derived
-            .as_ref()
-            .is_some_and(|d| d.id != id || d.revision != revision)
-        {
-            self.derived = None;
-        }
-        if !ready {
-            return;
-        }
-        if !should_spawn_derived(
-            ready,
-            self.derived
-                .as_ref()
-                .is_some_and(|d| d.matches(id, revision, dpr, &prefs)),
-            self.derived_busy,
-        ) {
-            return;
-        }
-        let Some(blocks) = self
-            .state
-            .read(cx)
-            .library
-            .get(id)
-            .map(|d| d.blocks.clone())
-        else {
-            return;
-        };
-        self.derived_busy = true;
-        cx.spawn(async move |this, cx| {
-            let built = cx
-                .background_spawn(async move {
-                    let preview = document_preview_with_dpr(&blocks, dpr);
-                    let rows = derived_copy_rows(&blocks, &prefs);
-                    DocDerived {
-                        id,
-                        revision,
-                        dpr,
-                        inline_delim: prefs.inline_delim,
-                        block_delim: prefs.block_delim,
-                        preview,
-                        copy_rows: rows,
-                    }
-                })
-                .await;
-            if let Err(err) = this.update(cx, |this, cx| {
-                this.derived_busy = false;
-                let selected = this.state.read(cx).selected();
-                this.derived = built.keep_if_selected(selected);
-                this.schedule_derived_from_app(cx);
-                cx.notify();
-            }) {
-                eprintln!("{}: derived preview: {err}", crate::identity::APP_SLUG);
-            }
-        })
-        .detach();
     }
 
     pub(crate) fn apply_window_drag(
@@ -851,7 +432,7 @@ impl MainWindow {
             }) => {
                 if work_w > 1.0 {
                     let pct = start_pct + (f32::from(ev.position.x) - start_x) / work_w;
-                    self.source_split = pct.clamp(0.28, 0.72);
+                    self.source_panel.split = pct.clamp(0.28, 0.72);
                     cx.notify();
                 }
             }
@@ -891,9 +472,8 @@ impl Focusable for MainWindow {
 
 impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (status_kind, status_label, capturing, has_docs, n_docs, close_orig) = {
+        let (status_kind, status_label, capturing, has_docs, n_docs) = {
             let state = self.state.read(cx);
-            let close_orig = self.orig.open && state.selected().is_none();
             let (status_kind, status_label) = chrome(state);
             let status_label = if !matches!(
                 status_kind,
@@ -910,20 +490,8 @@ impl gpui::Render for MainWindow {
                 state.is_capturing() || state.is_bootstrapping(),
                 !state.is_empty(),
                 state.visible_len(),
-                close_orig,
             )
         };
-        if close_orig {
-            let entity = cx.entity();
-            cx.defer(move |cx| {
-                entity.update(cx, |this, cx| {
-                    if this.orig.open && this.state.read(cx).selected().is_none() {
-                        this.orig.close();
-                        cx.notify();
-                    }
-                });
-            });
-        }
         let history = self.render_history(n_docs, cx);
         let viewport = window.viewport_size();
         let copy_pane_w = {
@@ -954,7 +522,7 @@ impl gpui::Render for MainWindow {
             let has_selected = state.selected().is_some();
             let can_open_docx = state
                 .selected_doc()
-                .is_some_and(|doc| matches!(doc.status, DocStatus::Ready) && doc.blocks_loaded);
+                .is_some_and(|doc| doc.has_ready_blocks());
             (has_selected, can_open_docx)
         };
         div()

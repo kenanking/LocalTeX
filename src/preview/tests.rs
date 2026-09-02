@@ -7,7 +7,7 @@ fn dummy_derived(id: Uuid) -> DocDerived {
         dpr: 1.0,
         inline_delim: InlineDelim::Dollar,
         block_delim: BlockDelim::Dollars,
-        preview: Vec::new(),
+        preview: Arc::from([]),
         copy_rows: Vec::new(),
     }
 }

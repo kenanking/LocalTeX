@@ -40,8 +40,40 @@ enum PersistenceState {
     ShuttingDown,
 }
 
+enum MainWindowState {
+    Closed,
+    Opening,
+    Open {
+        handle: WindowHandle<MainWindow>,
+        visible: bool,
+    },
+}
+
+impl MainWindowState {
+    fn handle(&self) -> Option<WindowHandle<MainWindow>> {
+        match self {
+            Self::Open { handle, .. } => Some(*handle),
+            Self::Closed | Self::Opening => None,
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        matches!(self, Self::Open { visible: true, .. })
+    }
+
+    fn is_opening(&self) -> bool {
+        matches!(self, Self::Opening)
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        if let Self::Open { visible: slot, .. } = self {
+            *slot = visible;
+        }
+    }
+}
+
 pub struct AppState {
-    pub library: Library,
+    library: Library,
     export_fmt: ExportFmt,
     pub prefs: Prefs,
     prefs_writer: Option<PrefsWriter>,
@@ -56,9 +88,7 @@ pub struct AppState {
     capture: CaptureSession,
     orig_copy_flash: Option<Uuid>,
     orig_copy_flash_gen: u64,
-    pub main_window: Option<WindowHandle<MainWindow>>,
-    pub(crate) main_window_opening: bool,
-    pub(crate) main_window_visible: bool,
+    main_window: MainWindowState,
 }
 
 impl AppState {
@@ -82,9 +112,7 @@ impl AppState {
             capture: CaptureSession::new(),
             orig_copy_flash: None,
             orig_copy_flash_gen: 0,
-            main_window: None,
-            main_window_opening: false,
-            main_window_visible: false,
+            main_window: MainWindowState::Closed,
         }
     }
 
@@ -107,7 +135,7 @@ impl AppState {
                         this.library = Library::from_list(items);
                         this.persistence = PersistenceState::Ready { store, writer };
                         this.pump_store_events(events, cx);
-                        if hydrate_selected || this.main_window_visible {
+                        if hydrate_selected || this.main_window.is_visible() {
                             this.boot_selected(cx);
                         }
                     }
@@ -183,7 +211,7 @@ impl AppState {
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: autostart: {err:#}");
-                        this.flash_capture_error("Couldn't change launch at startup", cx);
+                        this.flash_error("Couldn't change launch at startup", cx);
                     }
                 }
                 cx.notify();
@@ -303,11 +331,11 @@ impl AppState {
         self.hidden_media_release_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(HIDDEN_MEDIA_RELEASE).await;
             let _ = this.update(cx, |this, cx| {
-                if this.main_window_visible {
+                if this.main_window.is_visible() {
                     return;
                 }
                 this.library.release_persisted_images();
-                let handle = this.main_window;
+                let handle = this.main_window.handle();
                 cx.defer(move |cx| {
                     if let Some(handle) = handle {
                         let _ = handle.update(cx, |window, _, cx| {
@@ -326,6 +354,10 @@ impl AppState {
 
     pub fn selected_doc(&self) -> Option<&Document> {
         self.library.selected_doc()
+    }
+
+    pub fn doc(&self, id: Uuid) -> Option<&Document> {
+        self.library.get(id)
     }
 
     pub fn visible_ids(&self) -> &[Uuid] {
@@ -350,6 +382,17 @@ impl AppState {
 
     pub fn gpu_full_ids(&self) -> Vec<Uuid> {
         self.library.gpu_full_ids()
+    }
+
+    pub(crate) fn has_main_window(&self) -> bool {
+        self.main_window.handle().is_some()
+    }
+
+    pub(crate) fn open_main(&mut self, handle: WindowHandle<MainWindow>) {
+        self.main_window = MainWindowState::Open {
+            handle,
+            visible: true,
+        };
     }
 
     pub fn select_delta(&mut self, delta: isize, cx: &mut Context<Self>) {
@@ -388,7 +431,7 @@ impl AppState {
         match cmd {
             DesktopCmd::Capture => self.request_capture(cx),
             DesktopCmd::Show => {
-                if self.main_window_visible {
+                if self.main_window.is_visible() {
                     self.hide_to_tray(cx);
                 } else {
                     self.restore_main(cx);
@@ -413,8 +456,4 @@ pub fn pump_desktop_events(state: gpui::Entity<AppState>, rx: Receiver<DesktopCm
         state.update(cx, |state, cx| state.handle_desktop(cmd, cx));
     })
     .detach();
-}
-
-pub fn bind_keys(cx: &mut App, over: &crate::keymap::Overrides) {
-    crate::keymap::apply(cx, over);
 }

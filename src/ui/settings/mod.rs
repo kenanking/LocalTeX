@@ -22,6 +22,8 @@ use general::general_page;
 use shortcuts::shortcuts_page;
 use system::system_page;
 
+pub(crate) use shortcuts::intercept_recording;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,

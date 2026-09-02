@@ -6,7 +6,7 @@ use image::RgbaImage;
 
 use super::ingest::IngestSource;
 use super::session::Capture;
-use super::AppState;
+use super::{AppState, MainWindowState};
 use crate::identity::APP_SLUG;
 
 const SHEET_DISMISS_SETTLE: Duration = Duration::from_millis(250);
@@ -33,7 +33,7 @@ impl AppState {
         self.capture.error()
     }
 
-    pub(super) fn flash_capture_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
+    pub(super) fn flash_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
         self.capture.set(Capture::Failed(msg.into()));
         let gen = self.capture.gen();
         cx.notify();
@@ -62,7 +62,7 @@ impl AppState {
         self.dismiss_main_sheet(cx);
         crate::desktop::prepare_snip_input();
 
-        let plan = capture_hide_plan(self.prefs.hide_on_capture, self.main_window.is_some());
+        let plan = capture_hide_plan(self.prefs.hide_on_capture, self.has_main_window());
         if plan.push_hide {
             self.capture.push_hide();
         }
@@ -77,7 +77,7 @@ impl AppState {
                     .await
                 {
                     let _ = this.update(cx, |this, cx| {
-                        this.flash_capture_error(err.to_string(), cx);
+                        this.flash_error(err.to_string(), cx);
                         this.restore_after_hide(cx);
                     });
                     return;
@@ -102,7 +102,7 @@ impl AppState {
                     cx.notify();
                 }
                 Err(err) => {
-                    this.flash_capture_error(err.to_string(), cx);
+                    this.flash_error(err.to_string(), cx);
                     this.restore_after_hide(cx);
                 }
             }) {
@@ -196,7 +196,7 @@ impl AppState {
 
     fn request_paste_fallback(&mut self, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
-            self.flash_capture_error("Clipboard is empty — copy an image first", cx);
+            self.flash_error("Clipboard is empty — copy an image first", cx);
             return;
         };
         let image_bytes = item.entries().iter().find_map(|entry| match entry {
@@ -222,7 +222,7 @@ impl AppState {
             self.ingest(IngestSource::Files(paths), cx);
             return;
         }
-        self.flash_capture_error("Nothing to paste — copy an image first", cx);
+        self.flash_error("Nothing to paste — copy an image first", cx);
     }
 
     fn spawn_paste_image<F>(&mut self, decode: F, cx: &mut Context<Self>)
@@ -237,7 +237,7 @@ impl AppState {
                 Ok(img) => this.ingest_pixels(img, cx),
                 Err(err) => {
                     eprintln!("{APP_SLUG}: clipboard image: {err}");
-                    this.flash_capture_error("Couldn't read that clipboard image", cx);
+                    this.flash_error("Couldn't read that clipboard image", cx);
                 }
             }) {
                 eprintln!("{APP_SLUG}: paste task: {err}");
@@ -250,22 +250,30 @@ impl AppState {
         // EWMH HIDDEN does not nest `handle.update` (in-app Snip runs while the
         // main window is already on GPUI's update stack).
         crate::desktop::iconify_main_window();
-        let handle = self.main_window;
+        self.defer_minimize(cx, "minimize main");
+    }
+
+    fn mark_hidden(&mut self, cx: &mut Context<Self>) {
+        self.main_window.set_visible(false);
+        self.schedule_hidden_media_release(cx);
+        crate::desktop::hide_main_to_tray();
+    }
+
+    fn defer_minimize(&self, cx: &mut Context<Self>, fail_label: &'static str) {
+        let handle = self.main_window.handle();
         cx.defer(move |cx| {
             if let Some(handle) = handle {
                 if let Err(err) = handle.update(cx, |_, window, _| {
                     window.minimize_window();
                 }) {
-                    eprintln!("{APP_SLUG}: minimize main: {err}");
+                    eprintln!("{APP_SLUG}: {fail_label}: {err}");
                 }
             }
         });
     }
 
     pub fn minimize_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.main_window_visible = false;
-        self.schedule_hidden_media_release(cx);
-        crate::desktop::hide_main_to_tray();
+        self.mark_hidden(cx);
         #[cfg(not(target_os = "windows"))]
         window.minimize_window();
         #[cfg(target_os = "windows")]
@@ -273,28 +281,13 @@ impl AppState {
     }
 
     pub(crate) fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
-        self.main_window_visible = false;
-        self.schedule_hidden_media_release(cx);
-        crate::desktop::hide_main_to_tray();
+        self.mark_hidden(cx);
         #[cfg(not(target_os = "windows"))]
-        {
-            let handle = self.main_window;
-            cx.defer(move |cx| {
-                if let Some(handle) = handle {
-                    if let Err(err) = handle.update(cx, |_, window, _| {
-                        window.minimize_window();
-                    }) {
-                        eprintln!("{APP_SLUG}: hide to tray: {err}");
-                    }
-                }
-            });
-        }
-        #[cfg(target_os = "windows")]
-        let _ = cx;
+        self.defer_minimize(cx, "hide to tray");
     }
 
     pub(super) fn dismiss_main_sheet(&self, cx: &mut Context<Self>) {
-        let handle = self.main_window;
+        let handle = self.main_window.handle();
         cx.defer(move |cx| {
             if let Some(handle) = handle {
                 if let Err(err) = handle.update(cx, |view, _, cx| {
@@ -314,20 +307,20 @@ impl AppState {
 
     pub(super) fn restore_main(&mut self, cx: &mut Context<Self>) {
         self.capture.force_show();
-        self.main_window_visible = true;
+        self.main_window.set_visible(true);
         self.hidden_media_release_task = None;
-        if self.main_window.is_none() {
-            if self.main_window_opening {
+        if self.main_window.handle().is_none() {
+            if self.main_window.is_opening() {
                 return;
             }
-            self.main_window_opening = true;
+            self.main_window = MainWindowState::Opening;
             let state = cx.entity();
             cx.defer(move |cx| {
                 if let Err(err) = crate::open_main_window(state.clone(), true, cx) {
                     eprintln!("{APP_SLUG}: open main window: {err:#}");
                     state.update(cx, |state, cx| {
-                        state.main_window_opening = false;
-                        state.flash_capture_error("Couldn't open the main window", cx);
+                        state.main_window = MainWindowState::Closed;
+                        state.flash_error("Couldn't open the main window", cx);
                     });
                 }
             });
@@ -335,7 +328,7 @@ impl AppState {
         }
         self.boot_selected(cx);
         crate::desktop::deiconify_main_window();
-        let handle = self.main_window;
+        let handle = self.main_window.handle();
         cx.defer(move |cx| {
             if let Some(handle) = handle {
                 activate_window(handle, cx);

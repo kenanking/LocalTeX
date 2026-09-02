@@ -67,7 +67,7 @@ impl MainWindow {
         };
 
         let thumbs = {
-            let media = self.media.borrow();
+            let media = self.media.cache.borrow();
             ids.iter()
                 .map(|id| (*id, media.thumb(*id)))
                 .collect::<Vec<_>>()
@@ -116,7 +116,7 @@ impl MainWindow {
         let end = (center + 17).min(ids.len());
         let window_ids = ids[start..end].to_vec();
         {
-            let mut keep = self.thumb_keep.borrow_mut();
+            let mut keep = self.media.thumb_keep.borrow_mut();
             for id in &window_ids {
                 if !keep.contains(id) {
                     keep.push(*id);
@@ -126,12 +126,12 @@ impl MainWindow {
         let mut need = Vec::new();
         {
             let state = self.state.read(cx);
-            let media = self.media.borrow();
+            let media = self.media.cache.borrow();
             for id in &window_ids {
                 if media.thumb(*id).is_some() {
                     continue;
                 }
-                let Some(doc) = state.library.get(*id) else {
+                let Some(doc) = state.doc(*id) else {
                     continue;
                 };
                 if matches!(doc.image, ImageSlot::Missing) {

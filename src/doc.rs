@@ -252,6 +252,10 @@ impl Document {
         self.blocks_loaded && self.blocks != self.ocr_blocks
     }
 
+    pub fn has_ready_blocks(&self) -> bool {
+        matches!(self.status, DocStatus::Ready) && self.blocks_loaded
+    }
+
     pub fn can_retry(&self) -> bool {
         !matches!(self.image, ImageSlot::Missing) && !matches!(self.status, DocStatus::Recognizing)
     }
