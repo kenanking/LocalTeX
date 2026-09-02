@@ -10,6 +10,8 @@ use ort::value::Tensor;
 
 use super::imgops::{self, RgbImg};
 
+const RAW_DYNAMIC_OUTPUTS: [&str; 3] = ["logits", "pred_boxes", "order_logits"];
+
 const LABEL_MAP: [&str; 25] = [
     "abstract",
     "algorithm",
@@ -84,6 +86,93 @@ struct DetBox {
     score: f32,
 }
 
+fn dynamic_input_size(image: &RgbImg) -> (usize, usize) {
+    if image.w as f32 / image.h.max(1) as f32 >= 4.0 {
+        (320, 1280)
+    } else {
+        (800, 800)
+    }
+}
+
+fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value.clamp(-80.0, 80.0)).exp())
+}
+
+fn raw_dynamic_boxes(
+    logits_shape: &[i64],
+    logits: &[f32],
+    boxes_shape: &[i64],
+    boxes: &[f32],
+    order_shape: &[i64],
+    order_logits: &[f32],
+    orig_h: f32,
+    orig_w: f32,
+) -> Result<Vec<DetBox>> {
+    if logits_shape.len() != 3 || logits_shape[0] != 1 {
+        return Err(anyhow!("unexpected dynamic logits shape {logits_shape:?}"));
+    }
+    let queries = logits_shape[1] as usize;
+    let classes = logits_shape[2] as usize;
+    if boxes_shape != [1, queries as i64, 4] || order_shape != [1, queries as i64, queries as i64] {
+        return Err(anyhow!(
+            "inconsistent dynamic layout shapes logits={logits_shape:?} boxes={boxes_shape:?} order={order_shape:?}"
+        ));
+    }
+
+    let mut votes = vec![0.0f32; queries];
+    for column in 0..queries {
+        for row in 0..column {
+            votes[column] += sigmoid(order_logits[row * queries + column]);
+        }
+        for row in (column + 1)..queries {
+            votes[column] += 1.0 - sigmoid(order_logits[column * queries + row]);
+        }
+    }
+    let mut pointers: Vec<usize> = (0..queries).collect();
+    pointers.sort_by(|&a, &b| votes[a].total_cmp(&votes[b]));
+    let mut order = vec![0usize; queries];
+    for (rank, query) in pointers.into_iter().enumerate() {
+        order[query] = rank;
+    }
+
+    let mut ranked: Vec<(f32, usize)> = logits
+        .iter()
+        .enumerate()
+        .map(|(index, &value)| (sigmoid(value), index))
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    ranked.truncate(queries);
+
+    Ok(ranked
+        .into_iter()
+        .map(|(score, flat_index)| {
+            let query = flat_index / classes;
+            let class_id = flat_index % classes;
+            let offset = query * 4;
+            let (cx, cy, width, height) = (
+                boxes[offset],
+                boxes[offset + 1],
+                boxes[offset + 2],
+                boxes[offset + 3],
+            );
+            DetBox {
+                label: LABEL_MAP
+                    .get(class_id)
+                    .map(|value| (*value).to_string())
+                    .unwrap_or_else(|| format!("class_{class_id}")),
+                coord: [
+                    (cx - width * 0.5) * orig_w,
+                    (cy - height * 0.5) * orig_h,
+                    (cx + width * 0.5) * orig_w,
+                    (cy + height * 0.5) * orig_h,
+                ],
+                order: order[query] as f32,
+                score,
+            }
+        })
+        .collect())
+}
+
 /// filter_overlap_boxes from utils.py.
 fn filter_overlap_boxes(boxes: Vec<DetBox>) -> Vec<DetBox> {
     let mut boxes: Vec<DetBox> = boxes
@@ -129,72 +218,116 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
     let orig_h = image.h as f32;
     let orig_w = image.w as f32;
 
-    // Resize original to exactly 800x800 (aspect-distorting, cv2 INTER_LINEAR).
-    let resized = imgops::resize(image, 800, 800, FilterType::Bilinear)?;
+    let output_names: Vec<String> = session
+        .outputs()
+        .iter()
+        .map(|o| o.name().to_string())
+        .collect();
+    let raw_dynamic = RAW_DYNAMIC_OUTPUTS
+        .iter()
+        .all(|name| output_names.iter().any(|output| output == name));
+    let (target_h, target_w) = if raw_dynamic {
+        dynamic_input_size(image)
+    } else {
+        (800, 800)
+    };
+    let scale_h = target_h as f32 / orig_h;
+    let scale_w = target_w as f32 / orig_w;
+
+    let resized = imgops::resize(
+        image,
+        target_w as u32,
+        target_h as u32,
+        FilterType::Bilinear,
+    )?;
 
     // NCHW f32, /255 only.
-    const SIDE: usize = 800;
-    const PLANE: usize = SIDE * SIDE;
-    let mut blob = vec![0f32; 3 * PLANE];
-    for y in 0..SIDE {
-        for x in 0..SIDE {
-            let o = (y * SIDE + x) * 3;
-            let i = y * SIDE + x;
+    let plane = target_h * target_w;
+    let mut blob = vec![0f32; 3 * plane];
+    for y in 0..target_h {
+        for x in 0..target_w {
+            let o = (y * target_w + x) * 3;
+            let i = y * target_w + x;
             blob[i] = resized.data[o] as f32 / 255.0;
-            blob[PLANE + i] = resized.data[o + 1] as f32 / 255.0;
-            blob[2 * PLANE + i] = resized.data[o + 2] as f32 / 255.0;
+            blob[plane + i] = resized.data[o + 1] as f32 / 255.0;
+            blob[2 * plane + i] = resized.data[o + 2] as f32 / 255.0;
         }
     }
 
-    let image_t = Tensor::from_array((vec![1i64, 3, 800, 800], blob))?;
-    if session.inputs().iter().any(|i| i.name() == "im_shape") {
-        return Err(anyhow!(
-            "layout.onnx is not the freeze-fold ship (unexpected im_shape input)"
-        ));
-    }
+    let image_t = Tensor::from_array((vec![1i64, 3, target_h as i64, target_w as i64], blob))?;
     let out_name = session
         .outputs()
         .first()
         .ok_or_else(|| anyhow!("layout model has no outputs"))?
         .name()
         .to_string();
-    let outputs = session.run(ort::inputs! { "image" => image_t })?;
+    let frozen = !raw_dynamic && !session.inputs().iter().any(|i| i.name() == "im_shape");
+    let outputs = if frozen || raw_dynamic {
+        session.run(ort::inputs! { "image" => image_t })?
+    } else {
+        let im_shape = Tensor::from_array((vec![1i64, 2], vec![target_h as f32, target_w as f32]))?;
+        let scale_factor = Tensor::from_array((vec![1i64, 2], vec![scale_h, scale_w]))?;
+        session.run(ort::inputs! {
+            "im_shape" => im_shape,
+            "image" => image_t,
+            "scale_factor" => scale_factor
+        })?
+    };
 
-    let (shape, data) = outputs[out_name.as_str()].try_extract_tensor::<f32>()?;
-    // V2 freeze-fold: [N,8] = (label, score, x1, y1, x2, y2, order, unused) in 800-space.
-    if shape.len() != 2 || shape[1] != 8 {
-        return Err(anyhow!("unexpected layout output shape {:?}", shape));
-    }
-    let n = shape[0] as usize;
-
-    let mut boxes: Vec<DetBox> = Vec::new();
-    for i in 0..n {
-        let row = &data[i * 8..(i + 1) * 8];
-        let score = row[1];
-        if score <= threshold {
-            continue;
+    let mut boxes = if raw_dynamic {
+        let (logits_shape, logits) = outputs["logits"].try_extract_tensor::<f32>()?;
+        let (boxes_shape, raw_boxes) = outputs["pred_boxes"].try_extract_tensor::<f32>()?;
+        let (order_shape, order_logits) = outputs["order_logits"].try_extract_tensor::<f32>()?;
+        raw_dynamic_boxes(
+            logits_shape,
+            logits,
+            boxes_shape,
+            raw_boxes,
+            order_shape,
+            order_logits,
+            orig_h,
+            orig_w,
+        )?
+    } else {
+        let (shape, data) = outputs[out_name.as_str()].try_extract_tensor::<f32>()?;
+        if shape.len() != 2 || (shape[1] != 8 && shape[1] != 7) {
+            return Err(anyhow!("unexpected layout output shape {:?}", shape));
         }
-        let class_id = row[0] as i64;
-        let label = LABEL_MAP
-            .get(class_id as usize)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("class_{}", class_id));
-        let x1 = row[2] * orig_w / 800.0;
-        let y1 = row[3] * orig_h / 800.0;
-        let x2 = row[4] * orig_w / 800.0;
-        let y2 = row[5] * orig_h / 800.0;
-        let coord = [
-            x1.clamp(0.0, orig_w),
-            y1.clamp(0.0, orig_h),
-            x2.clamp(0.0, orig_w),
-            y2.clamp(0.0, orig_h),
+        let stride = shape[1] as usize;
+        let mut boxes = Vec::new();
+        for row in data.chunks_exact(stride) {
+            if row[1] <= threshold {
+                continue;
+            }
+            let class_id = row[0] as usize;
+            let (mut x1, mut y1, mut x2, mut y2) = (row[2], row[3], row[4], row[5]);
+            if frozen {
+                x1 *= orig_w / target_w as f32;
+                x2 *= orig_w / target_w as f32;
+                y1 *= orig_h / target_h as f32;
+                y2 *= orig_h / target_h as f32;
+            }
+            boxes.push(DetBox {
+                label: LABEL_MAP
+                    .get(class_id)
+                    .map(|value| (*value).to_string())
+                    .unwrap_or_else(|| format!("class_{class_id}")),
+                coord: [x1, y1, x2, y2],
+                order: row[6],
+                score: row[1],
+            });
+        }
+        boxes
+    };
+
+    boxes.retain(|b| b.score > threshold);
+    for b in &mut boxes {
+        b.coord = [
+            b.coord[0].clamp(0.0, orig_w),
+            b.coord[1].clamp(0.0, orig_h),
+            b.coord[2].clamp(0.0, orig_w),
+            b.coord[3].clamp(0.0, orig_h),
         ];
-        boxes.push(DetBox {
-            label,
-            coord,
-            order: row[6],
-            score,
-        });
     }
 
     let mut boxes = filter_overlap_boxes(boxes);
@@ -220,4 +353,25 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
         regions,
         layout_s: t0.elapsed().as_secs_f64(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_size_uses_wide_bucket_at_ratio_four() {
+        let regular = RgbImg {
+            w: 399,
+            h: 100,
+            data: vec![],
+        };
+        let wide = RgbImg {
+            w: 400,
+            h: 100,
+            data: vec![],
+        };
+        assert_eq!(dynamic_input_size(&regular), (800, 800));
+        assert_eq!(dynamic_input_size(&wide), (320, 1280));
+    }
 }

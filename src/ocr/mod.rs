@@ -200,7 +200,12 @@ fn ensure_ort() {
     });
 }
 
-pub(crate) fn build_session(path: &Path, intra: usize, spinning: bool) -> Result<Session> {
+pub(crate) fn build_session(
+    path: &Path,
+    intra: usize,
+    spinning: bool,
+    memory_pattern: bool,
+) -> Result<Session> {
     ensure_ort();
     fn e<E: std::fmt::Display>(err: E) -> anyhow::Error {
         anyhow!("{}", err)
@@ -213,6 +218,8 @@ pub(crate) fn build_session(path: &Path, intra: usize, spinning: bool) -> Result
         .with_inter_threads(1)
         .map_err(e)?
         .with_parallel_execution(false)
+        .map_err(e)?
+        .with_memory_pattern(memory_pattern)
         .map_err(e)?
         .with_flush_to_zero()
         .map_err(e)?
@@ -378,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_formula_lifts_trailing_paren_eqno_to_tag() {
+    fn handle_formula_keeps_trailing_number_unverified() {
         let out = text::handle_formula(
             r"\[{\rm ACC}=\frac{1}{N}I\left[\hat{y}_{i}=y_{i}\right]\] (1)
 
@@ -388,23 +395,14 @@ mod tests {
             out.starts_with("$$") && out.contains("ACC"),
             "expected $$ wrap, got {out:?}"
         );
-        assert!(
-            out.contains(r"\tag{1}"),
-            "trailing (1) after \\] is the eqno, got {out:?}"
-        );
-        assert!(
-            !out.contains("(1)"),
-            "paren form must not remain beside the math, got {out:?}"
-        );
+        assert!(!out.contains(r"\tag{"), "text alone cannot prove an eqno");
+        assert!(out.contains("(1)"));
     }
 
     #[test]
-    fn handle_formula_lifts_spaced_trailing_paren() {
+    fn handle_formula_does_not_promote_spaced_trailing_paren() {
         let out = text::handle_formula("a+b (2.1)");
-        assert!(
-            out.contains(r"\tag{2.1}"),
-            "expected trailing (2.1) as tag, got {out:?}"
-        );
+        assert!(!out.contains(r"\tag{"));
         let leave = text::handle_formula("f(1)");
         assert!(
             !leave.contains(r"\tag{"),

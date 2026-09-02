@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="${LOCALTEX_MODELS_REPO:-kenanking/LocalTeX}"
 TAG="${LOCALTEX_MODELS_TAG:-v0.0.0}"
-OPENDOC_DIR="opendoc_int8_20260827_45af38b"
+OPENDOC_DIR="opendoc_dynamic_int8_20260902_45af38b"
 HANDWRITING_DIR="handwriting_e10_20260831_cf27b99"
 OPENDOC_TAR="${OPENDOC_DIR}.tar.gz"
 HANDWRITING_TAR="${HANDWRITING_DIR}.tar.gz"

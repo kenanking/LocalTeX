@@ -280,10 +280,18 @@ pub struct RecognizeOut {
 
 impl InkTex {
     pub fn load(models_dir: &Path, intra_threads: usize, spinning: bool) -> Result<Self> {
-        let encoder =
-            super::build_session(&models_dir.join(ENCODER_ONNX), intra_threads, spinning)?;
-        let decoder =
-            super::build_session(&models_dir.join(DECODER_ONNX), intra_threads, spinning)?;
+        let encoder = super::build_session(
+            &models_dir.join(ENCODER_ONNX),
+            intra_threads,
+            spinning,
+            true,
+        )?;
+        let decoder = super::build_session(
+            &models_dir.join(DECODER_ONNX),
+            intra_threads,
+            spinning,
+            true,
+        )?;
         let vocab = Vocab::load(&models_dir.join(VOCAB_JSON))?;
 
         let mut num_layers = 0usize;

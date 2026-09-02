@@ -2,13 +2,13 @@
 //! Recognition and label postprocess follow OpenDocONNX.__call__; markdown
 //! file assembly and figure-token painting are out of scope for this app.
 //! `formula_number` regions are paired with `display_formula` and folded
-//! into `\tag{N}` (ocr-pipeline assembly). A trailing `(n)` glued onto the
-//! formula crop is lifted the same way, so a missed layout box still tags.
+//! into `\tag{N}`. A trailing `(n)` in formula OCR is not promoted without
+//! independent layout evidence.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use ort::session::Session;
 
 use super::build_session;
@@ -48,17 +48,12 @@ impl Pipeline {
             "{APP_SLUG}: intra_op_threads={intra} spinning={}",
             if spinning { "on" } else { "off" }
         );
-        let layout = build_session(&dir.join(LAYOUT_ONNX), intra, spinning)?;
-        if layout.inputs().iter().any(|i| i.name() == "im_shape") {
-            return Err(anyhow!(
-                "layout.onnx is not the freeze-fold ship (unexpected im_shape input)"
-            ));
-        }
-        let encoder = build_session(&dir.join(ENCODER_ONNX), intra, spinning)?;
-        let decoder = build_session(&dir.join(DECODER_ONNX), intra, spinning)?;
+        let layout = build_session(&dir.join(LAYOUT_ONNX), intra, spinning, false)?;
+        let encoder = build_session(&dir.join(ENCODER_ONNX), intra, spinning, true)?;
+        let decoder = build_session(&dir.join(DECODER_ONNX), intra, spinning, true)?;
         let tokenizer = Tokenizer::load(&dir.join(TOKENIZER_JSON))?;
         let unirec = UniRec::new(encoder, decoder, tokenizer)?;
-        eprintln!("{APP_SLUG}: layout freeze-fold · decoder GQA");
+        eprintln!("{APP_SLUG}: layout dynamic auto · decoder GQA");
         Ok(Self { layout, unirec })
     }
 
@@ -125,6 +120,12 @@ impl Pipeline {
                 coord: region.coord,
                 text: postprocess(kind, out.text),
             }));
+        }
+
+        for rec in pending.iter_mut().flatten() {
+            if rec.base == "display_formula" {
+                rec.text = text::remove_unverified_formula_tags(&rec.text);
+            }
         }
 
         let mut tags_for: HashMap<usize, Vec<String>> = HashMap::new();
@@ -315,8 +316,10 @@ impl ConfAcc {
 
 const TOKEN_CONF_WEIGHT: f32 = 0.8;
 const LAYOUT_CONF_WEIGHT: f32 = 0.2;
+const FORMULA_NUMBER_MIN_SCORE: f32 = 0.65;
 const FORMULA_NUMBER_Y_BAND: f32 = 0.25;
-const FORMULA_NUMBER_X_SLOP: f32 = 10.0;
+const FORMULA_NUMBER_MAX_WIDTH_RATIO: f32 = 0.20;
+const FORMULA_NUMBER_MAX_OVERLAP_RATIO: f32 = 0.70;
 
 pub(super) fn mix_confidence(token: Option<f32>, layout: Option<f32>) -> Option<f32> {
     match (token, layout) {
@@ -347,23 +350,35 @@ fn pair_formula_numbers(regions: &[Region]) -> HashMap<usize, usize> {
         if text::base_label(&r.label) != "formula_number" {
             continue;
         }
+        if r.score < FORMULA_NUMBER_MIN_SCORE {
+            continue;
+        }
         let yc = (r.coord[1] + r.coord[3]) * 0.5;
+        let nw = (r.coord[2] - r.coord[0]).max(1.0);
+        let nxc = (r.coord[0] + r.coord[2]) * 0.5;
         let mut best: Option<(usize, f32)> = None;
         for &j in &formulas {
             let f = &regions[j].coord;
+            let fw = (f[2] - f[0]).max(1.0);
+            if nw > fw * FORMULA_NUMBER_MAX_WIDTH_RATIO {
+                continue;
+            }
             let band = (f[3] - f[1]) * FORMULA_NUMBER_Y_BAND;
             if yc < f[1] - band || yc > f[3] + band {
                 continue;
             }
-            let gap = if r.coord[0] >= f[2] - FORMULA_NUMBER_X_SLOP {
-                (r.coord[0] - f[2]).max(0.0)
-            } else if r.coord[2] <= f[0] + FORMULA_NUMBER_X_SLOP {
-                (f[0] - r.coord[2]).max(0.0)
-            } else {
+            let overlap = (f[2].min(r.coord[2]) - f[0].max(r.coord[0])).max(0.0);
+            if overlap / nw > FORMULA_NUMBER_MAX_OVERLAP_RATIO {
                 continue;
+            }
+            let separation = if nxc >= (f[0] + f[2]) * 0.5 {
+                (r.coord[0] - f[2]).max(0.0)
+            } else {
+                (f[0] - r.coord[2]).max(0.0)
             };
-            if best.is_none_or(|(_, g)| gap < g) {
-                best = Some((j, gap));
+            let rank = separation + overlap * 0.25;
+            if best.is_none_or(|(_, previous)| rank < previous) {
+                best = Some((j, rank));
             }
         }
         if let Some((j, _)) = best {
@@ -455,9 +470,9 @@ mod tests {
     #[test]
     fn pair_formula_numbers_same_line() {
         let regions = vec![
-            region("display_formula_01", [10.0, 10.0, 100.0, 40.0]),
-            region("formula_number_02", [110.0, 14.0, 130.0, 36.0]),
-            region("formula_number_03", [110.0, 80.0, 130.0, 100.0]),
+            region("display_formula_01", [10.0, 10.0, 110.0, 40.0]),
+            region("formula_number_02", [120.0, 14.0, 138.0, 36.0]),
+            region("formula_number_03", [120.0, 80.0, 138.0, 100.0]),
         ];
         let pairs = pair_formula_numbers(&regions);
         assert_eq!(pairs.get(&1), Some(&0));
@@ -485,17 +500,15 @@ mod tests {
     }
 
     #[test]
-    fn inject_tags_does_not_duplicate_inline_eqno() {
+    fn layout_tag_replaces_unverified_inline_number() {
         let wrapped = text::handle_formula("\\[a+b\\] (1)\n\n");
-        assert!(
-            wrapped.contains(r"\tag{1}"),
-            "inline (1) should already be a tag, got {wrapped:?}"
-        );
-        let tagged = text::inject_tags(&wrapped, &["1".into()]);
+        assert!(!wrapped.contains(r"\tag{"));
+        let cleaned = text::remove_unverified_formula_tags(&wrapped);
+        let tagged = text::inject_tags(&cleaned, &["1".into()]);
         assert_eq!(
             tagged.matches(r"\tag{1}").count(),
             1,
-            "layout pairing must not double the same eqno, got {tagged:?}"
+            "layout pairing should be the only source of the eqno, got {tagged:?}"
         );
     }
 

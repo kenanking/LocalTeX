@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:LOCALTEX_MODELS_REPO) { $env:LOCALTEX_MODELS_REPO } else { "kenanking/LocalTeX" }
 $Tag = if ($env:LOCALTEX_MODELS_TAG) { $env:LOCALTEX_MODELS_TAG } else { "v0.0.0" }
-$OpenDocDir = "opendoc_int8_20260827_45af38b"
+$OpenDocDir = "opendoc_dynamic_int8_20260902_45af38b"
 $HandwritingDir = "handwriting_e10_20260831_cf27b99"
 $OpenDocTar = "$OpenDocDir.tar.gz"
 $HandwritingTar = "$HandwritingDir.tar.gz"

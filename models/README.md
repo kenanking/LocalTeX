@@ -29,18 +29,20 @@ several pack versions. LocalTeX only installs the pair in use.
 
 `manifest.json` on the release is the machine-readable copy of this card.
 
-## OpenDoc-0.1B (`opendoc_int8_20260827_45af38b`)
+## OpenDoc-0.1B (`opendoc_dynamic_int8_20260902_45af38b`)
 
-Tarball: `opendoc_int8_20260827_45af38b.tar.gz` (~244 MB unpacked). Installed as `opendoc/`.
+Tarball: `opendoc_dynamic_int8_20260902_45af38b.tar.gz` (~244 MB unpacked). Installed as `opendoc/`.
 
 | File | Role |
 |---|---|
-| `layout.onnx` | PP-DocLayoutV2, freeze-fold, image-only |
+| `layout.onnx` | PP-DocLayoutV2, dynamic H/W, raw layout outputs |
 | `encoder.onnx` | UniRec-0.1B encoder |
 | `decoder.onnx` | UniRec-0.1B decoder (GQA, `cross_kt_0` + `seqlens_k`) |
 | `unirec_tokenizer_mapping.json` | UniRec tokenizer |
 
-Strategy: layout-freeze-fold + INT8 conv weights + WOQ INT8 MatMul + decoder GQA.
+Strategy: dynamic layout with FP32 position trigonometry, INT8 conv weights,
+WOQ INT8 MatMul, and decoder GQA. LocalTeX selects `800×800` for ordinary
+pages and `1280×320` for images whose width/height ratio is at least 4.
 
 ## Handwriting (`handwriting_e10_20260831_cf27b99`)
 

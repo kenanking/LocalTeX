@@ -52,27 +52,40 @@ pub(super) fn clean_special_tokens(text: &str) -> String {
     text
 }
 
-/// MarkdownConverter.replace_dict, in Python insertion order (duplicate
-/// '\pm' key keeps its first position). Keys/values are the Python-evaluated
-/// literals (single backslashes).
-const REPLACE_DICT: [(&str, &str); 10] = [
-    ("\\bm", "\\mathbf "),
-    ("\\eqno", "\\quad "),
-    ("\\quad", "\\quad "),
-    ("\\leq", "\\leq "),
-    ("\\pm", "\\pm "),
-    ("\\varmathbb", "\\mathbb "),
-    ("\\in fty", "\\infty"),
-    ("\\mu", "\\mu "),
-    ("\\cdot", "\\cdot "),
-    ("\\langle", "\\langle "),
-];
-
-fn apply_replace_dict(mut text: String) -> String {
-    for (k, v) in REPLACE_DICT {
-        text = text.replace(k, v);
+fn rewrite_complete_commands(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' || i + 1 >= chars.len() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut end = i + 1;
+        while end < chars.len() && chars[end].is_ascii_alphabetic() {
+            end += 1;
+        }
+        if end == i + 1 {
+            out.push(chars[i]);
+            if end < chars.len() {
+                out.push(chars[end]);
+                end += 1;
+            }
+            i = end;
+            continue;
+        }
+        let command: String = chars[i + 1..end].iter().collect();
+        out.push('\\');
+        out.push_str(match command.as_str() {
+            "bm" => "boldsymbol",
+            "varmathbb" => "mathbb",
+            "upmu" => "mu",
+            _ => &command,
+        });
+        i = end;
     }
-    text
+    out.replace(r"\in fty", r"\infty")
 }
 
 /// to_markdown.py fix_latex_brackets.
@@ -89,12 +102,10 @@ fn fix_latex_brackets(text: &str) -> String {
 
 /// MarkdownConverter._process_formulas_in_text.
 fn process_formulas_in_text(text: &str) -> String {
-    let mut text = text
-        .replace("\\upmu", "\\mu")
-        .replace("\\(", "$")
-        .replace("\\)", "$");
-    text = apply_replace_dict(text);
-    text
+    let text = clean_special_tokens(text)
+        .replace("\\(", "$ ")
+        .replace("\\)", " $");
+    rewrite_complete_commands(&text)
 }
 
 /// MarkdownConverter._handle_text.
@@ -166,51 +177,98 @@ pub(super) fn normalize_math_delimiters(text: &str) -> String {
     text
 }
 
-/// MarkdownConverter._handle_formula.
-///
-/// OpenDoc peels `\] (n)\n\n` off the crop and drops the number. When the
-/// layout model missed a `formula_number` box, that number is the eqno —
-/// keep it as `\tag{n}` before wrapping in `$$`.
+fn unwrap_formula(text: &str) -> String {
+    let text = text.trim();
+    static DISPLAY_NUMBER: OnceLock<Regex> = OnceLock::new();
+    let re = DISPLAY_NUMBER
+        .get_or_init(|| Regex::new(r"(?s)\A\\\[(.*)\\\]([ \t]+\([^\n()]{1,16}\))?\z").unwrap());
+    if let Some(caps) = re.captures(text) {
+        let body = caps.get(1).map_or("", |m| m.as_str());
+        let number = caps.get(2).map_or("", |m| m.as_str());
+        static INNER_DISPLAY_BREAK: OnceLock<Regex> = OnceLock::new();
+        let inner = INNER_DISPLAY_BREAK.get_or_init(|| {
+            Regex::new(r"\\\][ \t]*(\([^()\n]{1,16}\))?[ \t]*(?:\r?\n[ \t]*)?\\\[").unwrap()
+        });
+        return inner
+            .replace_all(&format!("{body}{number}"), |caps: &regex::Captures| {
+                caps.get(1).map_or_else(
+                    || " \\\\\n".to_string(),
+                    |m| format!(" {} \\\\\n", m.as_str()),
+                )
+            })
+            .trim()
+            .to_string();
+    }
+    for (opening, closing) in [("$$", "$$"), (r"\(", r"\)"), ("$", "$")] {
+        if text.starts_with(opening)
+            && text.ends_with(closing)
+            && text.len() >= opening.len() + closing.len()
+        {
+            return text[opening.len()..text.len() - closing.len()]
+                .trim()
+                .to_string();
+        }
+    }
+    text.to_string()
+}
+
+fn structurally_balanced(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut braces = 0usize;
+    let mut left = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            let mut end = i + 1;
+            while end < chars.len() && chars[end].is_ascii_alphabetic() {
+                end += 1;
+            }
+            match chars[i + 1..end].iter().collect::<String>().as_str() {
+                "left" => left += 1,
+                "right" if left == 0 => return false,
+                "right" => left -= 1,
+                _ => {}
+            }
+            i = end.max(i + 2);
+            continue;
+        }
+        match chars[i] {
+            '{' => braces += 1,
+            '}' if braces == 0 => return false,
+            '}' => braces -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    if braces != 0 || left != 0 {
+        return false;
+    }
+    static ENV: OnceLock<Regex> = OnceLock::new();
+    let env = ENV.get_or_init(|| Regex::new(r"\\(begin|end)\{([^{}]+)\}").unwrap());
+    let mut stack = Vec::new();
+    for caps in env.captures_iter(text) {
+        if &caps[1] == "begin" {
+            stack.push(caps[2].to_string());
+        } else if stack.pop().as_deref() != Some(&caps[2]) {
+            return false;
+        }
+    }
+    stack.is_empty()
+}
+
+/// Conservative formula cleanup. Layout evidence, not recognized text alone,
+/// is responsible for promoting an equation number to `\tag{...}`.
 pub(super) fn handle_formula(text: &str) -> String {
-    let text = text.replace("\\upmu", "\\mu");
-    let (text, mut eqno) = take_bracket_eqno(&text);
-    let mut result = text;
-    result = result.replace("<|sn|>", "");
-    result = result.replace("<|unk|>", "");
-    result = result.replace('\u{ffff}', "");
-    result = sub(&RE_UNDERSCORES, r"_{4,}", "___", &result);
-    // Literal str.replace calls (note: "\]\n*\[" is literal, not regex).
-    result = result.replace("\\]\n*\\[", "\\\\");
-    result = result.replace("\n\n\\[", "");
-    result = result.replace("\\]\n\n", "");
-    result = result.replace("\\[\n", "");
-    result = result.replace("\n\\]", "");
-    result = result.replace("\\]", "");
-    result = result.replace("\\[", "");
-    result = result.replace("\\( ", "");
-    result = result.replace(" \\)", "");
-    result = result.replace("\\(", "");
-    result = result.replace("\\)", "");
-    // strip('$') then rstrip('\\ '), then \upmu -> \mu
-    let mut text = result.trim_matches('$').to_string();
-    while text.ends_with('\\') || text.ends_with(' ') {
-        text.pop();
-    }
-    if eqno.is_none() {
-        let (body, tag) = take_trailing_paren_eqno(&text);
-        text = body;
-        eqno = tag;
-    }
-    let mut text = text.replace("\\upmu", "\\mu");
-    text = apply_replace_dict(text);
-    let mut processed = format!("$${}$$", text);
-    processed = processed.replace('\n', "\\\\\n");
-    processed = fix_latex_brackets(&processed);
-    let mut processed = format!("{}\n\n", processed);
-    if let Some(tag) = eqno {
-        processed = inject_tags(&processed, std::slice::from_ref(&tag));
-    }
-    processed
+    let body = unwrap_formula(&clean_special_tokens(text));
+    let candidate = fix_latex_brackets(&rewrite_complete_commands(&body))
+        .trim()
+        .to_string();
+    let body = if structurally_balanced(&candidate) {
+        candidate
+    } else {
+        body.trim().to_string()
+    };
+    format!("$${body}$$\n\n")
 }
 
 pub(super) fn eqno_payload(raw: &str) -> Option<String> {
@@ -239,31 +297,27 @@ pub(super) fn inject_tags(text: &str, tags: &[String]) -> String {
     format!("{body}{ins}$${trailing}")
 }
 
-/// `\] (11)\n\n` → drop the paren run, keep `"11"`.
-fn take_bracket_eqno(text: &str) -> (String, Option<String>) {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"\\][ \t]*\(([^)]{1,12})\)[ \t]*(?:\n\n)?").unwrap());
-    let Some(caps) = re.captures(text) else {
-        return (text.to_string(), None);
+pub(super) fn remove_unverified_formula_tags(text: &str) -> String {
+    static TAG: OnceLock<Regex> = OnceLock::new();
+    static LINE_NUMBER: OnceLock<Regex> = OnceLock::new();
+    static NUMBER: OnceLock<Regex> = OnceLock::new();
+    let tag = TAG.get_or_init(|| Regex::new(r"[ \t]*\\tag\{[^{}]{1,16}\}").unwrap());
+    let line_number = LINE_NUMBER.get_or_init(|| {
+        Regex::new(r"[ \t]+\(\d+(?:[.-]\d+)*(?:[A-Za-z])?\)([ \t]*\\\\[ \t]*\n)").unwrap()
+    });
+    let number = NUMBER
+        .get_or_init(|| Regex::new(r"[ \t]+\(\d+(?:[.-]\d+)*(?:[A-Za-z])?\)[ \t]*$").unwrap());
+    let cleaned = tag.replace_all(text, "").into_owned();
+    let cleaned = line_number.replace_all(&cleaned, "$1").into_owned();
+    let core = cleaned.trim_end();
+    let trailing = &cleaned[core.len()..];
+    let Some(prefix) = core.strip_suffix("$$") else {
+        return cleaned;
     };
-    let Some(tag) = caps.get(1).and_then(|m| eqno_payload(m.as_str())) else {
-        return (text.to_string(), None);
+    let Some(body) = prefix.strip_prefix("$$") else {
+        return cleaned;
     };
-    (re.replace(text, r"\]").into_owned(), Some(tag))
-}
-
-/// After delimiter strip: `a+b (1)` → `a+b` + `"1"`. Requires a space so
-/// `f(1)` stays math.
-fn take_trailing_paren_eqno(body: &str) -> (String, Option<String>) {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"[ \t]+\(([^)]{1,12})\)[ \t]*$").unwrap());
-    let Some(caps) = re.captures(body) else {
-        return (body.to_string(), None);
-    };
-    let Some(tag) = caps.get(1).and_then(|m| eqno_payload(m.as_str())) else {
-        return (body.to_string(), None);
-    };
-    (re.replace(body, "").into_owned(), Some(tag))
+    format!("$${}$${trailing}", number.replace(body, ""))
 }
 
 /// to_markdown.py extract_table_from_html.
