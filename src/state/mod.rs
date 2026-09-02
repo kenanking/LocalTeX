@@ -394,6 +394,7 @@ impl AppState {
                     self.restore_main(cx);
                 }
             }
+            DesktopCmd::Reveal => self.restore_main(cx),
             DesktopCmd::Quit => self.request_quit(cx),
         }
     }

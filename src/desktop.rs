@@ -32,6 +32,7 @@ mod x11_snip;
 pub enum DesktopCmd {
     Capture,
     Show,
+    Reveal,
     Quit,
 }
 
@@ -71,13 +72,13 @@ thread_local! {
 static GRABS: RwLock<Vec<(u32, DesktopCmd)>> = RwLock::new(Vec::new());
 
 /// Register hotkey + tray. Must be called from the GPUI UI thread.
-pub fn spawn() -> Receiver<DesktopCmd> {
+pub fn spawn() -> (Sender<DesktopCmd>, Receiver<DesktopCmd>) {
     let (tx, rx) = mpsc::channel();
     let hotkey = start_hotkey_manager(tx.clone());
     #[cfg(target_os = "linux")]
-    linux::start_tray(tx);
+    linux::start_tray(tx.clone());
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    let tray = other::start_tray(tx);
+    let tray = other::start_tray(tx.clone());
     SERVICES.with(|slot| {
         *slot.borrow_mut() = Some(Services {
             hotkey,
@@ -88,7 +89,7 @@ pub fn spawn() -> Receiver<DesktopCmd> {
             _tray: tray,
         });
     });
-    rx
+    (tx, rx)
 }
 
 /// Project catalog OS rows through Overrides onto the OS. Call on the GPUI UI thread.

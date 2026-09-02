@@ -13,6 +13,7 @@ mod export;
 mod icon;
 mod identity;
 mod imgutil;
+mod instance;
 mod keymap;
 mod library;
 mod math;
@@ -60,6 +61,13 @@ impl StartupMode {
 }
 
 fn main() {
+    match instance::claim() {
+        instance::Claim::AlreadyRunning => return,
+        instance::Claim::Primary(seat) => run(seat),
+    }
+}
+
+fn run(mut seat: instance::Seat) {
     let startup_mode = StartupMode::from_args();
     pin_display_vulkan();
     crate::icon::install_desktop_identity();
@@ -87,7 +95,9 @@ fn main() {
 
             // Hotkey manager must be created on this GPUI UI thread (Windows
             // win32 loop / macOS main thread). Event recv is forwarded off-thread.
-            let rx = desktop::spawn();
+            let (tx, rx) = desktop::spawn();
+            seat.serve(tx);
+            seat.hold();
             state.update(cx, |state, _| {
                 desktop::rebind_globals(&state.prefs.shortcuts);
             });
