@@ -30,6 +30,8 @@ OutputBaseFilename=LocalTeX-{#MyAppVersion}-{#MyAppArch}-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Inno 6+ defaults to 120,120 for Setup and Uninstall.
+WizardSizePercent=100,100
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\localtex.exe
@@ -173,23 +175,34 @@ begin
 
   LaunchCheck := TNewCheckBox.Create(WizardForm);
   LaunchCheck.Parent := WizardForm.FinishedPage;
-  LaunchCheck.Left := WizardForm.RunList.Left;
-  LaunchCheck.Top := WizardForm.RunList.Top;
   LaunchCheck.Width := ScaleX(20);
   LaunchCheck.Height := ScaleY(20);
   LaunchCheck.Caption := '';
   LaunchCheck.Checked := True;
+  LaunchCheck.Visible := False;
   LaunchCheck.OnClick := @LaunchCheckClick;
 
   LaunchCheckLabel := TNewStaticText.Create(WizardForm);
   LaunchCheckLabel.Parent := WizardForm.FinishedPage;
-  LaunchCheckLabel.Left := LaunchCheck.Left + LaunchCheck.Width + ScaleX(8);
-  LaunchCheckLabel.Top := LaunchCheck.Top + ScaleY(2);
   LaunchCheckLabel.AutoSize := True;
   LaunchCheckLabel.Caption := 'Launch LocalTeX';
+  LaunchCheckLabel.Visible := False;
   LaunchCheckLabel.OnClick := @LaunchCheckLabelClick;
+end;
 
-  HideNativeCheckList(WizardForm.RunList);
+procedure PlaceLaunchCheck();
+begin
+  { RunList.Top is the DFM slot until wpFinished. HideNativeCheckList also
+    zeroes Height before Inno lays out ClickFinish, so that slot sits on the
+    last FinishedLabel line. Anchor under the label instead. }
+  WizardForm.FinishedLabel.Width :=
+    WizardForm.FinishedPage.ClientWidth - WizardForm.FinishedLabel.Left;
+  WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
+  LaunchCheck.Left := WizardForm.FinishedLabel.Left;
+  LaunchCheck.Top :=
+    WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(8);
+  LaunchCheckLabel.Left := LaunchCheck.Left + LaunchCheck.Width + ScaleX(8);
+  LaunchCheckLabel.Top := LaunchCheck.Top + ScaleY(2);
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -201,17 +214,10 @@ begin
   end;
   if CurPageID = wpFinished then
   begin
-    { Capture the restored native list position before collapsing it. }
-    if WizardForm.RunList.Height > 0 then
-    begin
-      LaunchCheck.Left := WizardForm.RunList.Left;
-      LaunchCheck.Top := WizardForm.RunList.Top;
-      LaunchCheckLabel.Left := LaunchCheck.Left + LaunchCheck.Width + ScaleX(8);
-      LaunchCheckLabel.Top := LaunchCheck.Top + ScaleY(2);
-    end;
     HideNativeCheckList(WizardForm.RunList);
     if WizardForm.RunList.Items.Count > 0 then
     begin
+      PlaceLaunchCheck();
       LaunchCheck.Visible := True;
       LaunchCheckLabel.Visible := True;
       LaunchCheckLabel.Caption := WizardForm.RunList.ItemCaption[0];
@@ -261,67 +267,80 @@ begin
   UninstallWipeCheck.Checked := not UninstallWipeCheck.Checked;
 end;
 
-function ConfirmUninstall(var WipeData: Boolean): Boolean;
-var
-  Form: TSetupForm;
-  WipeLabel: TNewStaticText;
-  OKButton, CancelButton: TNewButton;
-  W: Integer;
-begin
-  WipeData := False;
-  Form := CreateCustomForm(ScaleX(480), ScaleY(140), False, True);
-  try
-    Form.Caption := 'Uninstall LocalTeX';
-
-    PlaceSeparatedCheck(
-      Form, Form, UninstallWipeCheck, WipeLabel,
-      ScaleX(16), ScaleY(16),
-      'Also delete my LocalTeX settings and snip library', False);
-    WipeLabel.OnClick := @UninstallWipeLabelClick;
-
-    OKButton := TNewButton.Create(Form);
-    OKButton.Parent := Form;
-    OKButton.Caption := 'OK';
-    OKButton.Height := ScaleY(23);
-    OKButton.ModalResult := mrOk;
-    OKButton.Default := True;
-
-    CancelButton := TNewButton.Create(Form);
-    CancelButton.Parent := Form;
-    CancelButton.Caption := 'Cancel';
-    CancelButton.Height := ScaleY(23);
-    CancelButton.ModalResult := mrCancel;
-    CancelButton.Cancel := True;
-
-    W := Form.CalculateButtonWidth([OKButton.Caption, CancelButton.Caption]);
-    OKButton.Width := W;
-    CancelButton.Width := W;
-    CancelButton.Left := Form.ClientWidth - ScaleX(10) - W;
-    CancelButton.Top := Form.ClientHeight - ScaleY(23 + 10);
-    OKButton.Left := CancelButton.Left - ScaleX(6) - W;
-    OKButton.Top := CancelButton.Top;
-
-    Result := Form.ShowModal() = mrOk;
-    if Result then
-      WipeData := UninstallWipeCheck.Checked;
-  finally
-    Form.Free();
-  end;
-end;
-
 function InitializeUninstall(): Boolean;
 begin
   Result := True;
   DeleteUserData := False;
+end;
+
+procedure InitializeUninstallProgressForm();
+var
+  WipePage: TNewNotebookPage;
+  WipeLabel: TNewStaticText;
+  UninstallButton: TNewButton;
+  SavedName, SavedDescription: String;
+  SavedCancelEnabled: Boolean;
+  SavedCancelModal: Integer;
+begin
+  { Inno already showed Confirm Uninstall. Offer wipe on the wizard, not
+    as a modal that runs before that question. Silent keeps user data. }
   if UninstallSilent then
     Exit;
-  Result := ConfirmUninstall(DeleteUserData);
+
+  WipePage := TNewNotebookPage.Create(UninstallProgressForm);
+  WipePage.Notebook := UninstallProgressForm.InnerNotebook;
+  WipePage.Parent := UninstallProgressForm.InnerNotebook;
+  WipePage.Align := alClient;
+
+  PlaceSeparatedCheck(
+    UninstallProgressForm, WipePage, UninstallWipeCheck, WipeLabel,
+    UninstallProgressForm.StatusLabel.Left,
+    UninstallProgressForm.StatusLabel.Top,
+    'Also delete my LocalTeX settings and snip library', False);
+  WipeLabel.OnClick := @UninstallWipeLabelClick;
+
+  UninstallButton := TNewButton.Create(UninstallProgressForm);
+  UninstallButton.Parent := UninstallProgressForm;
+  UninstallButton.Width := UninstallProgressForm.CancelButton.Width;
+  UninstallButton.Height := UninstallProgressForm.CancelButton.Height;
+  UninstallButton.Left :=
+    UninstallProgressForm.CancelButton.Left - UninstallButton.Width - ScaleX(10);
+  UninstallButton.Top := UninstallProgressForm.CancelButton.Top;
+  UninstallButton.Caption := 'Uninstall';
+  UninstallButton.ModalResult := mrOk;
+  UninstallButton.Default := True;
+
+  UninstallProgressForm.InnerNotebook.ActivePage := WipePage;
+  SavedName := UninstallProgressForm.PageNameLabel.Caption;
+  SavedDescription := UninstallProgressForm.PageDescriptionLabel.Caption;
+  UninstallProgressForm.PageNameLabel.Caption := 'User data';
+  UninstallProgressForm.PageDescriptionLabel.Caption :=
+    'Settings and the snip library stay unless you check the box below.';
+
+  SavedCancelEnabled := UninstallProgressForm.CancelButton.Enabled;
+  SavedCancelModal := UninstallProgressForm.CancelButton.ModalResult;
+  UninstallProgressForm.CancelButton.Enabled := True;
+  UninstallProgressForm.CancelButton.ModalResult := mrCancel;
+  UninstallProgressForm.ActiveControl := UninstallButton;
+
+  if UninstallProgressForm.ShowModal() = mrCancel then
+    Abort;
+
+  DeleteUserData := UninstallWipeCheck.Checked;
+  UninstallButton.Visible := False;
+  UninstallProgressForm.CancelButton.Enabled := SavedCancelEnabled;
+  UninstallProgressForm.CancelButton.ModalResult := SavedCancelModal;
+  UninstallProgressForm.PageNameLabel.Caption := SavedName;
+  UninstallProgressForm.PageDescriptionLabel.Caption := SavedDescription;
+  UninstallProgressForm.InnerNotebook.ActivePage :=
+    UninstallProgressForm.InstallingPage;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usPostUninstall) and DeleteUserData then
   begin
+    Log('Deleting LocalTeX user data');
     DelTree(ExpandConstant('{userappdata}\localtex'), True, True, True);
     DelTree(ExpandConstant('{localappdata}\localtex'), True, True, True);
   end;
