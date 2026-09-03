@@ -19,9 +19,10 @@ const REEL_H: f32 = 118.0;
 const CARD_SIZE: f32 = 82.0;
 const PROGRESS_W: f32 = 330.0;
 pub(crate) const INTAKE_REJECT_HOLD: Duration = Duration::from_millis(700);
-pub(crate) const INTAKE_FEEDBACK_OUT: Duration = Duration::from_millis(160);
+const INTAKE_SUCCESS_FEEDBACK: Duration = Duration::from_millis(520);
+const INTAKE_FAILURE_FEEDBACK: Duration = Duration::from_millis(160);
 pub(crate) const INTAKE_COMPLETE_EFFECT: Duration = Duration::from_millis(360);
-pub(crate) const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(550);
+pub(crate) const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(700);
 pub(crate) const INTAKE_PLATEN_OUT: Duration = Duration::from_millis(280);
 const INTAKE_WINDOW: usize = 5;
 
@@ -71,8 +72,22 @@ pub(crate) struct IntakePresentation {
 
 #[derive(Default)]
 pub(crate) struct IntakeSync {
-    pub feedback: Vec<u64>,
+    pub feedback: Vec<IntakeFeedback>,
     pub complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IntakeFeedback {
+    pub key: u64,
+    pub succeeded: bool,
+}
+
+pub(crate) fn intake_feedback_duration(succeeded: bool) -> Duration {
+    if succeeded {
+        INTAKE_SUCCESS_FEEDBACK
+    } else {
+        INTAKE_FAILURE_FEEDBACK
+    }
 }
 
 impl IntakePresentation {
@@ -109,7 +124,10 @@ impl IntakePresentation {
                 card.work = item.work;
                 if became_terminal && card.visual == IntakeVisual::Visible {
                     card.visual = IntakeVisual::Feedback;
-                    feedback.push(card.key);
+                    feedback.push(IntakeFeedback {
+                        key: card.key,
+                        succeeded: item.work == IntakeWork::Succeeded,
+                    });
                 } else if became_terminal && card.visual == IntakeVisual::Backlog {
                     card.visual = IntakeVisual::Gone;
                     self.backlog = self.backlog.saturating_sub(1);
@@ -136,7 +154,10 @@ impl IntakePresentation {
                     self.backlog += 1;
                 }
                 if visual == IntakeVisual::Feedback {
-                    feedback.push(item.key);
+                    feedback.push(IntakeFeedback {
+                        key: item.key,
+                        succeeded: item.work == IntakeWork::Succeeded,
+                    });
                 }
             }
 
@@ -144,10 +165,9 @@ impl IntakePresentation {
             self.succeeded += usize::from(item.work == IntakeWork::Succeeded);
             self.failed += usize::from(item.work == IntakeWork::Failed);
         }
-        let complete = batch.all_terminal() && self.phase == IntakePhase::Running;
-        if complete {
-            feedback.clear();
-        }
+        let complete = batch.all_terminal()
+            && self.phase == IntakePhase::Running
+            && !self.has_active_feedback();
         IntakeSync { feedback, complete }
     }
 
@@ -198,6 +218,15 @@ impl IntakePresentation {
 
     pub fn backlog_count(&self) -> usize {
         self.backlog
+    }
+
+    pub fn ready_to_complete(&self) -> bool {
+        self.counts.images > 0 && self.done == self.counts.images && !self.has_active_feedback()
+    }
+
+    fn has_active_feedback(&self) -> bool {
+        self.visible_cards()
+            .any(|(_, card)| card.visual == IntakeVisual::Feedback)
     }
 
     pub fn progress(&self) -> (usize, usize) {
@@ -462,6 +491,7 @@ fn render_slot(slot: &IntakeSlot, center_offset: f32) -> AnyElement {
     let working = slot.work == IntakeWork::Working;
     let failed = slot.work == IntakeWork::Failed;
     let feedback = slot.visual == IntakeVisual::Feedback;
+    let succeeded = slot.work == IntakeWork::Succeeded;
     let thumb = slot.thumb.clone();
     let left = REEL_W * 0.5 + pose.dx + center_offset - CARD_SIZE * 0.5;
     let top = REEL_H * 0.5 + pose.dy - CARD_SIZE * 0.5;
@@ -472,8 +502,15 @@ fn render_slot(slot: &IntakeSlot, center_offset: f32) -> AnyElement {
             .child(pane)
             .with_animation(
                 SharedString::from(format!("intake-feedback-{}", slot.key)),
-                Animation::new(INTAKE_FEEDBACK_OUT).with_easing(ease_out_quint()),
-                |this, delta| this.p(px(delta * 5.)).opacity(1.0 - delta),
+                Animation::new(intake_feedback_duration(succeeded)),
+                move |this, delta| {
+                    let exit = if succeeded {
+                        ((delta - 0.72) / 0.28).clamp(0.0, 1.0)
+                    } else {
+                        delta
+                    };
+                    this.p(px(exit * 5.)).opacity(1.0 - exit)
+                },
             )
             .into_any_element()
     } else {
@@ -564,12 +601,14 @@ fn render_slot_check(slot: &IntakeSlot, center_offset: f32) -> Option<AnyElement
             )
             .with_animation(
                 SharedString::from(format!("intake-check-{}", slot.key)),
-                Animation::new(INTAKE_FEEDBACK_OUT).with_easing(ease_out_quint()),
+                Animation::new(INTAKE_SUCCESS_FEEDBACK),
                 |this, delta| {
-                    let opacity = if delta < 0.35 {
-                        delta / 0.35
+                    let opacity = if delta < 0.18 {
+                        delta / 0.18
+                    } else if delta < 0.72 {
+                        1.0
                     } else {
-                        1.0 - (delta - 0.35) / 0.65
+                        1.0 - (delta - 0.72) / 0.28
                     };
                     this.opacity(opacity)
                 },
@@ -882,7 +921,13 @@ mod tests {
         assert_eq!(presentation.backlog_count(), 2);
 
         assert!(batch.finish_key(2, true));
-        assert_eq!(presentation.sync(&batch).feedback, vec![2]);
+        assert_eq!(
+            presentation.sync(&batch).feedback,
+            vec![IntakeFeedback {
+                key: 2,
+                succeeded: true,
+            }]
+        );
         assert!(presentation.finish_feedback_and_promote(2));
         let replacement = presentation
             .cards
@@ -902,7 +947,13 @@ mod tests {
         let (mut presentation, _) = IntakePresentation::new(&batch);
         assert!(batch.finish_key(6, true));
         assert!(batch.finish_key(1, true));
-        assert_eq!(presentation.sync(&batch).feedback, vec![1]);
+        assert_eq!(
+            presentation.sync(&batch).feedback,
+            vec![IntakeFeedback {
+                key: 1,
+                succeeded: true,
+            }]
+        );
         assert!(presentation.finish_feedback_and_promote(1));
         let terminal = presentation
             .cards
@@ -931,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn all_terminal_batch_fast_forwards_to_complete() {
+    fn all_terminal_batch_waits_only_for_visible_feedback() {
         let paths = (0..36)
             .map(|index| PathBuf::from(format!("{index}.png")))
             .collect();
@@ -939,9 +990,33 @@ mod tests {
         for key in 1..=36 {
             assert!(batch.finish_key(key, true));
         }
-        let (_, sync) = IntakePresentation::new(&batch);
-        assert!(sync.complete);
-        assert!(sync.feedback.is_empty());
+        let (mut presentation, sync) = IntakePresentation::new(&batch);
+        assert!(!sync.complete);
+        assert_eq!(sync.feedback.len(), INTAKE_WINDOW);
+        assert!(sync.feedback.iter().all(|feedback| feedback.succeeded));
+        for (index, feedback) in sync.feedback.into_iter().enumerate() {
+            assert!(presentation.finish_feedback_and_promote(feedback.key));
+            assert_eq!(presentation.ready_to_complete(), index + 1 == INTAKE_WINDOW);
+        }
+        assert_eq!(presentation.backlog_count(), 0);
+    }
+
+    #[test]
+    fn failure_feedback_is_short_and_still_gates_completion() {
+        let mut batch = IntakeBatch::from_paths(vec![PathBuf::from("a.png")], 0, 8);
+        assert!(batch.finish_key(1, false));
+        let (mut presentation, sync) = IntakePresentation::new(&batch);
+        assert_eq!(
+            sync.feedback,
+            vec![IntakeFeedback {
+                key: 1,
+                succeeded: false,
+            }]
+        );
+        assert!(!sync.complete);
+        assert_eq!(intake_feedback_duration(false), INTAKE_FAILURE_FEEDBACK);
+        assert!(presentation.finish_feedback_and_promote(1));
+        assert!(presentation.ready_to_complete());
     }
 
     #[test]

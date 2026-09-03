@@ -14,8 +14,8 @@ use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::intake::{
-    render_intake_overlay, slots_from_batch, IntakeKind, IntakePhase, IntakePresentation,
-    INTAKE_COMPLETE_HOLD, INTAKE_FEEDBACK_OUT, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD,
+    intake_feedback_duration, render_intake_overlay, slots_from_batch, IntakeKind, IntakePhase,
+    IntakePresentation, INTAKE_COMPLETE_HOLD, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD,
 };
 use super::media::WindowMedia;
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
@@ -302,8 +302,8 @@ impl MainWindow {
             self.acknowledge_intake(batch.gen, cx);
             self.schedule_intake_complete(batch.gen, cx);
         } else {
-            for key in sync.feedback {
-                self.schedule_intake_feedback(batch.gen, key, cx);
+            for feedback in sync.feedback {
+                self.schedule_intake_feedback(batch.gen, feedback.key, feedback.succeeded, cx);
             }
         }
 
@@ -355,17 +355,40 @@ impl MainWindow {
         .detach();
     }
 
-    fn schedule_intake_feedback(&mut self, gen: u64, key: u64, cx: &mut Context<Self>) {
+    fn schedule_intake_feedback(
+        &mut self,
+        gen: u64,
+        key: u64,
+        succeeded: bool,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(INTAKE_FEEDBACK_OUT).await;
+            cx.background_executor()
+                .timer(intake_feedback_duration(succeeded))
+                .await;
             let _ = this.update(cx, |this, cx| {
-                let changed = this
+                let mut complete = false;
+                let changed = if let Some(intake) = this
                     .intake
                     .as_mut()
                     .filter(|intake| intake.gen == gen && intake.phase == IntakePhase::Running)
-                    .is_some_and(|intake| intake.finish_feedback_and_promote(key));
+                {
+                    let changed = intake.finish_feedback_and_promote(key);
+                    if changed && intake.ready_to_complete() {
+                        intake.phase = IntakePhase::Complete;
+                        complete = true;
+                    }
+                    changed
+                } else {
+                    false
+                };
                 if changed {
-                    this.refresh_intake_media(cx);
+                    if complete {
+                        this.acknowledge_intake(gen, cx);
+                        this.schedule_intake_complete(gen, cx);
+                    } else {
+                        this.refresh_intake_media(cx);
+                    }
                     cx.notify();
                 }
             });
