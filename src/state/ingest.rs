@@ -199,7 +199,18 @@ impl AppState {
                 if ready {
                     this.persist_ready(id, cx);
                     if this.prefs.autocopy && this.library.selected() == Some(id) {
-                        this.copy_selected(cx);
+                        if let Some((id, kind)) = this.copy_selected(cx) {
+                            let handle = this.main_window.handle();
+                            cx.defer(move |cx| {
+                                if let Some(handle) = handle {
+                                    if let Err(err) = handle.update(cx, |view, _, cx| {
+                                        view.flash_copied(id, kind, cx);
+                                    }) {
+                                        eprintln!("{APP_SLUG}: autocopy flash: {err}");
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
                 this.pump_ocr(cx);
