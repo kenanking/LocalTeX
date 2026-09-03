@@ -313,7 +313,7 @@ impl AppState {
         self.engine.status()
     }
 
-    pub fn model_info(&self) -> &crate::ocr::ModelInfo {
+    pub fn model_info(&self) -> crate::ocr::ModelInfo {
         self.engine.model_info()
     }
 

@@ -4,10 +4,12 @@
   "graph_opt": "conv-bn-fold + identity-elim",
   "decoder_contract": "gqa: per-layer cross_kt_{0..5}[b,6,128,seq]/cross_v_{0..5}[b,6,seq,128]; self-attn = com.microsoft.GroupQueryAttention, past/present [b,6,len,128]; seqlens_k[b]=past+s-1; total_seq_len[1]=past+s",
   "packs": {
-    "opendoc": "opendoc_dynamic_int8_20260902_45af38b",
-    "handwriting": "handwriting_e10_20260831_cf27b99"
+    "opendoc": "opendoc_dynamic_int8_20260903_d8c4e76",
+    "handwriting": "handwriting_e10_20260903_cf27b99"
   },
-  "tarball": "opendoc_dynamic_int8_20260902_45af38b.tar.gz",
+  "metadata_schema": "1",
+  "metadata_keys": ["pack_id", "component", "model_family", "contract", "precision", "source_revision"],
+  "tarball": "opendoc_dynamic_int8_20260903_d8c4e76.tar.gz",
   "layout": {
     "contract": "raw_dynamic_v1",
     "input": ["batch", 3, "height", "width"],
@@ -15,8 +17,9 @@
     "wide_aspect_ratio_min": 4.0,
     "disable_ort_memory_pattern": true,
     "position_trig_fp32": true,
-    "bytes": 59332244,
-    "sha256": "8a74d1dbd6bf8fba6d4ed4284efed627b6dd8b331ff5d321f53b4b888729db4d"
+    "bytes": 59332528,
+    "sha256": "21eb60d0ac5b1f410724d5b0506be767ed22a053d0cf795f4b77548e1a325230",
+    "components": ["layout", "unirec_encoder", "unirec_decoder"]
   },
   "files_mb": {
     "layout.onnx": 56.9,
@@ -28,10 +31,11 @@
   "total_mb": 244.1,
   "inktex": {
     "name": "handwriting_e10",
-    "tarball": "handwriting_e10_20260831_cf27b99.tar.gz",
-    "dir": "handwriting_e10_20260831_cf27b99",
+    "tarball": "handwriting_e10_20260903_cf27b99.tar.gz",
+    "dir": "handwriting_e10_20260903_cf27b99",
     "strategy": "transformer-woq-matmul (MatMulConstBOnly)",
     "source": "ink2tex handwriting_e10_20260831_cf27b99",
+    "components": ["inktex_encoder", "inktex_decoder_step"],
     "input": "online ink (x, y, t) → 12-dim point features",
     "output": "bare LaTeX, greedy decode, 258-token vocab (JSON key order = id)",
     "files": [

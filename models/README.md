@@ -32,9 +32,9 @@ several pack versions. LocalTeX only installs the pair in use.
 
 `manifest.json` on the release is the machine-readable copy of this card.
 
-## OpenDoc-0.1B (`opendoc_dynamic_int8_20260902_45af38b`)
+## OpenDoc-0.1B (`opendoc_dynamic_int8_20260903_d8c4e76`)
 
-Tarball: `opendoc_dynamic_int8_20260902_45af38b.tar.gz` (~244 MB unpacked). Installed as `opendoc/`.
+Tarball: `opendoc_dynamic_int8_20260903_d8c4e76.tar.gz` (~244 MB unpacked). Installed as `opendoc/`.
 
 | File | Role |
 |---|---|
@@ -47,9 +47,9 @@ Strategy: dynamic layout with FP32 position trigonometry, INT8 conv weights,
 WOQ INT8 MatMul, and decoder GQA. LocalTeX selects `800×800` for ordinary
 pages and `1280×320` for images whose width/height ratio is at least 4.
 
-## Handwriting (`handwriting_e10_20260831_cf27b99`)
+## Handwriting (`handwriting_e10_20260903_cf27b99`)
 
-Tarball: `handwriting_e10_20260831_cf27b99.tar.gz` (~23 MB unpacked). Installed as `handwriting/`. Filenames match ocr-pipeline. The packs live in separate directories, so they do not collide with UniRec `encoder.onnx` / `decoder.onnx`.
+Tarball: `handwriting_e10_20260903_cf27b99.tar.gz` (~23 MB unpacked). Installed as `handwriting/`. Filenames match ocr-pipeline. The packs live in separate directories, so they do not collide with UniRec `encoder.onnx` / `decoder.onnx`.
 
 Rust/WOQ scores: MW 63.47 / C23 50.87.
 
@@ -60,3 +60,12 @@ Rust/WOQ scores: MW 63.47 / C23 50.87.
 | `vocab.json` | LaTeX vocab (258 tokens, JSON key order is the id) |
 
 Strategy: weights-only quantization (MatMulConstBOnly). Input is online ink `(x, y, t)`, not a raster. Output is bare LaTeX.
+
+## Runtime identity
+
+Each ONNX file carries `localtex.*` metadata written after graph optimization
+and quantization. Before a session is opened, Settings shows the pack version
+from `manifest.json` as **Declared**. After lazy loading, LocalTeX checks schema,
+component names, a common pack ID, and agreement with the manifest, then shows
+**Verified**, **Unstamped**, or **Mismatch**. The manifest and `SHA256SUMS` remain
+the source of whole-pack integrity, including tokenizer and vocabulary files.

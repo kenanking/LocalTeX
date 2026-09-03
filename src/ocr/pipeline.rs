@@ -11,11 +11,11 @@ use std::path::Path;
 use anyhow::Result;
 use ort::session::Session;
 
-use super::build_session;
 use super::imgops::{self, RgbImg};
 use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
 use super::unirec::{RecognizeOut, Tokenizer, UniRec};
+use super::{build_session, inspect_onnx_pack, PackMetadata};
 use crate::doc::{Block, BlockKind, BlockRole, OcrMeta, Rect};
 use crate::identity::APP_SLUG;
 
@@ -35,6 +35,7 @@ pub struct OcrResult {
 pub struct Pipeline {
     layout: Session,
     unirec: UniRec,
+    pack_metadata: PackMetadata,
 }
 
 fn env_flag(name: &str) -> bool {
@@ -51,10 +52,23 @@ impl Pipeline {
         let layout = build_session(&dir.join(LAYOUT_ONNX), intra, spinning, false)?;
         let encoder = build_session(&dir.join(ENCODER_ONNX), intra, spinning, true)?;
         let decoder = build_session(&dir.join(DECODER_ONNX), intra, spinning, true)?;
+        let pack_metadata = inspect_onnx_pack(&[
+            (&layout, "layout"),
+            (&encoder, "unirec_encoder"),
+            (&decoder, "unirec_decoder"),
+        ]);
         let tokenizer = Tokenizer::load(&dir.join(TOKENIZER_JSON))?;
         let unirec = UniRec::new(encoder, decoder, tokenizer)?;
         eprintln!("{APP_SLUG}: layout dynamic auto · decoder GQA");
-        Ok(Self { layout, unirec })
+        Ok(Self {
+            layout,
+            unirec,
+            pack_metadata,
+        })
+    }
+
+    pub(super) fn pack_metadata(&self) -> &PackMetadata {
+        &self.pack_metadata
     }
 
     fn recognize_region(&mut self, mut crop: RgbImg, kind: RecKind) -> Result<RecognizeOut> {

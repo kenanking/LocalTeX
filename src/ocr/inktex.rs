@@ -267,6 +267,7 @@ pub struct InkTex {
     encoder: Session,
     decoder: Session,
     vocab: Vocab,
+    pack_metadata: super::PackMetadata,
     num_layers: usize,
     num_heads: usize,
     head_dim: usize,
@@ -292,6 +293,10 @@ impl InkTex {
             spinning,
             true,
         )?;
+        let pack_metadata = super::inspect_onnx_pack(&[
+            (&encoder, "inktex_encoder"),
+            (&decoder, "inktex_decoder_step"),
+        ]);
         let vocab = Vocab::load(&models_dir.join(VOCAB_JSON))?;
 
         let mut num_layers = 0usize;
@@ -314,10 +319,15 @@ impl InkTex {
             encoder,
             decoder,
             vocab,
+            pack_metadata,
             num_layers,
             num_heads,
             head_dim,
         })
+    }
+
+    pub(super) fn pack_metadata(&self) -> &super::PackMetadata {
+        &self.pack_metadata
     }
 
     pub fn recognize(&mut self, traces: &[Vec<[f32; 3]>]) -> Result<RecognizeOut> {

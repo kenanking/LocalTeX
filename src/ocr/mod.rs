@@ -30,6 +30,32 @@ pub enum ModelManifestState {
     Invalid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRuntimeState {
+    Declared,
+    Verified,
+    Unstamped,
+    Mismatch,
+}
+
+impl ModelRuntimeState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Declared => "Declared",
+            Self::Verified => "Verified",
+            Self::Unstamped => "Unstamped",
+            Self::Mismatch => "Mismatch",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PackMetadata {
+    state: ModelRuntimeState,
+    pack_id: Option<String>,
+    detail: Option<String>,
+}
+
 impl ModelManifestState {
     pub fn label(self) -> &'static str {
         match self {
@@ -48,6 +74,12 @@ pub struct ModelInfo {
     manifest: ModelManifestState,
     opendoc_available: bool,
     handwriting_available: bool,
+    opendoc_runtime: ModelRuntimeState,
+    handwriting_runtime: ModelRuntimeState,
+    opendoc_observed_pack: Option<String>,
+    handwriting_observed_pack: Option<String>,
+    opendoc_runtime_detail: Option<String>,
+    handwriting_runtime_detail: Option<String>,
 }
 
 impl ModelInfo {
@@ -81,6 +113,16 @@ impl ModelInfo {
                 }
                 Err(_) => (ModelManifestState::Invalid, None, None),
             };
+        let opendoc_runtime = if opendoc_available && opendoc_pack.is_none() {
+            ModelRuntimeState::Mismatch
+        } else {
+            ModelRuntimeState::Declared
+        };
+        let handwriting_runtime = if handwriting_available && handwriting_pack.is_none() {
+            ModelRuntimeState::Mismatch
+        } else {
+            ModelRuntimeState::Declared
+        };
         Self {
             dir,
             opendoc_pack,
@@ -88,6 +130,12 @@ impl ModelInfo {
             manifest,
             opendoc_available,
             handwriting_available,
+            opendoc_runtime,
+            handwriting_runtime,
+            opendoc_observed_pack: None,
+            handwriting_observed_pack: None,
+            opendoc_runtime_detail: None,
+            handwriting_runtime_detail: None,
         }
     }
 
@@ -113,6 +161,55 @@ impl ModelInfo {
 
     pub fn handwriting_available(&self) -> bool {
         self.handwriting_available
+    }
+
+    pub fn opendoc_runtime(&self) -> ModelRuntimeState {
+        self.opendoc_runtime
+    }
+
+    pub fn handwriting_runtime(&self) -> ModelRuntimeState {
+        self.handwriting_runtime
+    }
+
+    pub fn opendoc_observed_pack(&self) -> Option<&str> {
+        self.opendoc_observed_pack.as_deref()
+    }
+
+    pub fn handwriting_observed_pack(&self) -> Option<&str> {
+        self.handwriting_observed_pack.as_deref()
+    }
+
+    pub fn opendoc_runtime_detail(&self) -> Option<&str> {
+        self.opendoc_runtime_detail.as_deref()
+    }
+
+    pub fn handwriting_runtime_detail(&self) -> Option<&str> {
+        self.handwriting_runtime_detail.as_deref()
+    }
+
+    fn set_opendoc_metadata(&mut self, metadata: PackMetadata) {
+        let state = reconcile_pack(self.opendoc_pack.as_deref(), &metadata);
+        self.opendoc_runtime = state;
+        self.opendoc_observed_pack = metadata.pack_id;
+        self.opendoc_runtime_detail = metadata.detail;
+    }
+
+    fn set_handwriting_metadata(&mut self, metadata: PackMetadata) {
+        let state = reconcile_pack(self.handwriting_pack.as_deref(), &metadata);
+        self.handwriting_runtime = state;
+        self.handwriting_observed_pack = metadata.pack_id;
+        self.handwriting_runtime_detail = metadata.detail;
+    }
+}
+
+fn reconcile_pack(declared: Option<&str>, metadata: &PackMetadata) -> ModelRuntimeState {
+    if metadata.state != ModelRuntimeState::Verified {
+        return metadata.state;
+    }
+    if declared == metadata.pack_id.as_deref() {
+        ModelRuntimeState::Verified
+    } else {
+        ModelRuntimeState::Mismatch
     }
 }
 
@@ -141,7 +238,7 @@ struct Sessions {
 /// OpenDoc and inktex sessions load on first use.
 pub struct Engine {
     dir: PathBuf,
-    model_info: ModelInfo,
+    model_info: Mutex<ModelInfo>,
     inner: Mutex<Sessions>,
     opendoc_ok: bool,
     ink_ok: bool,
@@ -178,7 +275,7 @@ impl Engine {
         }
         Arc::new(Self {
             dir,
-            model_info,
+            model_info: Mutex::new(model_info),
             inner: Mutex::new(Sessions {
                 page: None,
                 ink: None,
@@ -199,8 +296,8 @@ impl Engine {
         }
     }
 
-    pub fn model_info(&self) -> &ModelInfo {
-        &self.model_info
+    pub fn model_info(&self) -> ModelInfo {
+        self.model_info.lock().expect("model info mutex").clone()
     }
 
     pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
@@ -213,7 +310,12 @@ impl Engine {
         self.usage_generation.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.lock().expect("ocr mutex");
         if guard.page.is_none() {
-            guard.page = Some(load_pipeline(&self.dir)?);
+            let pipeline = load_pipeline(&self.dir)?;
+            self.model_info
+                .lock()
+                .expect("model info mutex")
+                .set_opendoc_metadata(pipeline.pack_metadata().clone());
+            guard.page = Some(pipeline);
         }
         let pipeline = guard.page.as_mut().expect("ocr just loaded");
         let mut rgb = rgba_to_rgb(image)?;
@@ -238,7 +340,12 @@ impl Engine {
         self.usage_generation.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.inner.lock().expect("ocr mutex");
         if guard.ink.is_none() {
-            guard.ink = Some(load_ink(&self.dir)?);
+            let ink = load_ink(&self.dir)?;
+            self.model_info
+                .lock()
+                .expect("model info mutex")
+                .set_handwriting_metadata(ink.pack_metadata().clone());
+            guard.ink = Some(ink);
         }
         let ink = guard.ink.as_mut().expect("inktex just loaded");
         let mut traces = traces.to_vec();
@@ -329,6 +436,62 @@ pub(crate) fn build_session(
         .map_err(e)?
         .commit_from_file(path)
         .with_context(|| format!("commit session {}", path.display()))
+}
+
+pub(crate) fn inspect_onnx_pack(sessions: &[(&Session, &str)]) -> PackMetadata {
+    let mut pack_id: Option<String> = None;
+    let mut unstamped = 0usize;
+    for (session, expected_component) in sessions {
+        let Ok(metadata) = session.metadata() else {
+            return metadata_mismatch("ONNX metadata is unreadable");
+        };
+        let schema = metadata.custom("localtex.metadata_schema");
+        let current_pack = metadata.custom("localtex.pack_id");
+        let component = metadata.custom("localtex.component");
+        if schema.is_none() && current_pack.is_none() && component.is_none() {
+            unstamped += 1;
+            continue;
+        }
+        if schema.as_deref() != Some("1") {
+            return metadata_mismatch("metadata schema is missing or unsupported");
+        }
+        if component.as_deref() != Some(*expected_component) {
+            return metadata_mismatch("ONNX component metadata does not match its file");
+        }
+        let Some(current_pack) = current_pack else {
+            return metadata_mismatch("ONNX pack metadata is incomplete");
+        };
+        if pack_id
+            .as_deref()
+            .is_some_and(|value| value != current_pack)
+        {
+            return metadata_mismatch("ONNX files declare different pack IDs");
+        }
+        pack_id = Some(current_pack);
+    }
+    if unstamped == sessions.len() {
+        return PackMetadata {
+            state: ModelRuntimeState::Unstamped,
+            pack_id: None,
+            detail: Some("ONNX files have no LocalTeX metadata".into()),
+        };
+    }
+    if unstamped != 0 {
+        return metadata_mismatch("only part of the ONNX pack is stamped");
+    }
+    PackMetadata {
+        state: ModelRuntimeState::Verified,
+        pack_id,
+        detail: None,
+    }
+}
+
+fn metadata_mismatch(detail: &str) -> PackMetadata {
+    PackMetadata {
+        state: ModelRuntimeState::Mismatch,
+        pack_id: None,
+        detail: Some(detail.into()),
+    }
 }
 
 fn opendoc_dir(models: &Path) -> PathBuf {
@@ -521,7 +684,7 @@ mod tests {
     fn missing_weights_are_an_error() {
         let dir = PathBuf::from("/no/such/localtex-models");
         let engine = Engine {
-            model_info: ModelInfo::read(dir.clone()),
+            model_info: Mutex::new(ModelInfo::read(dir.clone())),
             dir,
             inner: Mutex::new(Sessions {
                 page: None,
@@ -557,6 +720,36 @@ mod tests {
         assert_eq!(info.handwriting_pack(), Some("ink-v1"));
         assert!(!info.opendoc_available());
         assert!(!info.handwriting_available());
+        assert_eq!(info.opendoc_runtime(), ModelRuntimeState::Declared);
+        assert_eq!(info.handwriting_runtime(), ModelRuntimeState::Declared);
+    }
+
+    #[test]
+    fn runtime_pack_must_match_manifest() {
+        let verified = PackMetadata {
+            state: ModelRuntimeState::Verified,
+            pack_id: Some("open-v2".into()),
+            detail: None,
+        };
+        assert_eq!(
+            reconcile_pack(Some("open-v2"), &verified),
+            ModelRuntimeState::Verified
+        );
+        assert_eq!(
+            reconcile_pack(Some("open-v1"), &verified),
+            ModelRuntimeState::Mismatch
+        );
+        assert_eq!(reconcile_pack(None, &verified), ModelRuntimeState::Mismatch);
+
+        let unstamped = PackMetadata {
+            state: ModelRuntimeState::Unstamped,
+            pack_id: None,
+            detail: Some("legacy".into()),
+        };
+        assert_eq!(
+            reconcile_pack(Some("open-v1"), &unstamped),
+            ModelRuntimeState::Unstamped
+        );
     }
 
     #[test]
@@ -591,6 +784,10 @@ mod tests {
         let engine = Engine::load();
         let img = RgbaImage::from_pixel(64, 32, image::Rgba([255, 255, 255, 255]));
         let _ = engine.recognize(&img).expect("OpenDoc recognize");
+        assert_eq!(
+            engine.model_info().opendoc_runtime(),
+            ModelRuntimeState::Verified
+        );
     }
 
     #[test]
@@ -611,6 +808,10 @@ mod tests {
             .expect("inktex recognize");
         assert_eq!(out.blocks[0].kind, BlockKind::Formula);
         assert!(out.blocks[0].display);
+        assert_eq!(
+            engine.model_info().handwriting_runtime(),
+            ModelRuntimeState::Verified
+        );
     }
 
     /// End-to-end check against converted dataset samples (sidecar-format

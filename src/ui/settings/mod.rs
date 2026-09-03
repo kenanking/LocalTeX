@@ -148,7 +148,7 @@ impl SettingsPane {
         }
 
         let prefs = state.read(cx).prefs.clone();
-        let model_info = state.read(cx).model_info().clone();
+        let model_info = state.read(cx).model_info();
         let tab = self.tab;
         let listen = self.listen;
         let entity = cx.entity();

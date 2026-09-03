@@ -2,7 +2,7 @@ use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Entity, PromptLevel, 
 
 use super::super::theme;
 use super::super::widgets::{btn, setting_row, settings_group, Tooltip};
-use crate::ocr::{ModelInfo, ModelManifestState};
+use crate::ocr::{ModelInfo, ModelManifestState, ModelRuntimeState};
 use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
@@ -111,8 +111,6 @@ pub(super) fn system_page(
 }
 
 fn model_rows(models: &ModelInfo) -> Vec<AnyElement> {
-    let opendoc = models.opendoc_pack().unwrap_or("Version unavailable");
-    let handwriting = models.handwriting_pack().unwrap_or("Version unavailable");
     let manifest_color = match models.manifest() {
         ModelManifestState::Loaded => theme::OK,
         ModelManifestState::Missing => theme::WARN,
@@ -121,14 +119,22 @@ fn model_rows(models: &ModelInfo) -> Vec<AnyElement> {
     vec![
         setting_row(
             "OpenDoc",
-            opendoc.to_string(),
-            model_status(models.opendoc_available()),
+            model_description(
+                models.opendoc_pack(),
+                models.opendoc_observed_pack(),
+                models.opendoc_runtime_detail(),
+            ),
+            model_status(models.opendoc_available(), models.opendoc_runtime()),
         )
         .into_any_element(),
         setting_row(
             "Handwriting",
-            handwriting.to_string(),
-            model_status(models.handwriting_available()),
+            model_description(
+                models.handwriting_pack(),
+                models.handwriting_observed_pack(),
+                models.handwriting_runtime_detail(),
+            ),
+            model_status(models.handwriting_available(), models.handwriting_runtime()),
         )
         .into_any_element(),
         setting_row(
@@ -140,12 +146,34 @@ fn model_rows(models: &ModelInfo) -> Vec<AnyElement> {
     ]
 }
 
-fn model_status(available: bool) -> AnyElement {
-    if available {
-        status_text("Ready", theme::OK)
-    } else {
-        status_text("Missing", theme::DANGER)
+fn model_description(
+    declared: Option<&str>,
+    observed: Option<&str>,
+    detail: Option<&str>,
+) -> String {
+    match (declared, observed, detail) {
+        (Some(declared), Some(observed), _) if declared != observed => {
+            format!("Declared: {declared} · ONNX: {observed}")
+        }
+        (Some(declared), _, Some(detail)) => format!("{declared} · {detail}"),
+        (Some(declared), _, _) => declared.to_string(),
+        (None, Some(observed), _) => format!("ONNX: {observed}"),
+        (None, _, Some(detail)) => detail.to_string(),
+        (None, None, None) => "Version unavailable".into(),
     }
+}
+
+fn model_status(available: bool, runtime: ModelRuntimeState) -> AnyElement {
+    if !available {
+        return status_text("Missing", theme::DANGER);
+    }
+    let color = match runtime {
+        ModelRuntimeState::Declared => theme::WARN,
+        ModelRuntimeState::Verified => theme::OK,
+        ModelRuntimeState::Unstamped => theme::WARN,
+        ModelRuntimeState::Mismatch => theme::DANGER,
+    };
+    status_text(runtime.label(), color)
 }
 
 fn status_text(label: &'static str, color: u32) -> AnyElement {

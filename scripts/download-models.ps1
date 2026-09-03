@@ -9,12 +9,12 @@ $ErrorActionPreference = "Stop"
 
 $Repo = if ($env:LOCALTEX_MODELS_REPO) { $env:LOCALTEX_MODELS_REPO } else { "kenanking/LocalTeX" }
 $Tag = if ($env:LOCALTEX_MODELS_TAG) { $env:LOCALTEX_MODELS_TAG } else { "v0.0.0" }
-$OpenDocDir = "opendoc_dynamic_int8_20260902_45af38b"
-$HandwritingDir = "handwriting_e10_20260831_cf27b99"
+$OpenDocDir = "opendoc_dynamic_int8_20260903_d8c4e76"
+$HandwritingDir = "handwriting_e10_20260903_cf27b99"
 $OpenDocTar = "$OpenDocDir.tar.gz"
 $HandwritingTar = "$HandwritingDir.tar.gz"
 $Sums = "SHA256SUMS"
-$OpenDocLayoutSha256 = "8a74d1dbd6bf8fba6d4ed4284efed627b6dd8b331ff5d321f53b4b888729db4d"
+$OpenDocLayoutSha256 = "21eb60d0ac5b1f410724d5b0506be767ed22a053d0cf795f4b77548e1a325230"
 
 function Get-DefaultModelsDir {
     if ($env:LOCALAPPDATA) {

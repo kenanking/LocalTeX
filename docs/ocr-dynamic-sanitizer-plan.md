@@ -83,8 +83,10 @@ Any future normalization rule should be accepted only when it is:
 ## Evaluation protocol and result
 
 The current model is
-`opendoc_dynamic_int8_20260902_45af38b/layout.onnx`, SHA-256
-`8a74d1dbd6bf8fba6d4ed4284efed627b6dd8b331ff5d321f53b4b888729db4d`.
+`opendoc_dynamic_int8_20260903_d8c4e76/layout.onnx`, SHA-256
+`21eb60d0ac5b1f410724d5b0506be767ed22a053d0cf795f4b77548e1a325230`.
+This revision adds metadata only; its inference graph is identical to the
+evaluated 20260902 artifact.
 Its position-embedding trigonometric subgraph is explicitly FP32 so the graph
 loads in both Python ORT and the Rust ORT build used by LocalTeX.
 
