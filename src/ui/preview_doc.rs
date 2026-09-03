@@ -26,6 +26,13 @@ struct TextRunSpec {
     paragraph: bool,
 }
 
+#[derive(Clone, Copy)]
+struct PreviewRenderContext {
+    view: EntityId,
+    pane_w: f32,
+    font: ContentFontSize,
+}
+
 impl MainWindow {
     pub(crate) fn preview_element(
         &mut self,
@@ -172,9 +179,13 @@ impl MainWindow {
                 .text_color(rgb(theme::INK))
                 .child(self.render_segs(format!("p-{i}"), segs, false, font, cx))
                 .into_any(),
-            PreviewBlock::Display { math, eqno } => {
-                self.render_display_math(i, math, eqno.as_ref(), view, pane_w, font, cx)
-            }
+            PreviewBlock::Display { math, eqno } => self.render_display_math(
+                i,
+                math,
+                eqno.as_ref(),
+                PreviewRenderContext { view, pane_w, font },
+                cx,
+            ),
             PreviewBlock::Table(layout) => {
                 let handle = self.preview.hscroll_handle(&format!("tbl-{i}"));
                 let table_el = self.render_table_preview(i, layout, font, cx);
@@ -214,11 +225,10 @@ impl MainWindow {
         i: usize,
         math: &SvgMath,
         eqno: Option<&Eqno>,
-        view: EntityId,
-        pane_w: f32,
-        font: ContentFontSize,
+        render: PreviewRenderContext,
         cx: &mut App,
     ) -> AnyElement {
+        let PreviewRenderContext { view, pane_w, font } = render;
         let handle = self.preview.hscroll_handle(&format!("d-{i}"));
         let tag_w = eqno.map(Eqno::width).unwrap_or(0.0);
         let trailing = eqno.is_some() && eqno_should_trail(math.width, tag_w, pane_w);

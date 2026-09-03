@@ -499,7 +499,7 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     if state.is_capturing() {
         return (theme::StatusKind::Busy, "Capturing…".into());
     }
-    if let Some(err) = state.capture_error() {
+    if let Some(err) = state.error_message() {
         return (theme::StatusKind::Error, err.to_string());
     }
     if let Some(doc) = state.selected_doc() {

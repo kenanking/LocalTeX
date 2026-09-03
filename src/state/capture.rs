@@ -29,19 +29,17 @@ impl AppState {
         self.capture.is_grabbing()
     }
 
-    pub fn capture_error(&self) -> Option<&str> {
-        self.capture.error()
+    pub fn error_message(&self) -> Option<&str> {
+        self.toast.message()
     }
 
     pub(super) fn flash_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
-        self.capture.set(Capture::Failed(msg.into()));
-        let gen = self.capture.gen();
+        let gen = self.toast.show(msg.into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;
             let _ = this.update(cx, |this, cx| {
-                if this.capture.should_clear_flash(gen) {
-                    this.capture.set(Capture::Idle);
+                if this.toast.clear(gen) {
                     cx.notify();
                 }
             });
@@ -77,6 +75,7 @@ impl AppState {
                     .await
                 {
                     let _ = this.update(cx, |this, cx| {
+                        this.capture.set(Capture::Idle);
                         this.flash_error(err.to_string(), cx);
                         this.restore_after_hide(cx);
                     });
@@ -102,6 +101,7 @@ impl AppState {
                     cx.notify();
                 }
                 Err(err) => {
+                    this.capture.set(Capture::Idle);
                     this.flash_error(err.to_string(), cx);
                     this.restore_after_hide(cx);
                 }
@@ -148,18 +148,18 @@ impl AppState {
         if self.is_bootstrapping() {
             return;
         }
-        if self.is_capturing() || self.ingest.clipboard_loading {
+        if self.is_capturing() || self.capture.clipboard_loading() {
             return;
         }
         #[cfg(target_os = "windows")]
         {
-            self.ingest.clipboard_loading = true;
+            self.capture.set_clipboard_loading(true);
             cx.spawn(async move |this, cx| {
                 let candidates = cx
                     .background_spawn(async { crate::desktop::read_clipboard_image() })
                     .await;
                 let _ = this.update(cx, |this, cx| {
-                    this.ingest.clipboard_loading = false;
+                    this.capture.set_clipboard_loading(false);
                     if candidates.is_empty() {
                         this.request_paste_fallback(cx);
                     } else {

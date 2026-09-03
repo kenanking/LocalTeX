@@ -98,34 +98,39 @@ fn sigmoid(value: f32) -> f32 {
     1.0 / (1.0 + (-value.clamp(-80.0, 80.0)).exp())
 }
 
+struct TensorView<'a> {
+    shape: &'a [i64],
+    data: &'a [f32],
+}
+
 fn raw_dynamic_boxes(
-    logits_shape: &[i64],
-    logits: &[f32],
-    boxes_shape: &[i64],
-    boxes: &[f32],
-    order_shape: &[i64],
-    order_logits: &[f32],
-    orig_h: f32,
-    orig_w: f32,
+    logits: TensorView<'_>,
+    boxes: TensorView<'_>,
+    order: TensorView<'_>,
+    original_size: (f32, f32),
 ) -> Result<Vec<DetBox>> {
+    let (orig_h, orig_w) = original_size;
+    let logits_shape = logits.shape;
     if logits_shape.len() != 3 || logits_shape[0] != 1 {
         return Err(anyhow!("unexpected dynamic logits shape {logits_shape:?}"));
     }
     let queries = logits_shape[1] as usize;
     let classes = logits_shape[2] as usize;
-    if boxes_shape != [1, queries as i64, 4] || order_shape != [1, queries as i64, queries as i64] {
+    if boxes.shape != [1, queries as i64, 4] || order.shape != [1, queries as i64, queries as i64] {
         return Err(anyhow!(
-            "inconsistent dynamic layout shapes logits={logits_shape:?} boxes={boxes_shape:?} order={order_shape:?}"
+            "inconsistent dynamic layout shapes logits={logits_shape:?} boxes={:?} order={:?}",
+            boxes.shape,
+            order.shape
         ));
     }
 
     let mut votes = vec![0.0f32; queries];
-    for column in 0..queries {
+    for (column, vote) in votes.iter_mut().enumerate() {
         for row in 0..column {
-            votes[column] += sigmoid(order_logits[row * queries + column]);
+            *vote += sigmoid(order.data[row * queries + column]);
         }
         for row in (column + 1)..queries {
-            votes[column] += 1.0 - sigmoid(order_logits[column * queries + row]);
+            *vote += 1.0 - sigmoid(order.data[column * queries + row]);
         }
     }
     let mut pointers: Vec<usize> = (0..queries).collect();
@@ -136,6 +141,7 @@ fn raw_dynamic_boxes(
     }
 
     let mut ranked: Vec<(f32, usize)> = logits
+        .data
         .iter()
         .enumerate()
         .map(|(index, &value)| (sigmoid(value), index))
@@ -150,10 +156,10 @@ fn raw_dynamic_boxes(
             let class_id = flat_index % classes;
             let offset = query * 4;
             let (cx, cy, width, height) = (
-                boxes[offset],
-                boxes[offset + 1],
-                boxes[offset + 2],
-                boxes[offset + 3],
+                boxes.data[offset],
+                boxes.data[offset + 1],
+                boxes.data[offset + 2],
+                boxes.data[offset + 3],
             );
             DetBox {
                 label: LABEL_MAP
@@ -279,14 +285,19 @@ pub fn detect(session: &mut Session, image: &RgbImg, threshold: f32) -> Result<L
         let (boxes_shape, raw_boxes) = outputs["pred_boxes"].try_extract_tensor::<f32>()?;
         let (order_shape, order_logits) = outputs["order_logits"].try_extract_tensor::<f32>()?;
         raw_dynamic_boxes(
-            logits_shape,
-            logits,
-            boxes_shape,
-            raw_boxes,
-            order_shape,
-            order_logits,
-            orig_h,
-            orig_w,
+            TensorView {
+                shape: logits_shape,
+                data: logits,
+            },
+            TensorView {
+                shape: boxes_shape,
+                data: raw_boxes,
+            },
+            TensorView {
+                shape: order_shape,
+                data: order_logits,
+            },
+            (orig_h, orig_w),
         )?
     } else {
         let (shape, data) = outputs[out_name.as_str()].try_extract_tensor::<f32>()?;

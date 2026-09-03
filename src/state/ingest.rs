@@ -128,7 +128,7 @@ impl AppState {
     }
 
     fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
-        if self.ingest.file_loading {
+        if self.file_intake.loading {
             return;
         }
         let Some((gen, key, path)) = self.intake.as_ref().and_then(|batch| {
@@ -138,13 +138,13 @@ impl AppState {
         }) else {
             return;
         };
-        self.ingest.file_loading = true;
+        self.file_intake.loading = true;
         cx.spawn(async move |this, cx| {
             let decoded = cx
                 .background_spawn(async move { image::open(&path).map(|d| d.to_rgba8()) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.file_loading = false;
+                this.file_intake.loading = false;
                 let current = this.intake.as_ref().is_some_and(|batch| {
                     batch.gen == gen && batch.items.iter().any(|item| item.key == key)
                 });
@@ -176,12 +176,12 @@ impl AppState {
     }
 
     fn enqueue_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        self.ingest.ocr.enqueue(id);
+        self.ocr.enqueue(id);
         self.pump_ocr(cx);
     }
 
     fn pump_ocr(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.ingest.ocr.take_next() else {
+        let Some(id) = self.ocr.take_next() else {
             self.pump_file_ingest(cx);
             return;
         };
@@ -197,7 +197,7 @@ impl AppState {
         match missing_pixels_action(slot.as_ref()) {
             MissingPixels::Run => {}
             MissingPixels::LoadPng => {
-                self.ingest.ocr.finish(id);
+                self.ocr.finish(id);
                 self.load_png_then_retry(id, cx);
                 return;
             }
@@ -206,7 +206,7 @@ impl AppState {
                     doc.status = DocStatus::Failed(msg.into());
                     doc.bump_revision();
                 }
-                self.ingest.ocr.finish(id);
+                self.ocr.finish(id);
                 self.finish_intake_id(id, false, cx);
                 self.pump_ocr(cx);
                 cx.notify();
@@ -218,7 +218,7 @@ impl AppState {
                 doc.status = DocStatus::Failed("Original image is missing".into());
                 doc.bump_revision();
             }
-            self.ingest.ocr.finish(id);
+            self.ocr.finish(id);
             self.finish_intake_id(id, false, cx);
             self.pump_ocr(cx);
             cx.notify();
@@ -257,7 +257,7 @@ impl AppState {
                         }
                     }
                 }
-                this.ingest.ocr.finish(id);
+                this.ocr.finish(id);
                 this.schedule_engine_release(cx);
                 let ready = this
                     .library
@@ -400,12 +400,12 @@ impl AppState {
         let Some(id) = self.library.selected() else {
             return;
         };
-        self.ingest.ocr.remove(id);
+        self.ocr.remove(id);
         self.finish_intake_id(id, false, cx);
         self.library.remove(id);
-        self.ingest.drop_doc(id);
+        self.documents.drop_doc(id);
         if self.library.is_empty() {
-            self.ingest.ocr.cancel_remaining();
+            self.ocr.cancel_remaining();
         }
         if let Some(writer) = self.store_writer() {
             if let Err(err) = writer.delete(id) {
@@ -421,12 +421,12 @@ impl AppState {
     }
 
     pub fn wipe_library(&mut self, cx: &mut Context<Self>) {
-        self.ingest.ocr.cancel_remaining();
-        if let Some(id) = self.ingest.ocr.running() {
-            self.ingest.ocr.remove(id);
+        self.ocr.cancel_remaining();
+        if let Some(id) = self.ocr.running() {
+            self.ocr.remove(id);
         }
         self.intake = None;
-        self.ingest.clear_docs();
+        self.documents.clear_docs();
         self.search.bump();
         self.library.clear();
         if let Some(writer) = self.store_writer() {
@@ -439,7 +439,7 @@ impl AppState {
     }
 
     pub fn request_thumb(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.ingest.thumb_blocked(id) {
+        if self.documents.thumb_blocked(id) {
             return;
         }
         let Some(doc) = self.library.get(id) else {
@@ -451,13 +451,13 @@ impl AppState {
         let Some(store) = self.store() else {
             return;
         };
-        self.ingest.start_thumb(id);
+        self.documents.start_thumb(id);
         cx.spawn(async move |this, cx| {
             let jpeg = cx
                 .background_spawn(async move { store.load_thumb(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.finish_thumb(id);
+                this.documents.finish_thumb(id);
                 match jpeg {
                     Ok(bytes) => {
                         if let Some(doc) = this.library.get_mut(id) {
@@ -465,7 +465,7 @@ impl AppState {
                         }
                     }
                     Err(err) => {
-                        this.ingest.fail_thumb(id);
+                        this.documents.fail_thumb(id);
                         eprintln!("{APP_SLUG}: load thumb: {err}");
                     }
                 }
@@ -478,11 +478,11 @@ impl AppState {
     }
 
     pub fn thumbnail_failed(&self, id: Uuid) -> bool {
-        self.ingest.thumb_failed(id)
+        self.documents.thumb_failed(id)
     }
 
     pub fn mark_thumbnail_failed(&mut self, id: Uuid) {
-        self.ingest.fail_thumb(id);
+        self.documents.fail_thumb(id);
         if let Some(doc) = self.library.get_mut(id) {
             doc.thumb_jpeg.clear();
         }
@@ -632,11 +632,11 @@ impl AppState {
     }
 
     fn load_blocks(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if !self.ingest.start_blocks(id) {
+        if !self.documents.start_blocks(id) {
             return;
         }
         let Some(store) = self.store() else {
-            self.ingest.finish_blocks(id);
+            self.documents.finish_blocks(id);
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -644,7 +644,7 @@ impl AppState {
                 .background_spawn(async move { store.load_block_pair(id) })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.finish_blocks(id);
+                this.documents.finish_blocks(id);
                 match result {
                     Ok((blocks, ocr_blocks)) => {
                         if let Some(doc) = this.library.get_mut(id) {
@@ -672,17 +672,17 @@ impl AppState {
     }
 
     fn load_png(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if !self.ingest.start_png(id) {
+        if !self.documents.start_png(id) {
             return;
         }
         let Some(store) = self.store() else {
-            self.ingest.finish_png(id);
+            self.documents.finish_png(id);
             return;
         };
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { store.load_png(id) }).await;
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest.finish_png(id);
+                this.documents.finish_png(id);
                 if this.library.selected() != Some(id) {
                     return;
                 }
@@ -746,7 +746,7 @@ impl AppState {
                     }
                 }
                 self.library.touch_lru(id);
-                self.ingest.clear_persist_retry(id);
+                self.documents.clear_persist_retry(id);
                 if changed_during_insert {
                     self.persist_edits(id, cx);
                 }
@@ -784,7 +784,7 @@ impl AppState {
                 WriteKind::UpdateOcr { id } | WriteKind::UpdateBlocks { id },
                 Ok(WriteResult::Done),
             ) => {
-                self.ingest.clear_persist_retry(id);
+                self.documents.clear_persist_retry(id);
             }
             (_, Ok(WriteResult::Done)) => {}
             (kind, Ok(result)) => {
@@ -795,13 +795,13 @@ impl AppState {
     }
 
     fn schedule_persist_retry(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let Some(delay) = self.ingest.begin_persist_retry(id) else {
+        let Some(delay) = self.documents.begin_persist_retry(id) else {
             return;
         };
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |this, cx| {
-                let still_pending = this.ingest.finish_persist_retry(id);
+                let still_pending = this.documents.finish_persist_retry(id);
                 if still_pending && this.library.get(id).is_some() {
                     this.persist_ready(id, cx);
                 }

@@ -11,6 +11,7 @@ use crate::identity::APP_SLUG;
 use crate::keymap::{self, AssignError, ShortcutId};
 use crate::library::Library;
 use crate::ocr::Engine;
+use crate::ocr_queue::OcrQueue;
 use crate::prefs::{Prefs, PrefsWriter, WindowCloseAction};
 use crate::store::{Store, StoreWriter};
 use crate::ui::MainWindow;
@@ -19,12 +20,16 @@ mod capture;
 mod ingest;
 mod intake;
 mod orig_export;
+mod runtime;
 mod search;
 mod session;
+mod toast;
 
 pub use intake::{classify_image_paths, IntakeBatch, IntakeCounts, IntakeWork};
 
-use session::{CaptureSession, IngestPump, SearchFilter};
+use runtime::{DocumentRuntime, FileIntakeSession};
+use session::{CaptureSession, SearchFilter};
+use toast::ToastState;
 
 pub use crate::library::DatePreset;
 
@@ -85,8 +90,11 @@ pub struct AppState {
     hidden_media_release_task: Option<gpui::Task<()>>,
     persistence: PersistenceState,
     search: SearchFilter,
-    ingest: IngestPump,
+    ocr: OcrQueue,
+    file_intake: FileIntakeSession,
+    documents: DocumentRuntime,
     capture: CaptureSession,
+    toast: ToastState,
     orig_copy_flash: Option<Uuid>,
     orig_copy_flash_gen: u64,
     intake: Option<IntakeBatch>,
@@ -111,8 +119,11 @@ impl AppState {
             hidden_media_release_task: None,
             persistence: PersistenceState::Loading,
             search: SearchFilter::new(),
-            ingest: IngestPump::new(),
+            ocr: OcrQueue::new(),
+            file_intake: FileIntakeSession::new(),
+            documents: DocumentRuntime::new(),
             capture: CaptureSession::new(),
+            toast: ToastState::new(),
             orig_copy_flash: None,
             orig_copy_flash_gen: 0,
             intake: None,
