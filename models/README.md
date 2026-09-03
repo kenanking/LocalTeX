@@ -64,8 +64,9 @@ Strategy: weights-only quantization (MatMulConstBOnly). Input is online ink `(x,
 ## Runtime identity
 
 Each ONNX file carries `localtex.*` metadata written after graph optimization
-and quantization. Before a session is opened, Settings shows the pack version
-from `manifest.json` as **Declared**. After lazy loading, LocalTeX checks schema,
-component names, a common pack ID, and agreement with the manifest, then shows
-**Verified**, **Unstamped**, or **Mismatch**. The manifest and `SHA256SUMS` remain
-the source of whole-pack integrity, including tokenizer and vocabulary files.
+and quantization. At startup LocalTeX reads those string properties from disk
+without opening an ORT session, then checks schema, component names, a common
+pack ID, and agreement with the manifest. Settings shows **Checking…** until
+that walk finishes, then **Verified**, **Unstamped**, or **Mismatch**. Sessions
+still load on first use. The manifest and `SHA256SUMS` remain the source of
+whole-pack integrity, including tokenizer and vocabulary files.

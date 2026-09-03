@@ -1,8 +1,8 @@
 use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Entity, PromptLevel, SharedString};
 
 use super::super::theme;
-use super::super::widgets::{btn, setting_row, settings_group, Tooltip};
-use crate::ocr::{ModelInfo, ModelManifestState, ModelRuntimeState};
+use super::super::widgets::{settings_group, Tooltip};
+use crate::ocr::{ModelInfo, ModelRuntimeState};
 use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
@@ -78,102 +78,206 @@ pub(super) fn system_page(
             "This machine",
             vec![panel.into_any_element()],
         ))
-        .child(settings_group("OCR models", model_rows(models)))
-        .child(settings_group(
-            "Library",
-            vec![setting_row(
-                "Delete all snips",
-                "Removes every snip and the database. Settings stay. This cannot be undone.",
-                btn("wipe-library", "Delete all…", false, true, {
-                    let state = state.clone();
-                    move |window, cx| {
-                        let answer = window.prompt(
-                            PromptLevel::Warning,
-                            "Delete all snips?",
-                            Some(
-                                "Removes every snip and the local database. Settings and shortcuts stay. This cannot be undone.",
-                            ),
-                            &["Cancel", "Delete all"],
-                            cx,
-                        );
-                        let state = state.clone();
-                        cx.spawn(async move |cx| {
-                            if answer.await == Ok(1) {
-                                state.update(cx, |s, cx| s.wipe_library(cx));
-                            }
-                        })
-                        .detach();
-                    }
-                }),
-            )
-            .into_any_element()],
-        ))
+        .child(settings_group("OCR models", vec![model_pack_list(models)]))
+        .child({
+            let path = models.dir().display().to_string();
+            div()
+                .id("model-dir")
+                .px_1()
+                .text_xs()
+                .font_family("monospace")
+                .text_color(rgb(theme::MUTED))
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .tooltip(Tooltip::text(format!(
+                    "{} · {path}",
+                    models.manifest().label()
+                )))
+                .child(SharedString::from(path))
+                .into_any_element()
+        })
+        .child(settings_group("Library", vec![wipe_library_row(state)]))
 }
 
-fn model_rows(models: &ModelInfo) -> Vec<AnyElement> {
-    let manifest_color = match models.manifest() {
-        ModelManifestState::Loaded => theme::OK,
-        ModelManifestState::Missing => theme::WARN,
-        ModelManifestState::Invalid => theme::DANGER,
-    };
-    vec![
-        setting_row(
+fn model_pack_list(models: &ModelInfo) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .child(pack_line(
+            "pack-opendoc",
             "OpenDoc",
-            model_description(
-                models.opendoc_pack(),
-                models.opendoc_observed_pack(),
-                models.opendoc_runtime_detail(),
-            ),
-            model_status(models.opendoc_available(), models.opendoc_runtime()),
-        )
-        .into_any_element(),
-        setting_row(
+            models.opendoc_available(),
+            models.opendoc_pack(),
+            models.opendoc_observed_pack(),
+            models.opendoc_runtime(),
+            models.opendoc_runtime_detail(),
+        ))
+        .child(pack_line(
+            "pack-handwriting",
             "Handwriting",
-            model_description(
-                models.handwriting_pack(),
-                models.handwriting_observed_pack(),
-                models.handwriting_runtime_detail(),
-            ),
-            model_status(models.handwriting_available(), models.handwriting_runtime()),
-        )
-        .into_any_element(),
-        setting_row(
-            "Manifest",
-            models.dir().display().to_string(),
-            status_text(models.manifest().label(), manifest_color),
-        )
-        .into_any_element(),
-    ]
+            models.handwriting_available(),
+            models.handwriting_pack(),
+            models.handwriting_observed_pack(),
+            models.handwriting_runtime(),
+            models.handwriting_runtime_detail(),
+        ))
+        .into_any_element()
 }
 
-fn model_description(
+fn pack_line(
+    id: &'static str,
+    name: &'static str,
+    available: bool,
     declared: Option<&str>,
     observed: Option<&str>,
+    runtime: ModelRuntimeState,
     detail: Option<&str>,
-) -> String {
-    match (declared, observed, detail) {
-        (Some(declared), Some(observed), _) if declared != observed => {
-            format!("Declared: {declared} · ONNX: {observed}")
+) -> impl IntoElement {
+    let (label, color) = if !available {
+        ("Missing", theme::DANGER)
+    } else {
+        (
+            runtime.label(),
+            match runtime {
+                ModelRuntimeState::Verified => theme::OK,
+                ModelRuntimeState::Mismatch => theme::DANGER,
+                ModelRuntimeState::Declared
+                | ModelRuntimeState::Checking
+                | ModelRuntimeState::Unstamped => theme::WARN,
+            },
+        )
+    };
+    let identity = pack_identity(available, declared, observed);
+    let tip = pack_tooltip(&identity, detail);
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .tooltip(Tooltip::text(tip))
+        .child(div().size(px(7.)).rounded_full().bg(rgb(color)))
+        .child(
+            div()
+                .w(px(92.))
+                .flex_shrink_0()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(theme::TEXT))
+                .child(name),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_xs()
+                .font_family("monospace")
+                .text_color(rgb(theme::MUTED))
+                .child(SharedString::from(identity)),
+        )
+        .child(status_text(label, color))
+}
+
+fn pack_identity(available: bool, declared: Option<&str>, observed: Option<&str>) -> String {
+    if !available {
+        return "files missing".into();
+    }
+    match (declared, observed) {
+        (Some(declared), Some(observed)) if declared != observed => {
+            format!("{declared} ≠ {observed}")
         }
-        (Some(declared), _, Some(detail)) => format!("{declared} · {detail}"),
-        (Some(declared), _, _) => declared.to_string(),
-        (None, Some(observed), _) => format!("ONNX: {observed}"),
-        (None, _, Some(detail)) => detail.to_string(),
-        (None, None, None) => "Version unavailable".into(),
+        (Some(declared), _) => declared.to_string(),
+        (None, Some(observed)) => observed.to_string(),
+        (None, None) => "Version unavailable".into(),
     }
 }
 
-fn model_status(available: bool, runtime: ModelRuntimeState) -> AnyElement {
-    if !available {
-        return status_text("Missing", theme::DANGER);
+fn pack_tooltip(id: &str, detail: Option<&str>) -> String {
+    match detail {
+        Some(detail) if !detail.is_empty() => format!("{id} · {detail}"),
+        _ => id.to_string(),
     }
-    let color = match runtime {
-        ModelRuntimeState::Declared => theme::WARN,
-        ModelRuntimeState::Verified => theme::OK,
-        ModelRuntimeState::Unstamped => theme::WARN,
-        ModelRuntimeState::Mismatch => theme::DANGER,
-    };
-    status_text(runtime.label(), color)
+}
+
+fn wipe_library_row(state: Entity<AppState>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(theme::TEXT))
+                .child("Delete all snips"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .whitespace_normal()
+                .child(
+                    "Removes every snip and the database. Settings stay. This cannot be undone.",
+                ),
+        )
+        .child(wipe_btn(state))
+        .into_any_element()
+}
+
+fn wipe_btn(state: Entity<AppState>) -> impl IntoElement {
+    div()
+        .relative()
+        .h(px(28.))
+        .px_3()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(rgb(0xfecaca))
+        .bg(theme::danger_soft())
+        .text_color(rgb(theme::DANGER))
+        .child(
+            div()
+                .id("wipe-library")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .cursor_pointer()
+                .on_click(move |_, window, cx| {
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        "Delete all snips?",
+                        Some(
+                            "Removes every snip and the local database. Settings and shortcuts stay. This cannot be undone.",
+                        ),
+                        &["Cancel", "Delete all"],
+                        cx,
+                    );
+                    let state = state.clone();
+                    cx.spawn(async move |cx| {
+                        if answer.await == Ok(1) {
+                            state.update(cx, |s, cx| s.wipe_library(cx));
+                        }
+                    })
+                    .detach();
+                }),
+        )
+        .child(
+            div()
+                .text_sm()
+                .whitespace_nowrap()
+                .child("Delete all snips"),
+        )
 }
 
 fn status_text(label: &'static str, color: u32) -> AnyElement {

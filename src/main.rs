@@ -90,7 +90,8 @@ fn run(mut seat: instance::Seat) {
                 open_main_window(state.clone(), false, cx).expect("open main window");
             }
             state.update(cx, |state, cx| {
-                state.bootstrap_store(startup_mode == StartupMode::Interactive, cx)
+                state.start_model_inspect(cx);
+                state.bootstrap_store(startup_mode == StartupMode::Interactive, cx);
             });
 
             // Hotkey manager must be created on this GPUI UI thread (Windows

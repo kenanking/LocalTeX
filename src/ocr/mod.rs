@@ -12,6 +12,7 @@ use crate::identity::{models_dir, APP_SLUG};
 mod imgops;
 pub(crate) mod inktex;
 mod layout;
+mod onnx_meta;
 mod pipeline;
 mod text;
 mod unirec;
@@ -33,6 +34,7 @@ pub enum ModelManifestState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRuntimeState {
     Declared,
+    Checking,
     Verified,
     Unstamped,
     Mismatch,
@@ -42,10 +44,60 @@ impl ModelRuntimeState {
     pub fn label(self) -> &'static str {
         match self {
             Self::Declared => "Declared",
+            Self::Checking => "Checking…",
             Self::Verified => "Verified",
             Self::Unstamped => "Unstamped",
             Self::Mismatch => "Mismatch",
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FileStamp {
+    schema: Option<String>,
+    pack_id: Option<String>,
+    component: Option<String>,
+}
+
+fn inspect_stamps(stamps: &[(FileStamp, &str)]) -> PackMetadata {
+    let mut pack_id: Option<String> = None;
+    let mut unstamped = 0usize;
+    for (stamp, expected) in stamps {
+        if stamp.schema.is_none() && stamp.pack_id.is_none() && stamp.component.is_none() {
+            unstamped += 1;
+            continue;
+        }
+        if stamp.schema.as_deref() != Some("1") {
+            return metadata_mismatch("metadata schema is missing or unsupported");
+        }
+        if stamp.component.as_deref() != Some(*expected) {
+            return metadata_mismatch("ONNX component metadata does not match its file");
+        }
+        let Some(current_pack) = stamp.pack_id.as_deref() else {
+            return metadata_mismatch("ONNX pack metadata is incomplete");
+        };
+        if pack_id
+            .as_deref()
+            .is_some_and(|value| value != current_pack)
+        {
+            return metadata_mismatch("ONNX files declare different pack IDs");
+        }
+        pack_id = Some(current_pack.to_owned());
+    }
+    if unstamped == stamps.len() {
+        return PackMetadata {
+            state: ModelRuntimeState::Unstamped,
+            pack_id: None,
+            detail: Some("ONNX files have no LocalTeX metadata".into()),
+        };
+    }
+    if unstamped != 0 {
+        return metadata_mismatch("only part of the ONNX pack is stamped");
+    }
+    PackMetadata {
+        state: ModelRuntimeState::Verified,
+        pack_id,
+        detail: None,
     }
 }
 
@@ -113,16 +165,9 @@ impl ModelInfo {
                 }
                 Err(_) => (ModelManifestState::Invalid, None, None),
             };
-        let opendoc_runtime = if opendoc_available && opendoc_pack.is_none() {
-            ModelRuntimeState::Mismatch
-        } else {
-            ModelRuntimeState::Declared
-        };
-        let handwriting_runtime = if handwriting_available && handwriting_pack.is_none() {
-            ModelRuntimeState::Mismatch
-        } else {
-            ModelRuntimeState::Declared
-        };
+        let opendoc_runtime = startup_runtime(opendoc_available, opendoc_pack.is_some());
+        let handwriting_runtime =
+            startup_runtime(handwriting_available, handwriting_pack.is_some());
         Self {
             dir,
             opendoc_pack,
@@ -199,6 +244,16 @@ impl ModelInfo {
         self.handwriting_runtime = state;
         self.handwriting_observed_pack = metadata.pack_id;
         self.handwriting_runtime_detail = metadata.detail;
+    }
+}
+
+fn startup_runtime(available: bool, declared: bool) -> ModelRuntimeState {
+    if available && !declared {
+        ModelRuntimeState::Mismatch
+    } else if available {
+        ModelRuntimeState::Checking
+    } else {
+        ModelRuntimeState::Declared
     }
 }
 
@@ -300,6 +355,33 @@ impl Engine {
         self.model_info.lock().expect("model info mutex").clone()
     }
 
+    /// Read ONNX `metadata_props` from disk. Does not open an ORT session.
+    pub fn inspect_file_metadata(&self) {
+        if self.opendoc_ok {
+            let pack = opendoc_dir(&self.dir);
+            let metadata = onnx_meta::inspect_onnx_files(&[
+                (&pack.join(pipeline::LAYOUT_ONNX), "layout"),
+                (&pack.join(pipeline::ENCODER_ONNX), "unirec_encoder"),
+                (&pack.join(pipeline::DECODER_ONNX), "unirec_decoder"),
+            ]);
+            self.model_info
+                .lock()
+                .expect("model info mutex")
+                .set_opendoc_metadata(metadata);
+        }
+        if self.ink_ok {
+            let pack = handwriting_dir(&self.dir);
+            let metadata = onnx_meta::inspect_onnx_files(&[
+                (&pack.join(inktex::ENCODER_ONNX), "inktex_encoder"),
+                (&pack.join(inktex::DECODER_ONNX), "inktex_decoder_step"),
+            ]);
+            self.model_info
+                .lock()
+                .expect("model info mutex")
+                .set_handwriting_metadata(metadata);
+        }
+    }
+
     pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
         if !self.opendoc_ok {
             bail!(
@@ -357,6 +439,12 @@ impl Engine {
         drop(guard);
         trim_process_heap();
         result
+    }
+
+    #[cfg(test)]
+    fn sessions_are_empty(&self) -> bool {
+        let guard = self.inner.lock().expect("ocr mutex");
+        guard.page.is_none() && guard.ink.is_none()
     }
 
     pub fn usage_generation(&self) -> u64 {
@@ -439,51 +527,21 @@ pub(crate) fn build_session(
 }
 
 pub(crate) fn inspect_onnx_pack(sessions: &[(&Session, &str)]) -> PackMetadata {
-    let mut pack_id: Option<String> = None;
-    let mut unstamped = 0usize;
-    for (session, expected_component) in sessions {
+    let mut stamps = Vec::with_capacity(sessions.len());
+    for (session, expected) in sessions {
         let Ok(metadata) = session.metadata() else {
             return metadata_mismatch("ONNX metadata is unreadable");
         };
-        let schema = metadata.custom("localtex.metadata_schema");
-        let current_pack = metadata.custom("localtex.pack_id");
-        let component = metadata.custom("localtex.component");
-        if schema.is_none() && current_pack.is_none() && component.is_none() {
-            unstamped += 1;
-            continue;
-        }
-        if schema.as_deref() != Some("1") {
-            return metadata_mismatch("metadata schema is missing or unsupported");
-        }
-        if component.as_deref() != Some(*expected_component) {
-            return metadata_mismatch("ONNX component metadata does not match its file");
-        }
-        let Some(current_pack) = current_pack else {
-            return metadata_mismatch("ONNX pack metadata is incomplete");
-        };
-        if pack_id
-            .as_deref()
-            .is_some_and(|value| value != current_pack)
-        {
-            return metadata_mismatch("ONNX files declare different pack IDs");
-        }
-        pack_id = Some(current_pack);
+        stamps.push((
+            FileStamp {
+                schema: metadata.custom("localtex.metadata_schema"),
+                pack_id: metadata.custom("localtex.pack_id"),
+                component: metadata.custom("localtex.component"),
+            },
+            *expected,
+        ));
     }
-    if unstamped == sessions.len() {
-        return PackMetadata {
-            state: ModelRuntimeState::Unstamped,
-            pack_id: None,
-            detail: Some("ONNX files have no LocalTeX metadata".into()),
-        };
-    }
-    if unstamped != 0 {
-        return metadata_mismatch("only part of the ONNX pack is stamped");
-    }
-    PackMetadata {
-        state: ModelRuntimeState::Verified,
-        pack_id,
-        detail: None,
-    }
+    inspect_stamps(&stamps)
 }
 
 fn metadata_mismatch(detail: &str) -> PackMetadata {
@@ -722,6 +780,70 @@ mod tests {
         assert!(!info.handwriting_available());
         assert_eq!(info.opendoc_runtime(), ModelRuntimeState::Declared);
         assert_eq!(info.handwriting_runtime(), ModelRuntimeState::Declared);
+    }
+
+    #[test]
+    fn present_packs_start_as_checking() {
+        let dir =
+            std::env::temp_dir().join(format!("localtex-model-checking-{}", std::process::id()));
+        let opendoc = dir.join("opendoc");
+        let ink = dir.join("handwriting");
+        std::fs::create_dir_all(&opendoc).unwrap();
+        std::fs::create_dir_all(&ink).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            br#"{"packs":{"opendoc":"open-v2","handwriting":"ink-v1"}}"#,
+        )
+        .unwrap();
+        for name in OPENDOC_FILES {
+            std::fs::write(opendoc.join(name), []).unwrap();
+        }
+        for name in INK_FILES {
+            std::fs::write(ink.join(name), []).unwrap();
+        }
+        let info = ModelInfo::read(dir.clone());
+        assert_eq!(info.opendoc_runtime(), ModelRuntimeState::Checking);
+        assert_eq!(info.handwriting_runtime(), ModelRuntimeState::Checking);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inspect_file_metadata_verifies_installed_packs_without_sessions() {
+        let dir = models_dir();
+        if !pack_present(&opendoc_dir(&dir), &OPENDOC_FILES)
+            && !pack_present(&handwriting_dir(&dir), &INK_FILES)
+        {
+            return;
+        }
+        let engine = Engine::load();
+        assert!(engine.sessions_are_empty());
+        engine.inspect_file_metadata();
+        assert!(engine.sessions_are_empty());
+        let info = engine.model_info();
+        if pack_present(&opendoc_dir(&dir), &OPENDOC_FILES) {
+            assert_eq!(info.opendoc_runtime(), ModelRuntimeState::Verified);
+        }
+        if pack_present(&handwriting_dir(&dir), &INK_FILES) {
+            assert_eq!(info.handwriting_runtime(), ModelRuntimeState::Verified);
+        }
+    }
+
+    #[test]
+    fn file_metadata_reads_stamped_layout_without_ort() {
+        let path = models_dir().join("opendoc").join(pipeline::LAYOUT_ONNX);
+        if !path.is_file() {
+            return;
+        }
+        let map = onnx_meta::read_onnx_metadata(&path).expect("read layout metadata");
+        assert_eq!(
+            map.get("localtex.metadata_schema").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            map.get("localtex.component").map(String::as_str),
+            Some("layout")
+        );
+        assert!(map.contains_key("localtex.pack_id"));
     }
 
     #[test]

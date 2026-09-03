@@ -317,6 +317,18 @@ impl AppState {
         self.engine.model_info()
     }
 
+    pub fn start_model_inspect(&self, cx: &mut Context<Self>) {
+        let engine = self.engine.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async move {
+                engine.inspect_file_metadata();
+            })
+            .await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+    }
+
     fn schedule_engine_release(&mut self, cx: &mut Context<Self>) {
         let engine = self.engine.clone();
         let generation = engine.usage_generation();

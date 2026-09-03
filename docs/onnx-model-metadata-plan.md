@@ -27,9 +27,11 @@ packs intended to run together.
 
 ## Runtime states
 
-Model sessions remain lazy. Settings reads the release manifest at startup and
-shows **Declared** for complete packs. On first page or handwriting inference,
-LocalTeX reads metadata from the sessions it has already opened:
+Model sessions remain lazy. At startup a background task reads ONNX
+`metadata_props` by seeking past `ModelProto.graph`. It does not
+`commit_from_file` or initialize ORT. Settings shows **Checking…** until that
+walk finishes, then **Verified**, **Unstamped**, or **Mismatch**. First
+inference still inspects the sessions it has already opened:
 
 1. all files must use schema 1;
 2. every component must match its filename/role;
