@@ -1,6 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use gpui::{App, AppContext, ClipboardItem, Context};
 use image::RgbaImage;
@@ -11,403 +10,31 @@ use crate::export::CopyKind;
 use crate::identity::APP_SLUG;
 use crate::store::{WriteEvent, WriteKind, WriteResult};
 
+use super::intake::{classify_image_paths, ClassifiedPaths, IntakeBatch};
 use super::session::Capture;
 use super::AppState;
 
-pub enum IngestSource {
-    Screen(RgbaImage),
-    Files(Vec<PathBuf>),
-    Strokes(Vec<Vec<[f32; 3]>>),
-}
-
-pub(crate) const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp"];
-const INTAKE_REJECT_HOLD: Duration = Duration::from_millis(700);
-const INTAKE_RESULT_HOLD: Duration = Duration::from_millis(480);
-const INTAKE_LEAVE: Duration = Duration::from_millis(260);
-const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(1_500);
-const INTAKE_PLATEN_OUT: Duration = Duration::from_millis(280);
-pub const INTAKE_WINDOW: usize = 5;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IntakeCounts {
-    pub images: usize,
-    pub skipped: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IntakeWork {
-    Waiting,
-    Working,
-    Succeeded,
-    Failed,
-}
-
-impl IntakeWork {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IntakeVisual {
-    Backlog,
-    Visible,
-    Settled,
-    Leaving,
-    Gone,
-}
-
-impl IntakeVisual {
-    pub fn is_present(self) -> bool {
-        !matches!(self, Self::Gone)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IntakeBatchPhase {
-    Running,
-    Complete,
-    Fading,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct IntakePose {
-    pub dx: f32,
-    pub dy: f32,
-}
-
-pub fn intake_pose(index: usize) -> IntakePose {
-    const DX: [f32; 6] = [-165.0, -99.0, -33.0, 33.0, 99.0, 165.0];
-    const DY: [f32; 6] = [0.0; 6];
-    let i = index.min(5);
-    IntakePose {
-        dx: DX[i],
-        dy: DY[i],
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IntakeItem {
-    pub key: u64,
-    pub path: PathBuf,
-    pub name: String,
-    pub id: Option<Uuid>,
-    pub work: IntakeWork,
-    pub visual: IntakeVisual,
-    pub slot: Option<usize>,
-}
-
-impl IntakeItem {
-    fn waiting(key: u64, path: PathBuf, slot: Option<usize>) -> Self {
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("image")
-            .to_string();
-        Self {
-            key,
-            path,
-            name,
-            id: None,
-            work: IntakeWork::Waiting,
-            visual: if slot.is_some() {
-                IntakeVisual::Visible
-            } else {
-                IntakeVisual::Backlog
-            },
-            slot,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IntakeBatch {
-    pub items: Vec<IntakeItem>,
-    pub skipped: usize,
-    pub gen: u64,
-    pub phase: IntakeBatchPhase,
-    next_item_key: u64,
-}
-
-impl IntakeBatch {
-    pub fn from_paths(paths: Vec<PathBuf>, skipped: usize, gen: u64) -> Self {
-        let items: Vec<_> = paths
-            .into_iter()
-            .enumerate()
-            .map(|(index, path)| {
-                IntakeItem::waiting(
-                    index as u64 + 1,
-                    path,
-                    (index < INTAKE_WINDOW).then_some(index),
-                )
-            })
-            .collect();
-        Self {
-            next_item_key: items.len() as u64 + 1,
-            items,
-            skipped,
-            gen,
-            phase: IntakeBatchPhase::Running,
-        }
-    }
-
-    pub fn reject(skipped: usize, gen: u64) -> Self {
-        Self {
-            items: Vec::new(),
-            skipped,
-            gen,
-            phase: IntakeBatchPhase::Running,
-            next_item_key: 1,
-        }
-    }
-
-    pub fn is_accepting(&self) -> bool {
-        self.phase == IntakeBatchPhase::Running && !self.items.is_empty()
-    }
-
-    pub fn counts(&self) -> IntakeCounts {
-        IntakeCounts {
-            images: self.items.len(),
-            skipped: self.skipped,
-        }
-    }
-
-    pub fn progress(&self) -> (usize, usize) {
-        let done = self
-            .items
-            .iter()
-            .filter(|item| item.work.is_terminal())
-            .count();
-        (done, self.items.len())
-    }
-
-    pub fn results(&self) -> (usize, usize) {
-        let succeeded = self
-            .items
-            .iter()
-            .filter(|item| item.work == IntakeWork::Succeeded)
-            .count();
-        let failed = self
-            .items
-            .iter()
-            .filter(|item| item.work == IntakeWork::Failed)
-            .count();
-        (succeeded, failed)
-    }
-
-    pub fn all_gone(&self) -> bool {
-        !self.items.is_empty()
-            && self
-                .items
-                .iter()
-                .all(|item| item.visual == IntakeVisual::Gone)
-    }
-
-    pub fn thumb_ids(&self) -> Vec<Uuid> {
-        self.visible()
-            .into_iter()
-            .filter_map(|(_, item)| item.id)
-            .collect()
-    }
-
-    pub fn file_jobs(&self) -> Vec<(u64, u64, PathBuf)> {
-        self.items
-            .iter()
-            .map(|item| (self.gen, item.key, item.path.clone()))
-            .collect()
-    }
-
-    pub fn extend(&mut self, paths: Vec<PathBuf>, skipped: usize) -> Vec<(u64, u64, PathBuf)> {
-        self.skipped = self.skipped.saturating_add(skipped);
-        let mut added = Vec::new();
-        for path in paths {
-            let already = self
-                .items
-                .iter()
-                .any(|item| item.path == path && !item.work.is_terminal());
-            if already {
-                continue;
-            }
-            let key = self.next_item_key;
-            self.next_item_key = self.next_item_key.wrapping_add(1);
-            let slot = self.first_vacant_slot();
-            self.items
-                .push(IntakeItem::waiting(key, path.clone(), slot));
-            added.push((self.gen, key, path));
-        }
-        added
-    }
-
-    fn first_vacant_slot(&self) -> Option<usize> {
-        (0..INTAKE_WINDOW).find(|slot| {
-            !self
-                .items
-                .iter()
-                .any(|item| item.slot == Some(*slot) && item.visual != IntakeVisual::Gone)
-        })
-    }
-
-    pub fn bind_item(&mut self, key: u64, id: Uuid) {
-        if let Some(item) = self.items.iter_mut().find(|item| item.key == key) {
-            item.id = Some(id);
-        }
-    }
-
-    pub fn mark_working(&mut self, id: Uuid) {
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == Some(id)) {
-            if item.work == IntakeWork::Waiting {
-                item.work = IntakeWork::Working;
-            }
-        }
-    }
-
-    pub fn finish_key(&mut self, key: u64, ok: bool) -> Option<u64> {
-        let item = self.items.iter_mut().find(|item| item.key == key)?;
-        Self::finish_item(item, ok)
-    }
-
-    pub fn finish_id(&mut self, id: Uuid, ok: bool) -> Option<u64> {
-        let item = self.items.iter_mut().find(|item| item.id == Some(id))?;
-        Self::finish_item(item, ok)
-    }
-
-    fn finish_item(item: &mut IntakeItem, ok: bool) -> Option<u64> {
-        if item.work.is_terminal() {
-            return None;
-        }
-        item.work = if ok {
-            IntakeWork::Succeeded
-        } else {
-            IntakeWork::Failed
-        };
-        if item.visual == IntakeVisual::Visible {
-            item.visual = IntakeVisual::Settled;
-            Some(item.key)
-        } else {
-            None
-        }
-    }
-
-    pub fn begin_leave(&mut self, key: u64) -> bool {
-        let Some(item) = self.items.iter_mut().find(|item| item.key == key) else {
-            return false;
-        };
-        if item.visual == IntakeVisual::Settled {
-            item.visual = IntakeVisual::Leaving;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn mark_gone_and_promote(&mut self, key: u64) -> Option<u64> {
-        let slot = {
-            let item = self.items.iter_mut().find(|item| item.key == key)?;
-            if item.visual != IntakeVisual::Leaving {
-                return None;
-            }
-            item.visual = IntakeVisual::Gone;
-            item.slot.take()?
-        };
-        let replacement = self
-            .items
-            .iter_mut()
-            .find(|item| item.visual == IntakeVisual::Backlog)?;
-        replacement.slot = Some(slot);
-        replacement.visual = if replacement.work.is_terminal() {
-            IntakeVisual::Settled
-        } else {
-            IntakeVisual::Visible
-        };
-        if replacement.visual == IntakeVisual::Settled {
-            Some(replacement.key)
-        } else {
-            None
-        }
-    }
-
-    pub fn visible(&self) -> Vec<(usize, &IntakeItem)> {
-        let mut visible: Vec<_> = self
-            .items
-            .iter()
-            .filter(|item| item.visual.is_present())
-            .filter_map(|item| item.slot.map(|slot| (slot, item)))
-            .collect();
-        visible.sort_by_key(|(slot, _)| *slot);
-        visible
-    }
-
-    pub fn backlog_count(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|item| item.visual == IntakeVisual::Backlog)
-            .count()
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct ClassifiedPaths {
-    pub images: Vec<PathBuf>,
-    pub skipped: usize,
-}
-
-impl ClassifiedPaths {
-    pub fn counts(&self) -> IntakeCounts {
-        IntakeCounts {
-            images: self.images.len(),
-            skipped: self.skipped,
-        }
-    }
-}
-
-pub fn is_ingest_image_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| IMAGE_EXTS.iter().any(|ok| ext.eq_ignore_ascii_case(ok)))
-}
-
-pub fn classify_image_paths(paths: impl IntoIterator<Item = PathBuf>) -> ClassifiedPaths {
-    let mut images = Vec::new();
-    let mut skipped = 0;
-    for path in paths {
-        if is_ingest_image_path(&path) {
-            images.push(path);
-        } else {
-            skipped += 1;
-        }
-    }
-    ClassifiedPaths { images, skipped }
-}
-
 impl AppState {
-    pub fn ingest(&mut self, source: IngestSource, cx: &mut Context<Self>) {
+    pub fn ingest_strokes(&mut self, pts: Vec<Vec<[f32; 3]>>, cx: &mut Context<Self>) {
         if self.is_bootstrapping() {
             return;
         }
-        match source {
-            IngestSource::Screen(image) => {
-                self.ingest_pixels(image, cx);
+        let xy = crate::imgutil::traces_xy(&pts);
+        cx.spawn(async move |this, cx| {
+            let img = cx
+                .background_spawn(async move { crate::imgutil::rasterize_strokes(&xy, 3) })
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                if let Some(img) = img {
+                    this.ingest_drawing(pts, img, cx);
+                } else {
+                    this.flash_error("That drawing is empty", cx);
+                }
+            }) {
+                eprintln!("{APP_SLUG}: stroke ingest: {err}");
             }
-            IngestSource::Files(paths) => self.offer_files(paths, cx),
-            IngestSource::Strokes(pts) => {
-                let xy = crate::imgutil::traces_xy(&pts);
-                cx.spawn(async move |this, cx| {
-                    let img = cx
-                        .background_spawn(async move { crate::imgutil::rasterize_strokes(&xy, 3) })
-                        .await;
-                    if let Err(err) = this.update(cx, |this, cx| {
-                        if let Some(img) = img {
-                            this.ingest_drawing(pts, img, cx);
-                        } else {
-                            this.flash_error("That drawing is empty", cx);
-                        }
-                    }) {
-                        eprintln!("{APP_SLUG}: stroke ingest: {err}");
-                    }
-                })
-                .detach();
-            }
-        }
+        })
+        .detach();
     }
 
     pub fn offer_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -417,10 +44,12 @@ impl AppState {
         let classified = classify_image_paths(paths);
         if classified.images.is_empty() {
             if classified.skipped > 0 {
-                if !self.intake.as_ref().is_some_and(IntakeBatch::is_accepting) {
+                if let Some(batch) = self.intake.as_mut().filter(|batch| batch.is_accepting()) {
+                    batch.skipped = batch.skipped.saturating_add(classified.skipped);
+                    cx.notify();
+                } else {
                     self.begin_intake_reject(classified.skipped, cx);
                 }
-                self.flash_error("No images in this drop", cx);
             }
             return;
         }
@@ -431,19 +60,15 @@ impl AppState {
     fn begin_intake_images(&mut self, classified: ClassifiedPaths, cx: &mut Context<Self>) {
         let paths = classified.images;
         let skipped = classified.skipped;
-        let jobs = if self.intake.as_ref().is_some_and(IntakeBatch::is_accepting) {
+        if self.intake.as_ref().is_some_and(IntakeBatch::is_accepting) {
             self.intake
                 .as_mut()
                 .expect("accepting intake exists")
-                .extend(paths, skipped)
+                .extend(paths, skipped);
         } else {
             self.intake_gen = self.intake_gen.wrapping_add(1);
-            let batch = IntakeBatch::from_paths(paths, skipped, self.intake_gen);
-            let jobs = batch.file_jobs();
-            self.intake = Some(batch);
-            jobs
-        };
-        self.ingest.file_queue.extend(jobs);
+            self.intake = Some(IntakeBatch::from_paths(paths, skipped, self.intake_gen));
+        }
         cx.notify();
     }
 
@@ -452,98 +77,19 @@ impl AppState {
         let gen = self.intake_gen;
         self.intake = Some(IntakeBatch::reject(skipped, gen));
         cx.notify();
-        self.schedule_intake_dismiss(gen, INTAKE_REJECT_HOLD, cx);
-    }
-
-    fn schedule_intake_dismiss(&mut self, gen: u64, delay: Duration, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(delay).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.intake.as_ref().is_some_and(|batch| batch.gen == gen) {
-                    this.intake = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn schedule_intake_feedback(&mut self, key: u64, cx: &mut Context<Self>) {
-        let Some(gen) = self.intake.as_ref().map(|batch| batch.gen) else {
-            return;
-        };
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(INTAKE_RESULT_HOLD).await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.intake.as_ref().is_some_and(|batch| batch.gen == gen) {
-                    return;
-                }
-                if this
-                    .intake
-                    .as_mut()
-                    .is_some_and(|batch| batch.begin_leave(key))
-                {
-                    cx.notify();
-                }
-            });
-            cx.background_executor().timer(INTAKE_LEAVE).await;
-            let _ = this.update(cx, |this, cx| {
-                if !this.intake.as_ref().is_some_and(|batch| batch.gen == gen) {
-                    return;
-                }
-                let promoted = this
-                    .intake
-                    .as_mut()
-                    .and_then(|batch| batch.mark_gone_and_promote(key));
-                if let Some(promoted) = promoted {
-                    this.schedule_intake_feedback(promoted, cx);
-                }
-                this.maybe_complete_intake(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn maybe_complete_intake(&mut self, cx: &mut Context<Self>) {
-        let Some(batch) = &self.intake else {
-            return;
-        };
-        if batch.phase != IntakeBatchPhase::Running || !batch.all_gone() {
-            return;
-        }
-        let gen = batch.gen;
-        if let Some(batch) = &mut self.intake {
-            batch.phase = IntakeBatchPhase::Complete;
-        }
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(INTAKE_COMPLETE_HOLD).await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    let Some(batch) = this.intake.as_mut().filter(|batch| {
-                        batch.gen == gen && batch.phase == IntakeBatchPhase::Complete
-                    }) else {
-                        return;
-                    };
-                    batch.phase = IntakeBatchPhase::Fading;
-                    cx.notify();
-                });
-            cx.background_executor().timer(INTAKE_PLATEN_OUT).await;
-            let _ = this.update(cx, |this, cx| {
-                if this.intake.as_ref().is_some_and(|batch| {
-                    batch.gen == gen && batch.phase == IntakeBatchPhase::Fading
-                }) {
-                    this.intake = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
     }
 
     pub fn intake(&self) -> Option<&IntakeBatch> {
         self.intake.as_ref()
+    }
+
+    pub fn acknowledge_intake(&mut self, gen: u64, cx: &mut Context<Self>) {
+        if self.intake.as_ref().is_some_and(|batch| {
+            batch.gen == gen && (batch.items.is_empty() || batch.all_terminal())
+        }) {
+            self.intake = None;
+            cx.notify();
+        }
     }
 
     pub(super) fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) -> Uuid {
@@ -585,7 +131,11 @@ impl AppState {
         if self.ingest.file_loading {
             return;
         }
-        let Some((gen, key, path)) = self.ingest.file_queue.pop_front() else {
+        let Some((gen, key, path)) = self.intake.as_ref().and_then(|batch| {
+            batch
+                .next_pending()
+                .map(|(key, path)| (batch.gen, key, path))
+        }) else {
             return;
         };
         self.ingest.file_loading = true;
@@ -611,14 +161,10 @@ impl AppState {
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: open image: {err}");
-                        let feedback = this
-                            .intake
-                            .as_mut()
-                            .and_then(|batch| batch.finish_key(key, false));
-                        this.flash_error("Couldn't open that image", cx);
-                        if let Some(key) = feedback {
-                            this.schedule_intake_feedback(key, cx);
+                        if let Some(batch) = &mut this.intake {
+                            batch.finish_key(key, false);
                         }
+                        cx.notify();
                     }
                 }
                 this.pump_file_ingest(cx);
@@ -745,12 +291,12 @@ impl AppState {
     }
 
     fn finish_intake_id(&mut self, id: Uuid, ok: bool, cx: &mut Context<Self>) {
-        let feedback = self
+        if self
             .intake
             .as_mut()
-            .and_then(|batch| batch.finish_id(id, ok));
-        if let Some(key) = feedback {
-            self.schedule_intake_feedback(key, cx);
+            .is_some_and(|batch| batch.finish_id(id, ok))
+        {
+            cx.notify();
         }
     }
 
@@ -879,7 +425,6 @@ impl AppState {
         if let Some(id) = self.ingest.ocr.running() {
             self.ingest.ocr.remove(id);
         }
-        self.ingest.file_queue.clear();
         self.intake = None;
         self.ingest.clear_docs();
         self.search.bump();
@@ -1333,157 +878,5 @@ mod tests {
             .unwrap()
             .expect("ram wins");
         assert!(Arc::ptr_eq(&traces, &ram));
-    }
-
-    #[test]
-    fn classify_image_paths_keeps_images_and_counts_skips() {
-        let classified = classify_image_paths([
-            PathBuf::from("board.PNG"),
-            PathBuf::from("eq-navier.jpg"),
-            PathBuf::from("table-3.webp"),
-            PathBuf::from("notes.pdf"),
-            PathBuf::from("slides.pptx"),
-            PathBuf::from("noext"),
-        ]);
-        assert_eq!(
-            classified.images,
-            vec![
-                PathBuf::from("board.PNG"),
-                PathBuf::from("eq-navier.jpg"),
-                PathBuf::from("table-3.webp"),
-            ]
-        );
-        assert_eq!(classified.skipped, 3);
-        assert_eq!(
-            classified.counts(),
-            IntakeCounts {
-                images: 3,
-                skipped: 3
-            }
-        );
-    }
-
-    #[test]
-    fn classify_image_paths_empty_and_reject_only() {
-        let empty = classify_image_paths(Vec::<PathBuf>::new());
-        assert!(empty.images.is_empty());
-        assert_eq!(empty.skipped, 0);
-        let reject = classify_image_paths([PathBuf::from("a.pdf"), PathBuf::from("b.txt")]);
-        assert!(reject.images.is_empty());
-        assert_eq!(reject.skipped, 2);
-        assert!(!is_ingest_image_path(Path::new("a.gif")));
-        assert!(!is_ingest_image_path(Path::new("a.bmp")));
-        assert!(is_ingest_image_path(Path::new("a.jpeg")));
-    }
-
-    #[test]
-    fn intake_bind_and_finish_tracks_progress() {
-        let mut batch =
-            IntakeBatch::from_paths(vec![PathBuf::from("a.png"), PathBuf::from("b.png")], 1, 1);
-        assert_eq!(
-            batch.counts(),
-            IntakeCounts {
-                images: 2,
-                skipped: 1
-            }
-        );
-        let a = Uuid::from_u128(1);
-        batch.bind_item(1, a);
-        assert_eq!(batch.items[0].work, IntakeWork::Waiting);
-        assert_eq!(batch.items[0].visual, IntakeVisual::Visible);
-        assert_eq!(batch.thumb_ids(), vec![a]);
-        batch.mark_working(a);
-        assert_eq!(batch.items[0].work, IntakeWork::Working);
-        assert_eq!(batch.finish_id(a, true), Some(1));
-        assert_eq!(batch.items[0].work, IntakeWork::Succeeded);
-        assert_eq!(batch.items[0].visual, IntakeVisual::Settled);
-        assert_eq!(batch.progress(), (1, 2));
-        assert_eq!(batch.finish_id(Uuid::from_u128(99), true), None);
-        assert_eq!(batch.finish_key(2, false), Some(2));
-        assert_eq!(batch.results(), (1, 1));
-        assert!(!batch.all_gone());
-        assert_eq!(batch.progress(), (2, 2));
-    }
-
-    #[test]
-    fn intake_gone_item_refills_only_its_fixed_slot() {
-        let paths: Vec<PathBuf> = (0..8).map(|i| PathBuf::from(format!("{i}.png"))).collect();
-        let mut batch = IntakeBatch::from_paths(paths, 0, 1);
-        assert_eq!(batch.visible().len(), INTAKE_WINDOW);
-        assert_eq!(batch.backlog_count(), 3);
-        assert_eq!(batch.finish_key(1, true), Some(1));
-        assert!(batch.begin_leave(1));
-        assert_eq!(batch.mark_gone_and_promote(1), None);
-        let names: Vec<_> = batch
-            .visible()
-            .iter()
-            .map(|(slot, item)| (*slot, item.name.as_str()))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                (0, "5.png"),
-                (1, "1.png"),
-                (2, "2.png"),
-                (3, "3.png"),
-                (4, "4.png")
-            ]
-        );
-        assert_eq!(batch.backlog_count(), 2);
-        assert_eq!(batch.items[1].slot, Some(1));
-        assert_eq!(batch.items[2].slot, Some(2));
-        assert_eq!(batch.items[3].slot, Some(3));
-        assert_eq!(batch.items[4].slot, Some(4));
-    }
-
-    #[test]
-    fn completed_backlog_item_gets_feedback_after_promotion() {
-        let paths: Vec<PathBuf> = (0..6).map(|i| PathBuf::from(format!("{i}.png"))).collect();
-        let mut batch = IntakeBatch::from_paths(paths, 0, 7);
-        assert_eq!(batch.finish_key(6, true), None);
-        assert_eq!(batch.items[5].visual, IntakeVisual::Backlog);
-        assert_eq!(batch.finish_key(1, true), Some(1));
-        assert!(batch.begin_leave(1));
-        assert_eq!(batch.mark_gone_and_promote(1), Some(6));
-        assert_eq!(batch.items[5].slot, Some(0));
-        assert_eq!(batch.items[5].visual, IntakeVisual::Settled);
-        assert!(batch.begin_leave(6));
-        assert_eq!(batch.mark_gone_and_promote(6), None);
-    }
-
-    #[test]
-    fn intake_feedback_is_independent_per_slot() {
-        let paths: Vec<PathBuf> = (0..7).map(|i| PathBuf::from(format!("{i}.png"))).collect();
-        let mut batch = IntakeBatch::from_paths(paths, 0, 3);
-        assert_eq!(batch.finish_key(1, true), Some(1));
-        assert_eq!(batch.finish_key(2, true), Some(2));
-        assert!(batch.begin_leave(1));
-        assert!(batch.begin_leave(2));
-        assert_eq!(batch.mark_gone_and_promote(2), None);
-        assert_eq!(batch.mark_gone_and_promote(1), None);
-        assert_eq!(batch.items[5].slot, Some(1));
-        assert_eq!(batch.items[6].slot, Some(0));
-        assert_eq!(batch.items[2].slot, Some(2));
-    }
-
-    #[test]
-    fn intake_extend_keeps_generation_and_fills_vacant_slots() {
-        let mut batch = IntakeBatch::from_paths(vec![PathBuf::from("a.png")], 0, 1);
-        let added = batch.extend(vec![PathBuf::from("a.png"), PathBuf::from("c.png")], 2);
-        assert_eq!(added, vec![(1, 2, PathBuf::from("c.png"))]);
-        assert_eq!(batch.skipped, 2);
-        assert_eq!(batch.items.len(), 2);
-        assert_eq!(batch.items[1].slot, Some(1));
-        assert_eq!(batch.gen, 1);
-        assert!(batch.is_accepting());
-    }
-
-    #[test]
-    fn intake_reject_has_no_items_and_is_not_accepting() {
-        let batch = IntakeBatch::reject(3, 1);
-        assert!(batch.items.is_empty());
-        assert_eq!(batch.skipped, 3);
-        assert!(!batch.is_accepting());
-        assert!(batch.visible().is_empty());
     }
 }

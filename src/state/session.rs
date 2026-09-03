@@ -1,5 +1,4 @@
-use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -78,7 +77,6 @@ struct DocRuntime {
 
 pub(crate) struct IngestPump {
     pub ocr: OcrQueue,
-    pub file_queue: VecDeque<(u64, u64, PathBuf)>,
     pub file_loading: bool,
     pub clipboard_loading: bool,
     runtime: HashMap<Uuid, DocRuntime>,
@@ -88,7 +86,6 @@ impl IngestPump {
     pub fn new() -> Self {
         Self {
             ocr: OcrQueue::new(),
-            file_queue: VecDeque::new(),
             file_loading: false,
             clipboard_loading: false,
             runtime: HashMap::new(),

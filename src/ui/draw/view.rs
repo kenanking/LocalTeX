@@ -5,7 +5,6 @@ use gpui::{
 
 use super::{DrawPaper, DrawTool};
 use crate::actions::{DrawEraser, DrawPen, DrawRedo, DrawUndo};
-use crate::state::IngestSource;
 use crate::ui::main_window::{MainWindow, View};
 use crate::ui::theme;
 use crate::ui::widgets::{
@@ -107,7 +106,7 @@ impl MainWindow {
                                 crate::desktop::set_os_cursor_visible(true);
                                 this.view = View::Library;
                                 this.state.update(cx, |s, cx| {
-                                    s.ingest(IngestSource::Strokes(pts), cx);
+                                    s.ingest_strokes(pts, cx);
                                 });
                                 cx.notify();
                             });

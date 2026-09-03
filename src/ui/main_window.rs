@@ -13,7 +13,10 @@ use uuid::Uuid;
 use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
-use super::intake::{render_intake_overlay, slots_from_batch, IntakeKind};
+use super::intake::{
+    render_intake_overlay, slots_from_batch, IntakeKind, IntakePhase, IntakePresentation,
+    INTAKE_COMPLETE_HOLD, INTAKE_LEAVE, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD, INTAKE_RESULT_HOLD,
+};
 use super::media::WindowMedia;
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
@@ -31,7 +34,6 @@ use crate::actions::{
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
-use crate::imgutil::intake_paper_spec;
 use crate::state::{classify_image_paths, AppState, IntakeCounts};
 
 #[derive(Clone)]
@@ -115,6 +117,7 @@ pub struct MainWindow {
     pub(crate) history: HistoryPane,
     pub(crate) source_panel: SourceBinding,
     drop_hover: Option<IntakeCounts>,
+    intake: Option<IntakePresentation>,
 }
 
 impl MainWindow {
@@ -132,6 +135,7 @@ impl MainWindow {
             state_for_close.update(cx, |state, cx| state.handle_main_close(action, window, cx))
         });
         cx.observe(&state, |this, _, cx| {
+            this.sync_intake(cx);
             this.ensure_selected_full(cx);
             this.schedule_derived_from_app(cx);
             this.schedule_media_gc(cx);
@@ -197,7 +201,9 @@ impl MainWindow {
             history,
             source_panel: SourceBinding::new(source),
             drop_hover: None,
+            intake: None,
         };
+        this.sync_intake(cx);
         this.schedule_derived(window, cx);
         this
     }
@@ -251,6 +257,151 @@ impl MainWindow {
         let paths = paths.paths().to_vec();
         self.state
             .update(cx, |state, cx| state.offer_files(paths, cx));
+    }
+
+    fn sync_intake(&mut self, cx: &mut Context<Self>) {
+        let batch = self.state.read(cx).intake().cloned();
+        let Some(batch) = batch else {
+            if self
+                .intake
+                .as_ref()
+                .is_some_and(|intake| intake.phase == IntakePhase::Running)
+            {
+                self.intake = None;
+                self.release_intake_polaroids(cx);
+            }
+            return;
+        };
+
+        let is_new = self
+            .intake
+            .as_ref()
+            .is_none_or(|intake| intake.gen != batch.gen);
+        let feedback = if is_new {
+            let (presentation, feedback) = IntakePresentation::new(&batch);
+            self.intake = Some(presentation);
+            feedback
+        } else {
+            self.intake
+                .as_mut()
+                .expect("matching intake presentation exists")
+                .sync(&batch)
+        };
+
+        if is_new && batch.items.is_empty() {
+            self.schedule_intake_reject(batch.gen, cx);
+        }
+        for key in feedback {
+            self.schedule_intake_feedback(batch.gen, key, cx);
+        }
+
+        if let Some(intake) = &self.intake {
+            let ids = intake.thumb_ids();
+            let paper_jobs = intake.paper_jobs();
+            self.ensure_thumbs(&ids, cx);
+            self.ensure_intake_polaroids(&paper_jobs, cx);
+        }
+    }
+
+    fn acknowledge_intake(&self, gen: u64, cx: &mut Context<Self>) {
+        let state = self.state.clone();
+        cx.defer(move |cx| {
+            state.update(cx, |state, cx| state.acknowledge_intake(gen, cx));
+        });
+    }
+
+    fn schedule_intake_reject(&mut self, gen: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(INTAKE_REJECT_HOLD).await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(intake) = this
+                    .intake
+                    .as_mut()
+                    .filter(|intake| intake.gen == gen && intake.phase == IntakePhase::Running)
+                else {
+                    return;
+                };
+                intake.phase = IntakePhase::Fading;
+                this.acknowledge_intake(gen, cx);
+                cx.notify();
+            });
+            cx.background_executor().timer(INTAKE_PLATEN_OUT).await;
+            let _ =
+                this.update(cx, |this, cx| {
+                    if this.intake.as_ref().is_some_and(|intake| {
+                        intake.gen == gen && intake.phase == IntakePhase::Fading
+                    }) {
+                        this.intake = None;
+                        this.release_intake_polaroids(cx);
+                        cx.notify();
+                    }
+                });
+        })
+        .detach();
+    }
+
+    fn schedule_intake_feedback(&mut self, gen: u64, key: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(INTAKE_RESULT_HOLD).await;
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .intake
+                    .as_mut()
+                    .filter(|intake| intake.gen == gen)
+                    .is_some_and(|intake| intake.begin_leave(key))
+                {
+                    cx.notify();
+                }
+            });
+            cx.background_executor().timer(INTAKE_LEAVE).await;
+            let _ = this.update(cx, |this, cx| {
+                let Some(intake) = this.intake.as_mut().filter(|intake| intake.gen == gen) else {
+                    return;
+                };
+                let promoted = intake.mark_gone_and_promote(key);
+                let complete = intake.all_gone();
+                if let Some(promoted) = promoted {
+                    this.schedule_intake_feedback(gen, promoted, cx);
+                }
+                if complete {
+                    if let Some(intake) = this.intake.as_mut() {
+                        intake.phase = IntakePhase::Complete;
+                    }
+                    this.acknowledge_intake(gen, cx);
+                    this.schedule_intake_complete(gen, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_intake_complete(&mut self, gen: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(INTAKE_COMPLETE_HOLD).await;
+            let _ =
+                this.update(cx, |this, cx| {
+                    let Some(intake) = this.intake.as_mut().filter(|intake| {
+                        intake.gen == gen && intake.phase == IntakePhase::Complete
+                    }) else {
+                        return;
+                    };
+                    intake.phase = IntakePhase::Fading;
+                    cx.notify();
+                });
+            cx.background_executor().timer(INTAKE_PLATEN_OUT).await;
+            let _ =
+                this.update(cx, |this, cx| {
+                    if this.intake.as_ref().is_some_and(|intake| {
+                        intake.gen == gen && intake.phase == IntakePhase::Fading
+                    }) {
+                        this.intake = None;
+                        this.release_intake_polaroids(cx);
+                        cx.notify();
+                    }
+                });
+        })
+        .detach();
     }
 
     fn start_draw(&mut self, _: &StartDraw, window: &mut Window, cx: &mut Context<Self>) {
@@ -517,7 +668,11 @@ impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
             let state = self.state.read(cx);
-            let (status_kind, status_label) = chrome(state);
+            let (status_kind, status_label) = self
+                .intake
+                .as_ref()
+                .map(IntakePresentation::status)
+                .unwrap_or_else(|| chrome(state));
             let status_label = if !matches!(
                 status_kind,
                 theme::StatusKind::Busy | theme::StatusKind::Error
@@ -568,39 +723,26 @@ impl gpui::Render for MainWindow {
                 .is_some_and(|doc| doc.has_ready_blocks());
             (has_selected, can_open_docx)
         };
-        let batch = self.state.read(cx).intake().cloned();
-        let hover = if cx.has_active_drag()
-            && !batch
-                .as_ref()
-                .is_some_and(crate::state::IntakeBatch::is_accepting)
-        {
+        let accepting = self
+            .state
+            .read(cx)
+            .intake()
+            .is_some_and(crate::state::IntakeBatch::is_accepting);
+        let hover = if cx.has_active_drag() && !accepting {
             self.drop_hover
         } else {
             None
         };
-        if let Some(ref batch) = batch {
-            self.ensure_thumbs(&batch.thumb_ids(), cx);
-            let polaroids: Vec<(uuid::Uuid, crate::imgutil::IntakePaperSpec)> = batch
-                .visible()
-                .into_iter()
-                .filter_map(|(slot, item)| {
-                    item.id
-                        .map(|id| (id, intake_paper_spec(batch.gen, item.key, slot)))
-                })
-                .collect();
-            self.ensure_intake_polaroids(&polaroids, cx);
-        } else if self.has_intake_polaroids() {
-            self.release_intake_polaroids(cx);
-        }
-        let intake = match (hover, batch) {
+        let presentation = self.intake.clone();
+        let intake = match (hover, presentation) {
             (Some(counts), _) => Some((IntakeKind::Hover, counts, None, Vec::new())),
-            (None, Some(batch)) => {
-                let thumbs = slots_from_batch(&batch, |id, working| {
+            (None, Some(presentation)) => {
+                let slots = slots_from_batch(&presentation, |id, working| {
                     self.intake_polaroid(id, working)
                         .or_else(|| self.media.cache.borrow().thumb(id))
                 });
-                let counts = batch.counts();
-                Some((IntakeKind::Flash, counts, Some(batch), thumbs))
+                let counts = presentation.counts;
+                Some((IntakeKind::Flash, counts, Some(presentation), slots))
             }
             (None, None) => None,
         };

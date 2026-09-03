@@ -8,9 +8,7 @@ use gpui::{
 
 use super::theme;
 use crate::imgutil::intake_paper_spec;
-use crate::state::{
-    intake_pose, IntakeBatch, IntakeBatchPhase, IntakeCounts, IntakeVisual, IntakeWork,
-};
+use crate::state::{IntakeBatch, IntakeCounts, IntakeWork};
 
 const PLATEN_W: f32 = 500.0;
 const PLATEN_H: f32 = 330.0;
@@ -19,11 +17,241 @@ const REEL_W: f32 = 416.0;
 const REEL_H: f32 = 118.0;
 const CARD_SIZE: f32 = 82.0;
 const PROGRESS_W: f32 = 330.0;
+pub(crate) const INTAKE_REJECT_HOLD: Duration = Duration::from_millis(700);
+pub(crate) const INTAKE_RESULT_HOLD: Duration = Duration::from_millis(480);
+pub(crate) const INTAKE_LEAVE: Duration = Duration::from_millis(260);
+pub(crate) const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(1_500);
+pub(crate) const INTAKE_PLATEN_OUT: Duration = Duration::from_millis(280);
+const INTAKE_WINDOW: usize = 5;
 
 #[derive(Clone, Copy)]
 pub(crate) enum IntakeKind {
     Hover,
     Flash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntakeVisual {
+    Backlog,
+    Visible,
+    Feedback,
+    Leaving,
+    Gone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntakePhase {
+    Running,
+    Complete,
+    Fading,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IntakeCard {
+    pub key: u64,
+    pub id: Option<uuid::Uuid>,
+    pub work: IntakeWork,
+    pub visual: IntakeVisual,
+    pub slot: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IntakePresentation {
+    pub gen: u64,
+    pub counts: IntakeCounts,
+    pub phase: IntakePhase,
+    cards: Vec<IntakeCard>,
+    done: usize,
+    succeeded: usize,
+    failed: usize,
+}
+
+impl IntakePresentation {
+    pub fn new(batch: &IntakeBatch) -> (Self, Vec<u64>) {
+        let mut presentation = Self {
+            gen: batch.gen,
+            counts: batch.counts(),
+            phase: IntakePhase::Running,
+            cards: Vec::new(),
+            done: 0,
+            succeeded: 0,
+            failed: 0,
+        };
+        let feedback = presentation.sync(batch);
+        (presentation, feedback)
+    }
+
+    pub fn sync(&mut self, batch: &IntakeBatch) -> Vec<u64> {
+        debug_assert_eq!(self.gen, batch.gen);
+        self.counts = batch.counts();
+        let (done, total) = batch.progress();
+        let (succeeded, failed) = batch.results();
+        self.done = done;
+        self.counts.images = total;
+        self.succeeded = succeeded;
+        self.failed = failed;
+
+        let mut feedback = Vec::new();
+        for item in &batch.items {
+            if let Some(card) = self.cards.iter_mut().find(|card| card.key == item.key) {
+                let became_terminal = !card.work.is_terminal() && item.work.is_terminal();
+                card.id = item.id;
+                card.work = item.work;
+                if became_terminal && card.visual == IntakeVisual::Visible {
+                    card.visual = IntakeVisual::Feedback;
+                    feedback.push(card.key);
+                }
+                continue;
+            }
+            let slot = self.first_vacant_slot();
+            let visual = match (slot, item.work.is_terminal()) {
+                (Some(_), true) => IntakeVisual::Feedback,
+                (Some(_), false) => IntakeVisual::Visible,
+                (None, _) => IntakeVisual::Backlog,
+            };
+            self.cards.push(IntakeCard {
+                key: item.key,
+                id: item.id,
+                work: item.work,
+                visual,
+                slot,
+            });
+            if visual == IntakeVisual::Feedback {
+                feedback.push(item.key);
+            }
+        }
+        feedback
+    }
+
+    fn first_vacant_slot(&self) -> Option<usize> {
+        (0..INTAKE_WINDOW).find(|slot| {
+            !self
+                .cards
+                .iter()
+                .any(|card| card.slot == Some(*slot) && card.visual != IntakeVisual::Gone)
+        })
+    }
+
+    pub fn begin_leave(&mut self, key: u64) -> bool {
+        let Some(card) = self.cards.iter_mut().find(|card| card.key == key) else {
+            return false;
+        };
+        if card.visual != IntakeVisual::Feedback {
+            return false;
+        }
+        card.visual = IntakeVisual::Leaving;
+        true
+    }
+
+    pub fn mark_gone_and_promote(&mut self, key: u64) -> Option<u64> {
+        let slot = {
+            let card = self.cards.iter_mut().find(|card| card.key == key)?;
+            if card.visual != IntakeVisual::Leaving {
+                return None;
+            }
+            card.visual = IntakeVisual::Gone;
+            card.slot.take()?
+        };
+        let replacement = self
+            .cards
+            .iter_mut()
+            .find(|card| card.visual == IntakeVisual::Backlog)?;
+        replacement.slot = Some(slot);
+        replacement.visual = if replacement.work.is_terminal() {
+            IntakeVisual::Feedback
+        } else {
+            IntakeVisual::Visible
+        };
+        (replacement.visual == IntakeVisual::Feedback).then_some(replacement.key)
+    }
+
+    pub fn all_gone(&self) -> bool {
+        !self.cards.is_empty()
+            && self
+                .cards
+                .iter()
+                .all(|card| card.visual == IntakeVisual::Gone)
+    }
+
+    pub fn backlog_count(&self) -> usize {
+        self.cards
+            .iter()
+            .filter(|card| card.visual == IntakeVisual::Backlog)
+            .count()
+    }
+
+    pub fn progress(&self) -> (usize, usize) {
+        (self.done, self.counts.images)
+    }
+
+    pub fn results(&self) -> (usize, usize) {
+        (self.succeeded, self.failed)
+    }
+
+    pub fn status(&self) -> (theme::StatusKind, String) {
+        if self.counts.images == 0 {
+            return (theme::StatusKind::Error, "No images in this drop".into());
+        }
+        let (done, total) = self.progress();
+        if self.phase != IntakePhase::Running {
+            return if self.failed == 0 {
+                (theme::StatusKind::Ready, format!("Recognized {total}"))
+            } else {
+                (
+                    theme::StatusKind::Error,
+                    format!(
+                        "Recognized {} of {total} · {} failed",
+                        self.succeeded, self.failed
+                    ),
+                )
+            };
+        }
+        (
+            theme::StatusKind::Busy,
+            format!("Recognizing {} of {total}", (done + 1).min(total)),
+        )
+    }
+
+    pub fn thumb_ids(&self) -> Vec<uuid::Uuid> {
+        self.visible_cards()
+            .filter_map(|(_, card)| card.id)
+            .collect()
+    }
+
+    pub fn paper_jobs(&self) -> Vec<(uuid::Uuid, crate::imgutil::IntakePaperSpec)> {
+        self.visible_cards()
+            .filter_map(|(slot, card)| {
+                card.id
+                    .map(|id| (id, intake_paper_spec(self.gen, card.key, slot)))
+            })
+            .collect()
+    }
+
+    fn visible_cards(&self) -> impl Iterator<Item = (usize, &IntakeCard)> {
+        let mut visible: Vec<_> = self
+            .cards
+            .iter()
+            .filter(|card| card.visual != IntakeVisual::Gone)
+            .filter_map(|card| card.slot.map(|slot| (slot, card)))
+            .collect();
+        visible.sort_by_key(|(slot, _)| *slot);
+        visible.into_iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IntakePose {
+    dx: f32,
+    dy: f32,
+}
+
+fn intake_pose(index: usize) -> IntakePose {
+    const DX: [f32; 6] = [-165.0, -99.0, -33.0, 33.0, 99.0, 165.0];
+    let index = index.min(5);
+    IntakePose {
+        dx: DX[index],
+        dy: 0.0,
+    }
 }
 
 pub(crate) struct IntakeSlot {
@@ -36,12 +264,11 @@ pub(crate) struct IntakeSlot {
 }
 
 pub(crate) fn slots_from_batch(
-    batch: &IntakeBatch,
+    batch: &IntakePresentation,
     thumbs: impl Fn(uuid::Uuid, bool) -> Option<Arc<RenderImage>>,
 ) -> Vec<IntakeSlot> {
     batch
-        .visible()
-        .into_iter()
+        .visible_cards()
         .map(|(slot, item)| {
             let paper = intake_paper_spec(batch.gen, item.key, slot);
             IntakeSlot {
@@ -61,12 +288,12 @@ pub(crate) fn slots_from_batch(
 pub(crate) fn render_intake_overlay(
     kind: IntakeKind,
     counts: IntakeCounts,
-    batch: Option<&IntakeBatch>,
+    batch: Option<&IntakePresentation>,
     slots: &[IntakeSlot],
 ) -> impl IntoElement {
     let reject = counts.images == 0;
-    let fading = batch.is_some_and(|b| b.phase == IntakeBatchPhase::Fading);
-    let complete = batch.is_some_and(|b| b.phase != IntakeBatchPhase::Running);
+    let fading = batch.is_some_and(|batch| batch.phase == IntakePhase::Fading);
+    let complete = batch.is_some_and(|batch| batch.phase != IntakePhase::Running);
     let (title, sub) = intake_copy(kind, counts, batch);
     let title_color = if reject {
         rgb(theme::DANGER)
@@ -92,10 +319,10 @@ pub(crate) fn render_intake_overlay(
                 .child(sub),
         );
     let progress = batch
-        .filter(|batch| !batch.items.is_empty())
+        .filter(|batch| batch.counts.images > 0)
         .map(render_progress);
     let reel = batch
-        .filter(|batch| batch.phase == IntakeBatchPhase::Running)
+        .filter(|batch| batch.phase == IntakePhase::Running)
         .filter(|_| !slots.is_empty())
         .map(|batch| {
             let center_offset = reel_center_offset(slots, batch.backlog_count());
@@ -173,7 +400,7 @@ pub(crate) fn render_intake_overlay(
         .child(platen)
 }
 
-fn render_progress(batch: &IntakeBatch) -> AnyElement {
+fn render_progress(batch: &IntakePresentation) -> AnyElement {
     let (done, total) = batch.progress();
     let fraction = if total == 0 {
         0.0
@@ -286,7 +513,7 @@ fn render_thumb_pane(
 
 fn render_slot_check(slot: &IntakeSlot, center_offset: f32) -> Option<AnyElement> {
     if slot.work != IntakeWork::Succeeded
-        || !matches!(slot.visual, IntakeVisual::Settled | IntakeVisual::Leaving)
+        || !matches!(slot.visual, IntakeVisual::Feedback | IntakeVisual::Leaving)
     {
         return None;
     }
@@ -382,7 +609,7 @@ fn render_more(count: usize) -> AnyElement {
         .into_any_element()
 }
 
-fn render_complete(batch: &IntakeBatch) -> AnyElement {
+fn render_complete(batch: &IntakePresentation) -> AnyElement {
     const W: f32 = 190.0;
     const H: f32 = 118.0;
     const CX: f32 = W * 0.5;
@@ -500,17 +727,17 @@ fn complete_spark(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
 fn intake_copy(
     kind: IntakeKind,
     counts: IntakeCounts,
-    batch: Option<&IntakeBatch>,
+    batch: Option<&IntakePresentation>,
 ) -> (String, String) {
     if let Some(batch) = batch {
-        if batch.items.is_empty() {
+        if batch.counts.images == 0 {
             return (
                 "No images".into(),
                 "Only PNG, JPEG, and WebP are recognized.".into(),
             );
         }
         let (done, total) = batch.progress();
-        if batch.phase != IntakeBatchPhase::Running {
+        if batch.phase != IntakePhase::Running {
             let (succeeded, failed) = batch.results();
             let sub = if failed == 0 {
                 if total == 1 {
@@ -624,14 +851,52 @@ mod tests {
     }
 
     #[test]
+    fn completed_card_leaves_in_place_and_refills_its_slot() {
+        let paths = (0..7)
+            .map(|index| PathBuf::from(format!("{index}.png")))
+            .collect();
+        let mut batch = IntakeBatch::from_paths(paths, 0, 4);
+        let (mut presentation, feedback) = IntakePresentation::new(&batch);
+        assert!(feedback.is_empty());
+        assert_eq!(presentation.backlog_count(), 2);
+
+        assert!(batch.finish_key(2, true));
+        assert_eq!(presentation.sync(&batch), vec![2]);
+        assert!(presentation.begin_leave(2));
+        assert_eq!(presentation.mark_gone_and_promote(2), None);
+        let replacement = presentation
+            .cards
+            .iter()
+            .find(|card| card.key == 6)
+            .expect("first backlog card promoted");
+        assert_eq!(replacement.slot, Some(1));
+        assert_eq!(replacement.visual, IntakeVisual::Visible);
+    }
+
+    #[test]
+    fn terminal_backlog_card_shows_feedback_when_promoted() {
+        let paths = (0..6)
+            .map(|index| PathBuf::from(format!("{index}.png")))
+            .collect();
+        let mut batch = IntakeBatch::from_paths(paths, 0, 5);
+        let (mut presentation, _) = IntakePresentation::new(&batch);
+        assert!(batch.finish_key(6, true));
+        assert!(batch.finish_key(1, true));
+        assert_eq!(presentation.sync(&batch), vec![1]);
+        assert!(presentation.begin_leave(1));
+        assert_eq!(presentation.mark_gone_and_promote(1), Some(6));
+    }
+
+    #[test]
     fn complete_copy_reports_successes_and_failures_separately() {
         let mut batch =
             IntakeBatch::from_paths(vec![PathBuf::from("a.png"), PathBuf::from("b.png")], 0, 9);
-        assert_eq!(batch.finish_key(1, true), Some(1));
-        assert_eq!(batch.finish_key(2, false), Some(2));
-        batch.phase = IntakeBatchPhase::Complete;
+        assert!(batch.finish_key(1, true));
+        assert!(batch.finish_key(2, false));
+        let (mut presentation, _) = IntakePresentation::new(&batch);
+        presentation.phase = IntakePhase::Complete;
         assert_eq!(
-            intake_copy(IntakeKind::Flash, batch.counts(), Some(&batch)),
+            intake_copy(IntakeKind::Flash, presentation.counts, Some(&presentation)),
             (
                 "Complete".into(),
                 "1 of 2 images recognized · 1 failed".into()

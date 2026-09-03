@@ -17,14 +17,12 @@ use crate::ui::MainWindow;
 
 mod capture;
 mod ingest;
+mod intake;
 mod orig_export;
 mod search;
 mod session;
 
-pub use ingest::{
-    classify_image_paths, intake_pose, IngestSource, IntakeBatch, IntakeBatchPhase, IntakeCounts,
-    IntakeVisual, IntakeWork,
-};
+pub use intake::{classify_image_paths, IntakeBatch, IntakeCounts, IntakeWork};
 
 use session::{CaptureSession, IngestPump, SearchFilter};
 

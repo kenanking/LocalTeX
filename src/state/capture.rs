@@ -4,7 +4,7 @@ use std::time::Duration;
 use gpui::{App, AppContext, Context, Window, WindowHandle};
 use image::RgbaImage;
 
-use super::ingest::{is_ingest_image_path, IngestSource, IMAGE_EXTS};
+use super::intake::{is_ingest_image_path, IMAGE_EXTS};
 use super::session::Capture;
 use super::{AppState, MainWindowState};
 use crate::identity::APP_SLUG;
@@ -114,7 +114,7 @@ impl AppState {
 
     pub fn finish_capture(&mut self, crop: RgbaImage, cx: &mut Context<Self>) {
         self.capture.set(Capture::Idle);
-        self.ingest(IngestSource::Screen(crop), cx);
+        self.ingest_pixels(crop, cx);
         self.dismiss_main_sheet(cx);
         self.restore_after_hide(cx);
     }
@@ -219,7 +219,7 @@ impl AppState {
             .map(|text| clipboard_image_paths(&text))
             .unwrap_or_default();
         if !paths.is_empty() {
-            self.ingest(IngestSource::Files(paths), cx);
+            self.offer_files(paths, cx);
             return;
         }
         self.flash_error("Nothing to paste — copy an image first", cx);

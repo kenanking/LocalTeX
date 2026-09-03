@@ -253,10 +253,6 @@ impl MainWindow {
         self.media.intake_polaroid(id, working)
     }
 
-    pub(crate) fn has_intake_polaroids(&self) -> bool {
-        !self.media.intake_polaroids.borrow().is_empty()
-    }
-
     pub(crate) fn ensure_selected_full(&mut self, cx: &mut Context<Self>) {
         let (id, pixels) = {
             let state = self.state.read(cx);
