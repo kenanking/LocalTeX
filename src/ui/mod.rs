@@ -2,6 +2,7 @@ mod chrome;
 mod detail;
 mod draw;
 mod history;
+mod intake;
 mod main_window;
 mod media;
 mod orig_view;

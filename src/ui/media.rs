@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use crate::cache::{thumb_retain_ids, MediaCache};
+use crate::imgutil::IntakePaperSpec;
 use crate::preview::{
     derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived,
 };
@@ -21,6 +22,14 @@ pub(crate) struct WindowMedia {
     pub(crate) thumb_keep: Rc<RefCell<Vec<Uuid>>>,
     thumb_inflight: Rc<RefCell<HashSet<Uuid>>>,
     full_inflight: HashSet<Uuid>,
+    intake_polaroids: Rc<RefCell<HashMap<Uuid, IntakePaperRender>>>,
+    intake_polaroid_inflight: Rc<RefCell<HashSet<Uuid>>>,
+    intake_polaroid_keep: Rc<RefCell<HashSet<Uuid>>>,
+}
+
+struct IntakePaperRender {
+    neutral: Arc<RenderImage>,
+    working: Arc<RenderImage>,
 }
 
 impl WindowMedia {
@@ -34,7 +43,20 @@ impl WindowMedia {
             thumb_keep: Rc::new(RefCell::new(Vec::new())),
             thumb_inflight: Rc::new(RefCell::new(HashSet::new())),
             full_inflight: HashSet::new(),
+            intake_polaroids: Rc::new(RefCell::new(HashMap::new())),
+            intake_polaroid_inflight: Rc::new(RefCell::new(HashSet::new())),
+            intake_polaroid_keep: Rc::new(RefCell::new(HashSet::new())),
         }
+    }
+
+    fn intake_polaroid(&self, id: Uuid, working: bool) -> Option<Arc<RenderImage>> {
+        self.intake_polaroids.borrow().get(&id).map(|paper| {
+            if working {
+                paper.working.clone()
+            } else {
+                paper.neutral.clone()
+            }
+        })
     }
 }
 
@@ -76,6 +98,7 @@ impl MainWindow {
         self.media.full_inflight.clear();
         self.media.thumb_inflight.borrow_mut().clear();
         self.media.derived = None;
+        self.release_intake_polaroids(cx);
         self.media.cache.borrow_mut().clear(cx);
         cx.notify();
     }
@@ -143,6 +166,95 @@ impl MainWindow {
             })
             .detach();
         }
+    }
+
+    pub(crate) fn release_intake_polaroids(&mut self, cx: &mut App) {
+        self.media.intake_polaroid_keep.borrow_mut().clear();
+        self.media.intake_polaroid_inflight.borrow_mut().clear();
+        for (_, paper) in self.media.intake_polaroids.borrow_mut().drain() {
+            cx.drop_image(paper.neutral, None);
+            cx.drop_image(paper.working, None);
+        }
+    }
+
+    pub(crate) fn ensure_intake_polaroids(
+        &self,
+        jobs: &[(Uuid, IntakePaperSpec)],
+        cx: &mut Context<Self>,
+    ) {
+        let keep: HashSet<_> = jobs.iter().map(|(id, _)| *id).collect();
+        *self.media.intake_polaroid_keep.borrow_mut() = keep.clone();
+        let stale: Vec<_> = self
+            .media
+            .intake_polaroids
+            .borrow()
+            .keys()
+            .filter(|id| !keep.contains(id))
+            .copied()
+            .collect();
+        for id in stale {
+            if let Some(paper) = self.media.intake_polaroids.borrow_mut().remove(&id) {
+                cx.drop_image(paper.neutral, None);
+                cx.drop_image(paper.working, None);
+            }
+        }
+        self.media
+            .intake_polaroid_inflight
+            .borrow_mut()
+            .retain(|id| keep.contains(id));
+        let mut pending = Vec::new();
+        {
+            let state = self.state.read(cx);
+            let ready = self.media.intake_polaroids.borrow();
+            let mut inflight = self.media.intake_polaroid_inflight.borrow_mut();
+            for &(id, spec) in jobs {
+                if ready.contains_key(&id) || inflight.contains(&id) {
+                    continue;
+                }
+                let Some(doc) = state.doc(id) else {
+                    continue;
+                };
+                let Some(pixels) = doc.image.pixels() else {
+                    continue;
+                };
+                inflight.insert(id);
+                pending.push((id, spec, pixels.clone()));
+            }
+        }
+        for (id, spec, pixels) in pending {
+            cx.spawn(async move |this, cx| {
+                let paper = cx
+                    .background_spawn(async move {
+                        let variants = crate::imgutil::intake_paper_variants(pixels.as_ref(), spec);
+                        IntakePaperRender {
+                            neutral: crate::imgutil::rgba_to_render(&variants.neutral),
+                            working: crate::imgutil::rgba_to_render(&variants.working),
+                        }
+                    })
+                    .await;
+                if let Err(err) = this.update(cx, |this, cx| {
+                    this.media.intake_polaroid_inflight.borrow_mut().remove(&id);
+                    if this.media.intake_polaroid_keep.borrow().contains(&id) {
+                        this.media.intake_polaroids.borrow_mut().insert(id, paper);
+                    } else {
+                        cx.drop_image(paper.neutral, None);
+                        cx.drop_image(paper.working, None);
+                    }
+                    cx.notify();
+                }) {
+                    eprintln!("intake polaroid: {err}");
+                }
+            })
+            .detach();
+        }
+    }
+
+    pub(crate) fn intake_polaroid(&self, id: Uuid, working: bool) -> Option<Arc<RenderImage>> {
+        self.media.intake_polaroid(id, working)
+    }
+
+    pub(crate) fn has_intake_polaroids(&self) -> bool {
+        !self.media.intake_polaroids.borrow().is_empty()
     }
 
     pub(crate) fn ensure_selected_full(&mut self, cx: &mut Context<Self>) {

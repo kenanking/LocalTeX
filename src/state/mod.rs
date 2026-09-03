@@ -21,7 +21,10 @@ mod orig_export;
 mod search;
 mod session;
 
-pub use ingest::IngestSource;
+pub use ingest::{
+    classify_image_paths, intake_pose, IngestSource, IntakeBatch, IntakeBatchPhase, IntakeCounts,
+    IntakeVisual, IntakeWork,
+};
 
 use session::{CaptureSession, IngestPump, SearchFilter};
 
@@ -88,6 +91,8 @@ pub struct AppState {
     capture: CaptureSession,
     orig_copy_flash: Option<Uuid>,
     orig_copy_flash_gen: u64,
+    intake: Option<IntakeBatch>,
+    intake_gen: u64,
     main_window: MainWindowState,
 }
 
@@ -112,6 +117,8 @@ impl AppState {
             capture: CaptureSession::new(),
             orig_copy_flash: None,
             orig_copy_flash_gen: 0,
+            intake: None,
+            intake_gen: 0,
             main_window: MainWindowState::Closed,
         }
     }

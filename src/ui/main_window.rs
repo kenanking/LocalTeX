@@ -4,14 +4,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, Entity, FocusHandle,
-    Focusable, MouseButton, MouseMoveEvent, ScrollHandle, Window,
+    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, DragMoveEvent,
+    Entity, ExternalPaths, FocusHandle, Focusable, MouseButton, MouseMoveEvent, ScrollHandle,
+    Window,
 };
 use uuid::Uuid;
 
 use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
+use super::intake::{render_intake_overlay, slots_from_batch, IntakeKind};
 use super::media::WindowMedia;
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
@@ -29,7 +31,8 @@ use crate::actions::{
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
-use crate::state::AppState;
+use crate::imgutil::intake_paper_spec;
+use crate::state::{classify_image_paths, AppState, IntakeCounts};
 
 #[derive(Clone)]
 pub(crate) enum View {
@@ -111,6 +114,7 @@ pub struct MainWindow {
     pub(crate) caption_pending_move: Rc<Cell<bool>>,
     pub(crate) history: HistoryPane,
     pub(crate) source_panel: SourceBinding,
+    drop_hover: Option<IntakeCounts>,
 }
 
 impl MainWindow {
@@ -192,6 +196,7 @@ impl MainWindow {
             caption_pending_move: Rc::new(Cell::new(false)),
             history,
             source_panel: SourceBinding::new(source),
+            drop_hover: None,
         };
         this.schedule_derived(window, cx);
         this
@@ -205,6 +210,47 @@ impl MainWindow {
     fn paste_snip(&mut self, _: &PasteSnip, _: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_sheet(cx);
         self.state.update(cx, |state, cx| state.request_paste(cx));
+    }
+
+    fn on_file_drag_move(
+        &mut self,
+        event: &DragMoveEvent<ExternalPaths>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !cx.has_active_drag() {
+            if self.drop_hover.take().is_some() {
+                cx.notify();
+            }
+            return;
+        }
+        let blocked = self.state.read(cx).is_capturing() || self.state.read(cx).is_bootstrapping();
+        if blocked {
+            if self.drop_hover.take().is_some() {
+                cx.notify();
+            }
+            return;
+        }
+        let Some(paths) = event.dragged_item().downcast_ref::<ExternalPaths>() else {
+            return;
+        };
+        let counts = classify_image_paths(paths.paths().iter().cloned()).counts();
+        if self.drop_hover != Some(counts) {
+            self.drop_hover = Some(counts);
+            cx.notify();
+        }
+    }
+
+    fn on_file_drop(&mut self, paths: &ExternalPaths, _: &mut Window, cx: &mut Context<Self>) {
+        self.drop_hover = None;
+        let blocked = self.state.read(cx).is_capturing() || self.state.read(cx).is_bootstrapping();
+        if blocked {
+            cx.notify();
+            return;
+        }
+        let paths = paths.paths().to_vec();
+        self.state
+            .update(cx, |state, cx| state.offer_files(paths, cx));
     }
 
     fn start_draw(&mut self, _: &StartDraw, window: &mut Window, cx: &mut Context<Self>) {
@@ -522,6 +568,42 @@ impl gpui::Render for MainWindow {
                 .is_some_and(|doc| doc.has_ready_blocks());
             (has_selected, can_open_docx)
         };
+        let batch = self.state.read(cx).intake().cloned();
+        let hover = if cx.has_active_drag()
+            && !batch
+                .as_ref()
+                .is_some_and(crate::state::IntakeBatch::is_accepting)
+        {
+            self.drop_hover
+        } else {
+            None
+        };
+        if let Some(ref batch) = batch {
+            self.ensure_thumbs(&batch.thumb_ids(), cx);
+            let polaroids: Vec<(uuid::Uuid, crate::imgutil::IntakePaperSpec)> = batch
+                .visible()
+                .into_iter()
+                .filter_map(|(slot, item)| {
+                    item.id
+                        .map(|id| (id, intake_paper_spec(batch.gen, item.key, slot)))
+                })
+                .collect();
+            self.ensure_intake_polaroids(&polaroids, cx);
+        } else if self.has_intake_polaroids() {
+            self.release_intake_polaroids(cx);
+        }
+        let intake = match (hover, batch) {
+            (Some(counts), _) => Some((IntakeKind::Hover, counts, None, Vec::new())),
+            (None, Some(batch)) => {
+                let thumbs = slots_from_batch(&batch, |id, working| {
+                    self.intake_polaroid(id, working)
+                        .or_else(|| self.media.cache.borrow().thumb(id))
+                });
+                let counts = batch.counts();
+                Some((IntakeKind::Flash, counts, Some(batch), thumbs))
+            }
+            (None, None) => None,
+        };
         div()
             .id("main")
             .track_focus(&self.focus)
@@ -542,8 +624,15 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::close_window))
+            .on_drag_move::<ExternalPaths>(cx.listener(Self::on_file_drag_move))
+            .on_drop(cx.listener(Self::on_file_drop))
+            .can_drop(|value, _, _| value.downcast_ref::<ExternalPaths>().is_some())
             .cursor(CursorStyle::Arrow)
             .on_mouse_move(cx.listener(|this, ev: &gpui::MouseMoveEvent, _, cx| {
+                if this.drop_hover.is_some() && !cx.has_active_drag() {
+                    this.drop_hover = None;
+                    cx.notify();
+                }
                 if this.orig.has_pointer() && !ev.dragging() {
                     this.orig.pointer_move(
                         f32::from(ev.position.x),
@@ -563,6 +652,7 @@ impl gpui::Render for MainWindow {
                     }
                 }),
             )
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -605,6 +695,9 @@ impl gpui::Render for MainWindow {
                     }),
             )
             .child(self.render_footer(status_kind, status_label))
+            .when_some(intake, |d, (kind, counts, batch, slots)| {
+                d.child(render_intake_overlay(kind, counts, batch.as_ref(), &slots))
+            })
             .map(|content| super::chrome::client_frame(content, window))
     }
 }

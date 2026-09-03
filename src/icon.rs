@@ -64,6 +64,7 @@ const BUNDLED: &[(&str, &[u8])] = bundled![
     "icons/save.svg",
     "icons/folder.svg",
     "icons/check.svg",
+    "icons/intake-stack.svg",
     "icons/zoom.svg",
     "icons/reset.svg",
     "icons/collapse.svg",

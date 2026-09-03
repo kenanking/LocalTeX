@@ -50,6 +50,11 @@ pub fn overlay_scrim() -> Rgba {
     rgba(0x16161c61)
 }
 
+/// Light frost veil for file intake. gpui 0.2 has no backdrop-filter.
+pub fn intake_scrim() -> Rgba {
+    rgba(0xf6f5f6c9)
+}
+
 pub fn hud_pill() -> Rgba {
     rgba(0x1212169e)
 }

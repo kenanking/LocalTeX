@@ -78,7 +78,7 @@ struct DocRuntime {
 
 pub(crate) struct IngestPump {
     pub ocr: OcrQueue,
-    pub file_queue: VecDeque<PathBuf>,
+    pub file_queue: VecDeque<(u64, u64, PathBuf)>,
     pub file_loading: bool,
     pub clipboard_loading: bool,
     runtime: HashMap<Uuid, DocRuntime>,

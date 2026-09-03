@@ -13,7 +13,7 @@ use super::widgets::{icon_btn, status_dot, IconKind};
 use crate::doc::DocStatus;
 use crate::keymap::{self, ShortcutId};
 use crate::ocr::EngineStatus;
-use crate::state::AppState;
+use crate::state::{AppState, IntakeBatchPhase};
 
 pub(crate) const CAPTION_H: f32 = 32.0;
 pub(crate) const TOOLBAR_H: f32 = 44.0;
@@ -501,6 +501,28 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     }
     if let Some(err) = state.capture_error() {
         return (theme::StatusKind::Error, err.to_string());
+    }
+    if let Some(batch) = state.intake() {
+        if batch.items.is_empty() {
+            return (theme::StatusKind::Error, "No images in this drop".into());
+        }
+        let (done, total) = batch.progress();
+        if batch.phase != IntakeBatchPhase::Running {
+            let (succeeded, failed) = batch.results();
+            return if failed == 0 {
+                (theme::StatusKind::Ready, format!("Recognized {total}"))
+            } else {
+                (
+                    theme::StatusKind::Error,
+                    format!("Recognized {succeeded} of {total} · {failed} failed"),
+                )
+            };
+        }
+        let current = (done + 1).min(total);
+        return (
+            theme::StatusKind::Busy,
+            format!("Recognizing {current} of {total}"),
+        );
     }
     if let Some(doc) = state.selected_doc() {
         if let DocStatus::Failed(err) = &doc.status {

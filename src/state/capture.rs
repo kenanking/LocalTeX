@@ -4,7 +4,7 @@ use std::time::Duration;
 use gpui::{App, AppContext, Context, Window, WindowHandle};
 use image::RgbaImage;
 
-use super::ingest::IngestSource;
+use super::ingest::{is_ingest_image_path, IngestSource, IMAGE_EXTS};
 use super::session::Capture;
 use super::{AppState, MainWindowState};
 use crate::identity::APP_SLUG;
@@ -128,7 +128,7 @@ impl AppState {
         }
         cx.spawn(async move |this, cx| {
             let picked = rfd::AsyncFileDialog::new()
-                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                .add_filter("Images", IMAGE_EXTS)
                 .pick_files()
                 .await;
             let Some(handles) = picked else {
@@ -136,7 +136,7 @@ impl AppState {
             };
             let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
             if let Err(err) = this.update(cx, |this, cx| {
-                this.ingest(IngestSource::Files(paths), cx);
+                this.offer_files(paths, cx);
             }) {
                 eprintln!("{APP_SLUG}: upload task: {err}");
             }
@@ -234,7 +234,9 @@ impl AppState {
         cx.spawn(async move |this, cx| {
             let decoded = cx.background_spawn(async move { decode() }).await;
             if let Err(err) = this.update(cx, |this, cx| match decoded {
-                Ok(img) => this.ingest_pixels(img, cx),
+                Ok(img) => {
+                    this.ingest_pixels(img, cx);
+                }
                 Err(err) => {
                     eprintln!("{APP_SLUG}: clipboard image: {err}");
                     this.flash_error("Couldn't read that clipboard image", cx);
@@ -342,15 +344,7 @@ fn clipboard_image_paths(text: &str) -> Vec<PathBuf> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(|line| PathBuf::from(line.strip_prefix("file://").unwrap_or(line)))
-        .filter(|path| {
-            path.is_file()
-                && path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                    matches!(
-                        e.to_ascii_lowercase().as_str(),
-                        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
-                    )
-                })
-        })
+        .filter(|path| path.is_file() && is_ingest_image_path(path))
         .collect()
 }
 
