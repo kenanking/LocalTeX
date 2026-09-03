@@ -97,6 +97,10 @@ impl Library {
         self.visible_ids.len()
     }
 
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
     pub fn date_preset(&self) -> DatePreset {
         self.date_preset
     }

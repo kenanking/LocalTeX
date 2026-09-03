@@ -406,6 +406,10 @@ impl AppState {
         self.library.visible_len()
     }
 
+    pub fn snip_count(&self) -> usize {
+        self.library.len()
+    }
+
     pub fn date_preset(&self) -> DatePreset {
         self.library.date_preset()
     }

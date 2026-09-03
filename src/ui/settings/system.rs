@@ -1,15 +1,20 @@
-use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Entity, PromptLevel, SharedString};
+use gpui::{
+    div, prelude::*, px, relative, rgb, svg, AnyElement, Entity, FocusHandle, MouseButton,
+    SharedString, Window,
+};
 
 use super::super::theme;
 use super::super::widgets::{settings_group, Tooltip};
+use super::SettingsPane;
 use crate::ocr::{ModelInfo, ModelRuntimeState};
 use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
 pub(super) fn system_page(
-    state: Entity<AppState>,
+    settings: Entity<SettingsPane>,
     snap: &SysSnapshot,
     models: &ModelInfo,
+    snip_count: usize,
 ) -> impl IntoElement {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
@@ -96,7 +101,10 @@ pub(super) fn system_page(
                 .child(SharedString::from(path))
                 .into_any_element()
         })
-        .child(settings_group("Library", vec![wipe_library_row(state)]))
+        .child(settings_group(
+            "Library",
+            vec![wipe_library_row(settings, snip_count)],
+        ))
 }
 
 fn model_pack_list(models: &ModelInfo) -> AnyElement {
@@ -205,7 +213,7 @@ fn pack_tooltip(id: &str, detail: Option<&str>) -> String {
     }
 }
 
-fn wipe_library_row(state: Entity<AppState>) -> AnyElement {
+fn wipe_library_row(settings: Entity<SettingsPane>, snip_count: usize) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -228,11 +236,11 @@ fn wipe_library_row(state: Entity<AppState>) -> AnyElement {
                     "Removes every snip and the database. Settings stay. This cannot be undone.",
                 ),
         )
-        .child(wipe_btn(state))
+        .child(wipe_btn(settings, snip_count > 0))
         .into_any_element()
 }
 
-fn wipe_btn(state: Entity<AppState>) -> impl IntoElement {
+fn wipe_btn(settings: Entity<SettingsPane>, enabled: bool) -> impl IntoElement {
     div()
         .relative()
         .h(px(28.))
@@ -245,6 +253,7 @@ fn wipe_btn(state: Entity<AppState>) -> impl IntoElement {
         .border_color(rgb(0xfecaca))
         .bg(theme::danger_soft())
         .text_color(rgb(theme::DANGER))
+        .when(!enabled, |d| d.opacity(0.45))
         .child(
             div()
                 .id("wipe-library")
@@ -252,24 +261,10 @@ fn wipe_btn(state: Entity<AppState>) -> impl IntoElement {
                 .top_0()
                 .left_0()
                 .size_full()
-                .cursor_pointer()
-                .on_click(move |_, window, cx| {
-                    let answer = window.prompt(
-                        PromptLevel::Warning,
-                        "Delete all snips?",
-                        Some(
-                            "Removes every snip and the local database. Settings and shortcuts stay. This cannot be undone.",
-                        ),
-                        &["Cancel", "Delete all"],
-                        cx,
-                    );
-                    let state = state.clone();
-                    cx.spawn(async move |cx| {
-                        if answer.await == Ok(1) {
-                            state.update(cx, |s, cx| s.wipe_library(cx));
-                        }
+                .when(enabled, |d| {
+                    d.cursor_pointer().on_click(move |_, window, cx| {
+                        settings.update(cx, |pane, cx| pane.show_wipe_confirmation(window, cx));
                     })
-                    .detach();
                 }),
         )
         .child(
@@ -278,6 +273,175 @@ fn wipe_btn(state: Entity<AppState>) -> impl IntoElement {
                 .whitespace_nowrap()
                 .child("Delete all snips"),
         )
+}
+
+pub(crate) fn wipe_confirmation(
+    state: Entity<AppState>,
+    settings: Entity<SettingsPane>,
+    snip_count: usize,
+    cancel_focus: FocusHandle,
+    window: &Window,
+) -> AnyElement {
+    let title = if snip_count == 1 {
+        "Delete this snip?".to_string()
+    } else {
+        format!("Delete all {} snips?", format_count(snip_count))
+    };
+    let delete_label = if snip_count == 1 {
+        "Delete snip".to_string()
+    } else {
+        format!("Delete {} snips", format_count(snip_count))
+    };
+    let cancel_focused = cancel_focus.is_focused(window);
+    let settings_for_scrim = settings.clone();
+    let settings_for_cancel = settings.clone();
+    let settings_for_delete = settings.clone();
+
+    div()
+        .id("wipe-confirmation-scrim")
+        .absolute()
+        .inset_0()
+        .p_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme::overlay_scrim())
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            settings_for_scrim.update(cx, |pane, cx| pane.dismiss_wipe_confirmation(cx));
+        })
+        .child(
+            div()
+                .id("wipe-confirmation-dialog")
+                .w(px(360.))
+                .max_w_full()
+                .overflow_hidden()
+                .rounded_lg()
+                .border_1()
+                .border_color(rgb(0xd5d5db))
+                .bg(rgb(theme::BG_RAISED))
+                .shadow_lg()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .p_5()
+                        .flex()
+                        .items_start()
+                        .gap_3()
+                        .child(
+                            div()
+                                .size(px(34.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(rgb(0xf2c9c5))
+                                .bg(theme::danger_soft())
+                                .child(
+                                    svg()
+                                        .path("icons/delete.svg")
+                                        .size(px(17.))
+                                        .text_color(rgb(theme::DANGER)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .mb_1()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(rgb(theme::TEXT))
+                                        .child(SharedString::from(title)),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(theme::MUTED))
+                                        .whitespace_normal()
+                                        .child("This permanently removes the snips, recognized text, and stored images from this machine. Settings and OCR models stay."),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(rgb(theme::BORDER))
+                        .bg(rgb(theme::BG))
+                        .child(
+                            div()
+                                .id("wipe-confirmation-cancel")
+                                .track_focus(&cancel_focus)
+                                .h(px(30.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(if cancel_focused {
+                                    theme::ACCENT
+                                } else {
+                                    0xd5d5db
+                                }))
+                                .bg(rgb(theme::BG_RAISED))
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme::row_hover()))
+                                .on_click(move |_, _, cx| {
+                                    settings_for_cancel
+                                        .update(cx, |pane, cx| pane.dismiss_wipe_confirmation(cx));
+                                })
+                                .child("Cancel"),
+                        )
+                        .child(
+                            div()
+                                .id("wipe-confirmation-delete")
+                                .h(px(30.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(rgb(0xb91c1c))
+                                .bg(rgb(theme::DANGER))
+                                .text_color(rgb(theme::ON_ACCENT))
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .cursor_pointer()
+                                .hover(|d| d.opacity(0.88))
+                                .on_click(move |_, _, cx| {
+                                    settings_for_delete
+                                        .update(cx, |pane, cx| pane.dismiss_wipe_confirmation(cx));
+                                    state.update(cx, |state, cx| state.wipe_library(cx));
+                                })
+                                .child(SharedString::from(delete_label)),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+fn format_count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+    formatted
 }
 
 fn status_text(label: &'static str, color: u32) -> AnyElement {
@@ -471,4 +635,17 @@ fn composition_block(
                 .child(legend),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_count;
+
+    #[test]
+    fn dialog_count_uses_grouping_separators() {
+        assert_eq!(format_count(1), "1");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1_248), "1,248");
+        assert_eq!(format_count(1_000_000), "1,000,000");
+    }
 }

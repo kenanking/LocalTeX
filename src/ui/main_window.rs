@@ -156,7 +156,7 @@ impl MainWindow {
                 .update(cx, |state, cx| state.set_search_query(query, cx));
         })
         .detach();
-        let settings = cx.new(|_| SettingsPane::new());
+        let settings = cx.new(SettingsPane::new);
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let win_w: f32 = window.bounds().size.width.into();
         let pinned = state.read(cx).prefs.sidebar_pinned_collapsed;
@@ -444,6 +444,11 @@ impl MainWindow {
     }
 
     fn close_sheet(&mut self, _: &CloseSheet, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.read(cx).wipe_confirmation_open() {
+            self.settings
+                .update(cx, |pane, cx| pane.dismiss_wipe_confirmation(cx));
+            return;
+        }
         if self.source_panel.open {
             self.set_source_open(false, window, cx);
             return;
@@ -746,6 +751,15 @@ impl gpui::Render for MainWindow {
             }
             (None, None) => None,
         };
+        let wipe_confirmation = self.settings.read(cx).wipe_confirmation_open().then(|| {
+            super::settings::wipe_confirmation(
+                self.state.clone(),
+                self.settings.clone(),
+                self.state.read(cx).snip_count(),
+                self.settings.read(cx).wipe_cancel_focus(),
+                window,
+            )
+        });
         div()
             .id("main")
             .track_focus(&self.focus)
@@ -840,6 +854,7 @@ impl gpui::Render for MainWindow {
             .when_some(intake, |d, (kind, counts, batch, slots)| {
                 d.child(render_intake_overlay(kind, counts, batch.as_ref(), &slots))
             })
+            .children(wipe_confirmation)
             .map(|content| super::chrome::client_frame(content, window))
     }
 }

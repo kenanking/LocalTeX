@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, ScrollHandle, Window,
+    div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, FocusHandle, ScrollHandle,
+    Window,
 };
 
 use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
@@ -21,6 +22,7 @@ use formatting::formatting_page;
 use general::general_page;
 use shortcuts::shortcuts_page;
 use system::system_page;
+pub(crate) use system::wipe_confirmation;
 
 pub(crate) use shortcuts::intercept_recording;
 
@@ -48,10 +50,12 @@ pub struct SettingsPane {
     sys_snap: crate::sysmon::SysSnapshot,
     sysmon_on: bool,
     visible: bool,
+    wipe_confirmation_open: bool,
+    wipe_cancel_focus: FocusHandle,
 }
 
 impl SettingsPane {
-    pub fn new() -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             tab: SettingsTab::General,
             listen: None,
@@ -61,6 +65,8 @@ impl SettingsPane {
             sys_snap: crate::sysmon::SysSnapshot::default(),
             sysmon_on: false,
             visible: false,
+            wipe_confirmation_open: false,
+            wipe_cancel_focus: cx.focus_handle(),
         }
     }
 
@@ -79,6 +85,26 @@ impl SettingsPane {
 
     pub fn hide(&mut self) {
         self.visible = false;
+        self.wipe_confirmation_open = false;
+    }
+
+    pub(super) fn show_wipe_confirmation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.wipe_confirmation_open = true;
+        window.focus(&self.wipe_cancel_focus, cx);
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_wipe_confirmation(&mut self, cx: &mut Context<Self>) {
+        self.wipe_confirmation_open = false;
+        cx.notify();
+    }
+
+    pub(crate) fn wipe_confirmation_open(&self) -> bool {
+        self.wipe_confirmation_open
+    }
+
+    pub(crate) fn wipe_cancel_focus(&self) -> FocusHandle {
+        self.wipe_cancel_focus.clone()
     }
 
     pub fn reset_scroll(&mut self) {
@@ -149,6 +175,7 @@ impl SettingsPane {
 
         let prefs = state.read(cx).prefs.clone();
         let model_info = state.read(cx).model_info();
+        let snip_count = state.read(cx).snip_count();
         let tab = self.tab;
         let listen = self.listen;
         let entity = cx.entity();
@@ -188,6 +215,7 @@ impl SettingsPane {
 
         div()
             .id("settings")
+            .relative()
             .flex_1()
             .min_h_0()
             .min_w_0()
@@ -253,9 +281,10 @@ impl SettingsPane {
                                     })
                                     .when(tab == SettingsTab::System, |d| {
                                         d.child(system_page(
-                                            state.clone(),
+                                            entity.clone(),
                                             &self.sys_snap,
                                             &model_info,
+                                            snip_count,
                                         ))
                                     }),
                             ),
