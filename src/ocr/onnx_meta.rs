@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
-use super::{metadata_mismatch, PackMetadata};
+use super::{metadata_mismatch, PackReport};
 
 const WIRE_VARINT: u32 = 0;
 const WIRE_I64: u32 = 1;
@@ -18,7 +18,7 @@ const WIRE_LEN: u32 = 2;
 const WIRE_I32: u32 = 5;
 const FIELD_METADATA_PROPS: u32 = 14;
 
-pub(super) fn inspect_onnx_files(files: &[(&Path, &str)]) -> PackMetadata {
+pub(super) fn inspect_onnx_files(files: &[(&Path, &str)]) -> PackReport {
     let mut stamps = Vec::with_capacity(files.len());
     for (path, expected) in files {
         match read_onnx_metadata(path) {

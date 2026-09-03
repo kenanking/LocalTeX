@@ -267,7 +267,7 @@ pub struct InkTex {
     encoder: Session,
     decoder: Session,
     vocab: Vocab,
-    pack_metadata: super::PackMetadata,
+    pack_metadata: super::PackReport,
     num_layers: usize,
     num_heads: usize,
     head_dim: usize,
@@ -326,7 +326,7 @@ impl InkTex {
         })
     }
 
-    pub(super) fn pack_metadata(&self) -> &super::PackMetadata {
+    pub(super) fn pack_metadata(&self) -> &super::PackReport {
         &self.pack_metadata
     }
 

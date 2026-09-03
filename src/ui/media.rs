@@ -6,9 +6,9 @@ use std::sync::Arc;
 use gpui::{prelude::*, App, Context, Image, RenderImage, Window};
 use uuid::Uuid;
 
+use super::intake_paper::IntakePaperSpec;
 use super::main_window::MainWindow;
 use crate::cache::{thumb_retain_ids, MediaCache};
-use crate::imgutil::IntakePaperSpec;
 use crate::preview::{
     derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived,
 };
@@ -225,7 +225,8 @@ impl MainWindow {
             cx.spawn(async move |this, cx| {
                 let paper = cx
                     .background_spawn(async move {
-                        let variants = crate::imgutil::intake_paper_variants(pixels.as_ref(), spec);
+                        let variants =
+                            super::intake_paper::intake_paper_variants(pixels.as_ref(), spec);
                         IntakePaperRender {
                             neutral: crate::imgutil::rgba_to_render(&variants.neutral),
                             working: crate::imgutil::rgba_to_render(&variants.working),

@@ -15,7 +15,7 @@ use super::imgops::{self, RgbImg};
 use super::layout::{self, Region, IMAGE_LABELS};
 use super::text::{self, IGNORE_LABELS};
 use super::unirec::{RecognizeOut, Tokenizer, UniRec};
-use super::{build_session, inspect_onnx_pack, PackMetadata};
+use super::{build_session, inspect_onnx_pack, PackReport};
 use crate::doc::{Block, BlockKind, BlockRole, OcrMeta, Rect};
 use crate::identity::APP_SLUG;
 
@@ -35,7 +35,7 @@ pub struct OcrResult {
 pub struct Pipeline {
     layout: Session,
     unirec: UniRec,
-    pack_metadata: PackMetadata,
+    pack_metadata: PackReport,
 }
 
 fn env_flag(name: &str) -> bool {
@@ -67,7 +67,7 @@ impl Pipeline {
         })
     }
 
-    pub(super) fn pack_metadata(&self) -> &PackMetadata {
+    pub(super) fn pack_metadata(&self) -> &PackReport {
         &self.pack_metadata
     }
 

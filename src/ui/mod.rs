@@ -3,6 +3,7 @@ mod detail;
 mod draw;
 mod history;
 mod intake;
+pub(crate) mod intake_paper;
 mod main_window;
 mod media;
 mod orig_view;

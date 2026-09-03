@@ -17,8 +17,10 @@ use crate::store::{Store, StoreWriter};
 use crate::ui::MainWindow;
 
 mod capture;
+mod document_actions;
 mod ingest;
 mod intake;
+mod library_io;
 mod orig_export;
 mod runtime;
 mod search;

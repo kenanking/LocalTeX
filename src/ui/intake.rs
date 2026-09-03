@@ -7,8 +7,9 @@ use gpui::{
 };
 
 use super::theme;
-use crate::imgutil::intake_paper_spec;
 use crate::state::{IntakeBatch, IntakeCounts, IntakeWork};
+
+use super::intake_paper::{intake_paper_spec, IntakePaperSpec};
 
 const PLATEN_W: f32 = 500.0;
 const PLATEN_H: f32 = 330.0;
@@ -218,7 +219,7 @@ impl IntakePresentation {
             .collect()
     }
 
-    pub fn paper_jobs(&self) -> Vec<(uuid::Uuid, crate::imgutil::IntakePaperSpec)> {
+    pub fn paper_jobs(&self) -> Vec<(uuid::Uuid, IntakePaperSpec)> {
         self.visible_cards()
             .filter_map(|(slot, card)| {
                 card.id
