@@ -3,18 +3,22 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use windows::core::BOOL;
-use windows::Win32::Foundation::{HWND, LPARAM};
-use windows::Win32::System::Threading::GetCurrentProcessId;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, ClipCursor, EnumWindows, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, ShowCursor, ShowWindow, ASFW_ANY, GWL_EXSTYLE, SW_HIDE, SW_RESTORE,
-    WS_EX_TOOLWINDOW,
+    AllowSetForegroundWindow, CallNextHookEx, ClipCursor, EnumWindows, GetWindowLongPtrW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetWindowsHookExW, ShowCursor, ShowWindow,
+    ASFW_ANY, CWPSTRUCT, GWL_EXSTYLE, SW_HIDE, SW_RESTORE, WH_CALLWNDPROC, WM_ENDSESSION,
+    WM_QUERYENDSESSION, WS_EX_TOOLWINDOW,
 };
 
+use super::DesktopCmd;
 use crate::identity::APP_SLUG;
 
 /// DWM still composites the main window after `IsIconic`. WGC will photograph
@@ -25,9 +29,62 @@ const ICONIFY_DEADLINE: Duration = Duration::from_millis(700);
 const ICONIFY_FALLBACK: Duration = Duration::from_millis(280);
 
 static OS_CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+static SESSION_HOOK: Mutex<Option<isize>> = Mutex::new(None);
+static SESSION_TX: Mutex<Option<Sender<DesktopCmd>>> = Mutex::new(None);
 
 thread_local! {
     static TRAY_HIDDEN: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+}
+
+fn is_session_end(message: u32) -> bool {
+    message == WM_QUERYENDSESSION || message == WM_ENDSESSION
+}
+
+/// Restart Manager (Inno `CloseApplications`) sends `WM_QUERYENDSESSION`.
+/// GPUI never quits on that, and close-to-tray eats `WM_CLOSE`, so Setup
+/// freezes on "Closing applications..." until the 30s timeout.
+pub(crate) fn install_session_end_hook(tx: Sender<DesktopCmd>) {
+    match SESSION_TX.lock() {
+        Ok(mut slot) => *slot = Some(tx),
+        Err(poisoned) => *poisoned.into_inner() = Some(tx),
+    }
+    let mut hook = match SESSION_HOOK.lock() {
+        Ok(h) => h,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if hook.is_some() {
+        return;
+    }
+    match unsafe {
+        SetWindowsHookExW(
+            WH_CALLWNDPROC,
+            Some(session_end_hook),
+            None,
+            GetCurrentThreadId(),
+        )
+    } {
+        Ok(h) => {
+            *hook = Some(h.0 as isize);
+            eprintln!("{APP_SLUG}: windows session-end hook installed");
+        }
+        Err(err) => eprintln!("{APP_SLUG}: windows session-end hook: {err:#}"),
+    }
+}
+
+unsafe extern "system" fn session_end_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let msg = unsafe { &*(lparam.0 as *const CWPSTRUCT) };
+        if is_session_end(msg.message) {
+            let slot = match SESSION_TX.lock() {
+                Ok(slot) => slot,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(tx) = slot.as_ref() {
+                let _ = tx.send(DesktopCmd::Quit);
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 /// `SW_HIDE` removes the window from the taskbar. `SW_MINIMIZE` does not.
@@ -188,4 +245,17 @@ fn visible_main_windows() -> Vec<HWND> {
         return Vec::new();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_session_end;
+    use windows::Win32::UI::WindowsAndMessaging::{WM_CLOSE, WM_ENDSESSION, WM_QUERYENDSESSION};
+
+    #[test]
+    fn session_end_is_query_or_end_not_close() {
+        assert!(is_session_end(WM_QUERYENDSESSION));
+        assert!(is_session_end(WM_ENDSESSION));
+        assert!(!is_session_end(WM_CLOSE));
+    }
 }

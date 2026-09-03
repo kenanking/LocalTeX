@@ -75,6 +75,8 @@ static GRABS: RwLock<Vec<(u32, DesktopCmd)>> = RwLock::new(Vec::new());
 pub fn spawn() -> (Sender<DesktopCmd>, Receiver<DesktopCmd>) {
     let (tx, rx) = mpsc::channel();
     let hotkey = start_hotkey_manager(tx.clone());
+    #[cfg(target_os = "windows")]
+    win::install_session_end_hook(tx.clone());
     #[cfg(target_os = "linux")]
     linux::start_tray(tx.clone());
     #[cfg(any(target_os = "windows", target_os = "macos"))]
