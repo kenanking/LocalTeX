@@ -14,6 +14,9 @@ source checkout, install the dated tarballs on the
 ```
 
 Destination is `$LOCALTEX_MODELS`, else `~/.local/share/localtex/models` (Windows: `%LOCALAPPDATA%\localtex\models`).
+An existing destination or local cache is reused only when its manifest names
+both current packs, all required files exist, and the dynamic layout model's
+SHA-256 matches this release. Stale or partial caches are skipped.
 
 ## Directory layout
 

@@ -14,6 +14,7 @@ $HandwritingDir = "handwriting_e10_20260831_cf27b99"
 $OpenDocTar = "$OpenDocDir.tar.gz"
 $HandwritingTar = "$HandwritingDir.tar.gz"
 $Sums = "SHA256SUMS"
+$OpenDocLayoutSha256 = "8a74d1dbd6bf8fba6d4ed4284efed627b6dd8b331ff5d321f53b4b888729db4d"
 
 function Get-DefaultModelsDir {
     if ($env:LOCALAPPDATA) {
@@ -22,10 +23,40 @@ function Get-DefaultModelsDir {
     return (Join-Path $HOME "AppData\Local\localtex\models")
 }
 
-function Test-ShipRoot([string]$Dir) {
+function Test-HasAnyModels([string]$Dir) {
     $opendoc = Test-Path -LiteralPath (Join-Path $Dir "opendoc\layout.onnx") -PathType Leaf
     $hand = Test-Path -LiteralPath (Join-Path $Dir "handwriting\encoder.onnx") -PathType Leaf
     return ($opendoc -or $hand)
+}
+
+function Test-CurrentRoot([string]$Dir) {
+    $required = @(
+        "opendoc\layout.onnx",
+        "opendoc\encoder.onnx",
+        "opendoc\decoder.onnx",
+        "opendoc\unirec_tokenizer_mapping.json",
+        "handwriting\encoder.onnx",
+        "handwriting\decoder_step.onnx",
+        "handwriting\vocab.json",
+        "manifest.json"
+    )
+    foreach ($relative in $required) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Dir $relative) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath (Join-Path $Dir "manifest.json") -Raw | ConvertFrom-Json
+        if ($manifest.packs.opendoc -ne $OpenDocDir -or
+            $manifest.packs.handwriting -ne $HandwritingDir) {
+            return $false
+        }
+        $actual = (Get-FileHash -LiteralPath (Join-Path $Dir "opendoc\layout.onnx") -Algorithm SHA256).Hash.ToLowerInvariant()
+        return ($actual -eq $OpenDocLayoutSha256)
+    } catch {
+        return $false
+    }
 }
 
 function Copy-Ship([string]$Src, [string]$Dst) {
@@ -38,9 +69,17 @@ function Copy-Ship([string]$Src, [string]$Dst) {
         }
         Copy-Item -LiteralPath $from -Destination $to -Recurse
     }
-    $manifest = Join-Path $Src "manifest.json"
-    if (Test-Path -LiteralPath $manifest -PathType Leaf) {
-        Copy-Item -LiteralPath $manifest -Destination (Join-Path $Dst "manifest.json") -Force
+    Copy-Item -LiteralPath (Join-Path $Src "manifest.json") -Destination (Join-Path $Dst "manifest.json") -Force
+    $dstSums = Join-Path $Dst $Sums
+    if (Test-Path -LiteralPath $dstSums -PathType Leaf) {
+        Remove-Item -LiteralPath $dstSums -Force
+    }
+    $srcSums = Join-Path $Src $Sums
+    if (Test-Path -LiteralPath $srcSums -PathType Leaf) {
+        Copy-Item -LiteralPath $srcSums -Destination $dstSums -Force
+    }
+    if (-not (Test-CurrentRoot $Dst)) {
+        throw "localtex: copied model pack failed validation in $Dst"
     }
 }
 
@@ -104,9 +143,12 @@ if ($Dest) {
     $Dest = Get-DefaultModelsDir
 }
 
-if (Test-ShipRoot $Dest) {
+if (Test-CurrentRoot $Dest) {
     Write-Host "localtex: models already in $Dest"
     exit 0
+}
+if (Test-HasAnyModels $Dest) {
+    Write-Host "localtex: ignoring stale or incomplete models in $Dest"
 }
 
 $candidates = @()
@@ -118,10 +160,13 @@ if ($defaultDir -ne $Dest) {
     $candidates += $defaultDir
 }
 foreach ($src in $candidates) {
-    if (Test-ShipRoot $src) {
+    if (Test-CurrentRoot $src) {
         Write-Host "localtex: copying models from $src -> $Dest"
         Copy-Ship $src $Dest
         exit 0
+    }
+    if (Test-HasAnyModels $src) {
+        Write-Host "localtex: skipping stale or incomplete cache $src"
     }
 }
 
@@ -187,6 +232,9 @@ try {
     Move-Item -LiteralPath $handSrc -Destination (Join-Path $Dest "handwriting")
     Copy-Item -LiteralPath (Join-Path $work "manifest.json") -Destination (Join-Path $Dest "manifest.json") -Force
     Copy-Item -LiteralPath (Join-Path $work $Sums) -Destination (Join-Path $Dest $Sums) -Force
+    if (-not (Test-CurrentRoot $Dest)) {
+        throw "localtex: installed model pack failed validation in $Dest"
+    }
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force

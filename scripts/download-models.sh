@@ -8,6 +8,7 @@ HANDWRITING_DIR="handwriting_e10_20260831_cf27b99"
 OPENDOC_TAR="${OPENDOC_DIR}.tar.gz"
 HANDWRITING_TAR="${HANDWRITING_DIR}.tar.gz"
 SUMS="SHA256SUMS"
+OPENDOC_LAYOUT_SHA256="8a74d1dbd6bf8fba6d4ed4284efed627b6dd8b331ff5d321f53b4b888729db4d"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -27,9 +28,34 @@ default_models_dir() {
   esac
 }
 
-is_ship_root() {
+has_any_models() {
   local dir="$1"
   [[ -f "$dir/opendoc/layout.onnx" ]] || [[ -f "$dir/handwriting/encoder.onnx" ]]
+}
+
+is_current_root() {
+  local dir="$1"
+  local actual
+  local required=(
+    "opendoc/layout.onnx"
+    "opendoc/encoder.onnx"
+    "opendoc/decoder.onnx"
+    "opendoc/unirec_tokenizer_mapping.json"
+    "handwriting/encoder.onnx"
+    "handwriting/decoder_step.onnx"
+    "handwriting/vocab.json"
+    "manifest.json"
+  )
+
+  for path in "${required[@]}"; do
+    [[ -f "$dir/$path" ]] || return 1
+  done
+  grep -Eq "\"opendoc\"[[:space:]]*:[[:space:]]*\"${OPENDOC_DIR}\"" \
+    "$dir/manifest.json" || return 1
+  grep -Eq "\"handwriting\"[[:space:]]*:[[:space:]]*\"${HANDWRITING_DIR}\"" \
+    "$dir/manifest.json" || return 1
+  read -r actual _ < <(sha256sum "$dir/opendoc/layout.onnx")
+  [[ "$actual" == "$OPENDOC_LAYOUT_SHA256" ]]
 }
 
 copy_ship() {
@@ -38,9 +64,15 @@ copy_ship() {
   rm -rf "$DEST/opendoc" "$DEST/handwriting"
   cp -a "$src/opendoc" "$DEST/opendoc"
   cp -a "$src/handwriting" "$DEST/handwriting"
-  if [[ -f "$src/manifest.json" ]]; then
-    cp -f "$src/manifest.json" "$DEST/manifest.json"
+  cp -f "$src/manifest.json" "$DEST/manifest.json"
+  rm -f "$DEST/$SUMS"
+  if [[ -f "$src/$SUMS" ]]; then
+    cp -f "$src/$SUMS" "$DEST/$SUMS"
   fi
+  is_current_root "$DEST" || {
+    echo "localtex: copied model pack failed validation in $DEST" >&2
+    exit 1
+  }
 }
 
 if [[ -n "${1:-}" ]]; then
@@ -51,9 +83,15 @@ else
   DEST="$(default_models_dir)"
 fi
 
-if is_ship_root "$DEST"; then
+need grep
+need sha256sum
+
+if is_current_root "$DEST"; then
   echo "localtex: models already in $DEST"
   exit 0
+fi
+if has_any_models "$DEST"; then
+  echo "localtex: ignoring stale or incomplete models in $DEST"
 fi
 
 CANDIDATES=()
@@ -66,15 +104,17 @@ if [[ "$DEFAULT" != "$DEST" ]]; then
 fi
 
 for src in "${CANDIDATES[@]}"; do
-  if is_ship_root "$src"; then
+  if is_current_root "$src"; then
     echo "localtex: copying models from $src → $DEST"
     copy_ship "$src"
     exit 0
   fi
+  if has_any_models "$src"; then
+    echo "localtex: skipping stale or incomplete cache $src"
+  fi
 done
 
 need tar
-need sha256sum
 
 mkdir -p "$DEST"
 WORKDIR="$(mktemp -d)"
@@ -127,6 +167,10 @@ mv "$EXTRACT/$HANDWRITING_DIR" "$DEST/handwriting"
 
 cp -f "$WORKDIR/manifest.json" "$DEST/manifest.json"
 cp -f "$WORKDIR/$SUMS" "$DEST/$SUMS"
+is_current_root "$DEST" || {
+  echo "localtex: installed model pack failed validation in $DEST" >&2
+  exit 1
+}
 
 echo "localtex: OpenDoc ready in $DEST/opendoc ($OPENDOC_DIR)"
 ls -lh "$DEST/opendoc"/layout.onnx "$DEST/opendoc"/encoder.onnx \
