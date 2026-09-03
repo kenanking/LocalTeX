@@ -75,7 +75,7 @@ pub fn intake_paper_spec(batch_gen: u64, item_key: u64, slot: usize) -> IntakePa
 }
 
 pub fn intake_paper_variants(img: &RgbaImage, spec: IntakePaperSpec) -> IntakePaperVariants {
-    let (base, polygon) = intake_paper_base(img, spec.edge_seed);
+    let (base, polygon) = intake_paper_base(img, spec.edge_seed, spec.degrees);
     let neutral = finish_intake_paper(
         &base,
         &polygon,
@@ -93,10 +93,11 @@ pub fn intake_paper_variants(img: &RgbaImage, spec: IntakePaperSpec) -> IntakePa
     IntakePaperVariants { neutral, working }
 }
 
-fn intake_paper_base(img: &RgbaImage, seed: u64) -> (RgbaImage, Vec<(f32, f32)>) {
+fn intake_paper_base(img: &RgbaImage, seed: u64, degrees: f32) -> (RgbaImage, Vec<(f32, f32)>) {
     let scale = INTAKE_PAPER_SCALE as f32;
     let size = INTAKE_PAPER_SIZE * INTAKE_PAPER_SCALE;
-    let polygon = torn_paper_polygon(seed, scale);
+    let margin = intake_paper_margin(degrees);
+    let polygon = torn_paper_polygon(seed, scale, margin);
     let mut mask = GrayImage::new(size, size);
     for y in 0..size {
         for x in 0..size {
@@ -123,7 +124,7 @@ fn intake_paper_base(img: &RgbaImage, seed: u64) -> (RgbaImage, Vec<(f32, f32)>)
         }
     }
 
-    let inset = 7 * INTAKE_PAPER_SCALE;
+    let inset = ((margin + 3.2) * scale).round() as u32;
     let inner = size - inset * 2;
     for y in inset..inset + inner {
         for x in inset..inset + inner {
@@ -172,10 +173,22 @@ fn finish_intake_paper(
     )
 }
 
-fn torn_paper_polygon(seed: u64, scale: f32) -> Vec<(f32, f32)> {
+fn intake_paper_margin(degrees: f32) -> f32 {
+    const BASE_MARGIN: f32 = 3.8;
+    const MAX_JITTER: f32 = 1.7;
+    const EDGE_CLEARANCE: f32 = 1.5;
+
+    let radians = degrees.to_radians();
+    let rotated_span = radians.cos().abs() + radians.sin().abs();
+    let half_canvas = INTAKE_PAPER_SIZE as f32 * 0.5;
+    let safe_half_extent = (half_canvas - EDGE_CLEARANCE) / rotated_span;
+    BASE_MARGIN.max(half_canvas + MAX_JITTER - safe_half_extent)
+}
+
+fn torn_paper_polygon(seed: u64, scale: f32, margin: f32) -> Vec<(f32, f32)> {
     let mut rng = PaperRng(seed);
-    let lo = 3.8 * scale;
-    let hi = (INTAKE_PAPER_SIZE as f32 - 3.8) * scale;
+    let lo = margin * scale;
+    let hi = (INTAKE_PAPER_SIZE as f32 - margin) * scale;
     let mut points = Vec::new();
     for x in edge_positions(&mut rng, lo, hi, scale) {
         points.push((x, lo + paper_jitter(&mut rng, scale)));
@@ -685,6 +698,25 @@ mod tests {
         let first = intake_paper_variants(&img, intake_paper_spec(1, 1, 0));
         let second = intake_paper_variants(&img, intake_paper_spec(1, 2, 0));
         assert_ne!(first.neutral, second.neutral);
+    }
+
+    #[test]
+    fn intake_paper_keeps_opaque_edges_inside_canvas_at_max_tilt() {
+        let img = RgbaImage::from_pixel(120, 80, Rgba([12, 40, 90, 255]));
+        for edge_seed in 0..8 {
+            for degrees in [-9.0, 9.0] {
+                let variants = intake_paper_variants(&img, IntakePaperSpec { degrees, edge_seed });
+                for rendered in [&variants.neutral, &variants.working] {
+                    let last = rendered.width() - 1;
+                    assert!((0..rendered.width()).all(|position| {
+                        rendered.get_pixel(position, 0).0[3] < 128
+                            && rendered.get_pixel(position, last).0[3] < 128
+                            && rendered.get_pixel(0, position).0[3] < 128
+                            && rendered.get_pixel(last, position).0[3] < 128
+                    }));
+                }
+            }
+        }
     }
 
     #[test]

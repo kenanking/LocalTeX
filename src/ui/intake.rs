@@ -473,7 +473,7 @@ fn complete_spark(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
         .absolute()
         .size(px(6.))
         .rounded_full()
-        .bg(rgb(if index % 2 == 0 {
+        .bg(rgb(if index.is_multiple_of(2) {
             theme::ACCENT
         } else {
             theme::OK
