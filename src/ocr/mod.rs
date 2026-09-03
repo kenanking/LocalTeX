@@ -23,6 +23,99 @@ use pipeline::{Pipeline, OPENDOC_FILES};
 
 pub use pipeline::OcrResult;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelManifestState {
+    Loaded,
+    Missing,
+    Invalid,
+}
+
+impl ModelManifestState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Loaded => "Loaded",
+            Self::Missing => "Missing",
+            Self::Invalid => "Invalid",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    dir: PathBuf,
+    opendoc_pack: Option<String>,
+    handwriting_pack: Option<String>,
+    manifest: ModelManifestState,
+    opendoc_available: bool,
+    handwriting_available: bool,
+}
+
+impl ModelInfo {
+    fn read(dir: PathBuf) -> Self {
+        let opendoc_available = pack_present(&opendoc_dir(&dir), &OPENDOC_FILES);
+        let handwriting_available = pack_present(&handwriting_dir(&dir), &INK_FILES);
+        let (manifest, opendoc_pack, handwriting_pack) =
+            match std::fs::read(dir.join("manifest.json")) {
+                Ok(raw) => match serde_json::from_slice::<serde_json::Value>(&raw) {
+                    Ok(value) => {
+                        let packs = value.get("packs");
+                        let opendoc = packs
+                            .and_then(|value| value.get("opendoc"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned);
+                        let handwriting = packs
+                            .and_then(|value| value.get("handwriting"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned);
+                        let state = if opendoc.is_some() && handwriting.is_some() {
+                            ModelManifestState::Loaded
+                        } else {
+                            ModelManifestState::Invalid
+                        };
+                        (state, opendoc, handwriting)
+                    }
+                    Err(_) => (ModelManifestState::Invalid, None, None),
+                },
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    (ModelManifestState::Missing, None, None)
+                }
+                Err(_) => (ModelManifestState::Invalid, None, None),
+            };
+        Self {
+            dir,
+            opendoc_pack,
+            handwriting_pack,
+            manifest,
+            opendoc_available,
+            handwriting_available,
+        }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn opendoc_pack(&self) -> Option<&str> {
+        self.opendoc_pack.as_deref()
+    }
+
+    pub fn handwriting_pack(&self) -> Option<&str> {
+        self.handwriting_pack.as_deref()
+    }
+
+    pub fn manifest(&self) -> ModelManifestState {
+        self.manifest
+    }
+
+    pub fn opendoc_available(&self) -> bool {
+        self.opendoc_available
+    }
+
+    pub fn handwriting_available(&self) -> bool {
+        self.handwriting_available
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum EngineStatus {
     Ready,
@@ -48,6 +141,7 @@ struct Sessions {
 /// OpenDoc and inktex sessions load on first use.
 pub struct Engine {
     dir: PathBuf,
+    model_info: ModelInfo,
     inner: Mutex<Sessions>,
     opendoc_ok: bool,
     ink_ok: bool,
@@ -57,8 +151,9 @@ pub struct Engine {
 impl Engine {
     pub fn load() -> Arc<Self> {
         let dir = models_dir();
-        let opendoc_ok = pack_present(&opendoc_dir(&dir), &OPENDOC_FILES);
-        let ink_ok = pack_present(&handwriting_dir(&dir), &INK_FILES);
+        let model_info = ModelInfo::read(dir.clone());
+        let opendoc_ok = model_info.opendoc_available();
+        let ink_ok = model_info.handwriting_available();
         if opendoc_ok {
             eprintln!(
                 "{APP_SLUG}: OpenDoc weights deferred until first snip ({})",
@@ -83,6 +178,7 @@ impl Engine {
         }
         Arc::new(Self {
             dir,
+            model_info,
             inner: Mutex::new(Sessions {
                 page: None,
                 ink: None,
@@ -101,6 +197,10 @@ impl Engine {
                 dir: self.dir.clone(),
             }
         }
+    }
+
+    pub fn model_info(&self) -> &ModelInfo {
+        &self.model_info
     }
 
     pub fn recognize(&self, image: &RgbaImage) -> Result<OcrResult> {
@@ -419,8 +519,10 @@ mod tests {
 
     #[test]
     fn missing_weights_are_an_error() {
+        let dir = PathBuf::from("/no/such/localtex-models");
         let engine = Engine {
-            dir: PathBuf::from("/no/such/localtex-models"),
+            model_info: ModelInfo::read(dir.clone()),
+            dir,
             inner: Mutex::new(Sessions {
                 page: None,
                 ink: None,
@@ -437,6 +539,24 @@ mod tests {
         assert!(engine.recognize(&img).is_err());
         let traces = vec![vec![[0.0, 0.0, 0.0], [1.0, 0.0, 1.0]]];
         assert!(engine.recognize_ink(&traces, (8, 8)).is_err());
+    }
+
+    #[test]
+    fn model_info_reads_pack_versions_without_loading_sessions() {
+        let dir = std::env::temp_dir().join(format!("localtex-model-info-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.json"),
+            br#"{"packs":{"opendoc":"open-v2","handwriting":"ink-v1"}}"#,
+        )
+        .unwrap();
+
+        let info = ModelInfo::read(dir);
+        assert_eq!(info.manifest(), ModelManifestState::Loaded);
+        assert_eq!(info.opendoc_pack(), Some("open-v2"));
+        assert_eq!(info.handwriting_pack(), Some("ink-v1"));
+        assert!(!info.opendoc_available());
+        assert!(!info.handwriting_available());
     }
 
     #[test]

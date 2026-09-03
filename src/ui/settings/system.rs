@@ -2,10 +2,15 @@ use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Entity, PromptLevel, 
 
 use super::super::theme;
 use super::super::widgets::{btn, setting_row, settings_group, Tooltip};
+use crate::ocr::{ModelInfo, ModelManifestState};
 use crate::state::AppState;
 use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
 
-pub(super) fn system_page(state: Entity<AppState>, snap: &SysSnapshot) -> impl IntoElement {
+pub(super) fn system_page(
+    state: Entity<AppState>,
+    snap: &SysSnapshot,
+    models: &ModelInfo,
+) -> impl IntoElement {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
         _ => "—".into(),
@@ -73,6 +78,7 @@ pub(super) fn system_page(state: Entity<AppState>, snap: &SysSnapshot) -> impl I
             "This machine",
             vec![panel.into_any_element()],
         ))
+        .child(settings_group("OCR models", model_rows(models)))
         .child(settings_group(
             "Library",
             vec![setting_row(
@@ -102,6 +108,53 @@ pub(super) fn system_page(state: Entity<AppState>, snap: &SysSnapshot) -> impl I
             )
             .into_any_element()],
         ))
+}
+
+fn model_rows(models: &ModelInfo) -> Vec<AnyElement> {
+    let opendoc = models.opendoc_pack().unwrap_or("Version unavailable");
+    let handwriting = models.handwriting_pack().unwrap_or("Version unavailable");
+    let manifest_color = match models.manifest() {
+        ModelManifestState::Loaded => theme::OK,
+        ModelManifestState::Missing => theme::WARN,
+        ModelManifestState::Invalid => theme::DANGER,
+    };
+    vec![
+        setting_row(
+            "OpenDoc",
+            opendoc.to_string(),
+            model_status(models.opendoc_available()),
+        )
+        .into_any_element(),
+        setting_row(
+            "Handwriting",
+            handwriting.to_string(),
+            model_status(models.handwriting_available()),
+        )
+        .into_any_element(),
+        setting_row(
+            "Manifest",
+            models.dir().display().to_string(),
+            status_text(models.manifest().label(), manifest_color),
+        )
+        .into_any_element(),
+    ]
+}
+
+fn model_status(available: bool) -> AnyElement {
+    if available {
+        status_text("Ready", theme::OK)
+    } else {
+        status_text("Missing", theme::DANGER)
+    }
+}
+
+fn status_text(label: &'static str, color: u32) -> AnyElement {
+    div()
+        .text_xs()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(rgb(color))
+        .child(label)
+        .into_any_element()
 }
 
 const STAT_LABEL_W: f32 = 64.0;

@@ -148,6 +148,7 @@ impl SettingsPane {
         }
 
         let prefs = state.read(cx).prefs.clone();
+        let model_info = state.read(cx).model_info().clone();
         let tab = self.tab;
         let listen = self.listen;
         let entity = cx.entity();
@@ -251,7 +252,11 @@ impl SettingsPane {
                                         ))
                                     })
                                     .when(tab == SettingsTab::System, |d| {
-                                        d.child(system_page(state.clone(), &self.sys_snap))
+                                        d.child(system_page(
+                                            state.clone(),
+                                            &self.sys_snap,
+                                            &model_info,
+                                        ))
                                     }),
                             ),
                     )

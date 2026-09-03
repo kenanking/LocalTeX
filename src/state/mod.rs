@@ -313,6 +313,10 @@ impl AppState {
         self.engine.status()
     }
 
+    pub fn model_info(&self) -> &crate::ocr::ModelInfo {
+        self.engine.model_info()
+    }
+
     fn schedule_engine_release(&mut self, cx: &mut Context<Self>) {
         let engine = self.engine.clone();
         let generation = engine.usage_generation();
