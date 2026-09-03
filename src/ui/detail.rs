@@ -21,6 +21,12 @@ use crate::keymap::{self, ShortcutId};
 use crate::preview::DerivedCopyRow;
 use crate::state::AppState;
 
+const PREVIEW_BORDER: f32 = 1.0;
+const PREVIEW_SCROLL_PAD_X: f32 = 16.0;
+const FRAME_GUTTER_X: f32 = 16.0;
+const SOURCE_PANEL_MIN_W: f32 = 140.0;
+const SOURCE_SPLITTER_W: f32 = 7.0;
+
 impl MainWindow {
     pub(crate) fn render_detail(
         &mut self,
@@ -50,6 +56,7 @@ impl MainWindow {
                 image_missing: matches!(doc.image, ImageSlot::Missing),
                 show_original: state.prefs.show_original,
                 orig_strip_h: state.prefs.orig_strip_h,
+                reading_cap: state.prefs.reading_width.cap_px(),
                 revision: doc.revision,
                 ready: matches!(doc.status, DocStatus::Ready),
             }
@@ -68,7 +75,14 @@ impl MainWindow {
         let full = self.full(snap.id);
         let doc_id = snap.id;
         self.preview.reset_for(doc_id);
-        let preview = self.preview_element(doc_id, &snap.status, cx);
+        let source_open = self.source_panel.open;
+        let preview_w = preview_column_width(
+            copy_pane_w,
+            source_open,
+            self.source_panel.split,
+            snap.reading_cap,
+        );
+        let preview = self.preview_element(doc_id, &snap.status, preview_w, cx);
         let copied = self.copied.filter(|(id, _)| *id == doc_id);
         let orig_hover = self.orig.strip_hover;
         let image_missing = snap.image_missing;
@@ -79,7 +93,6 @@ impl MainWindow {
                 .selected_doc()
                 .is_some_and(|d| d.is_edited());
         let ocr = snap.ocr;
-        let source_open = self.source_panel.open;
         let lang = self.source_panel.lang;
         let edited = self
             .state
@@ -292,7 +305,7 @@ impl MainWindow {
         self.source_panel
             .editor
             .update(cx, |ed, cx| ed.set_content_font(font, cx));
-        let src_w = (pane_w * self.source_panel.split).max(140.0);
+        let src_w = (pane_w * self.source_panel.split).max(SOURCE_PANEL_MIN_W);
         div()
             .id("source-panel")
             .relative()
@@ -400,7 +413,7 @@ impl MainWindow {
         div()
             .id("source-split")
             .relative()
-            .w(px(7.))
+            .w(px(SOURCE_SPLITTER_W))
             .min_h_0()
             .cursor(CursorStyle::ResizeLeftRight)
             .on_mouse_down(
@@ -502,8 +515,25 @@ struct DetailSnap {
     image_missing: bool,
     show_original: bool,
     orig_strip_h: f32,
+    reading_cap: f32,
     revision: u64,
     ready: bool,
+}
+
+fn preview_column_width(
+    copy_pane_w: f32,
+    source_open: bool,
+    source_split: f32,
+    reading_cap: f32,
+) -> f32 {
+    let frame_w = if source_open {
+        let source_w = (copy_pane_w * source_split).max(SOURCE_PANEL_MIN_W);
+        copy_pane_w - FRAME_GUTTER_X - source_w - SOURCE_SPLITTER_W - FRAME_GUTTER_X
+    } else {
+        copy_pane_w - 2.0 * FRAME_GUTTER_X
+    };
+    let chrome_w = 2.0 * (PREVIEW_BORDER + PREVIEW_SCROLL_PAD_X);
+    (frame_w - chrome_w).min(reading_cap).max(1.0)
 }
 
 fn empty_state(
@@ -568,4 +598,28 @@ fn empty_state(
                 ))
                 .child(kbd_chip("Ctrl+V")),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_column_width;
+
+    #[test]
+    fn preview_column_uses_current_frame_and_reading_cap() {
+        assert_eq!(preview_column_width(500.0, false, 0.5, 720.0), 434.0);
+        assert_eq!(preview_column_width(900.0, false, 0.5, 720.0), 720.0);
+    }
+
+    #[test]
+    fn preview_column_accounts_for_source_split() {
+        assert_eq!(preview_column_width(800.0, true, 0.5, 720.0), 327.0);
+        assert_eq!(preview_column_width(300.0, true, 0.28, 720.0), 87.0);
+    }
+
+    #[test]
+    fn preview_column_stays_positive_in_a_narrow_frame() {
+        let width = preview_column_width(112.0, true, 0.72, 576.0);
+        assert_eq!(width, 1.0);
+        assert!(width.is_finite());
+    }
 }

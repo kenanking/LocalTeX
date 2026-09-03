@@ -31,6 +31,7 @@ impl MainWindow {
         &mut self,
         doc_id: Uuid,
         status: &DocStatus,
+        pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity_id();
@@ -108,7 +109,7 @@ impl MainWindow {
         self.preview.sel.borrow_mut().set_flow(flow);
 
         for (i, block) in blocks.iter().enumerate() {
-            col = col.child(self.render_preview_block(i, block, view, font, cx));
+            col = col.child(self.render_preview_block(i, block, view, pane_w, font, cx));
         }
         col.into_any_element()
     }
@@ -118,6 +119,7 @@ impl MainWindow {
         i: usize,
         block: &PreviewBlock,
         view: EntityId,
+        pane_w: f32,
         font: ContentFontSize,
         cx: &mut App,
     ) -> impl IntoElement {
@@ -171,7 +173,7 @@ impl MainWindow {
                 .child(self.render_segs(format!("p-{i}"), segs, false, font, cx))
                 .into_any(),
             PreviewBlock::Display { math, eqno } => {
-                self.render_display_math(i, math, eqno.as_ref(), view, font, cx)
+                self.render_display_math(i, math, eqno.as_ref(), view, pane_w, font, cx)
             }
             PreviewBlock::Table(layout) => {
                 let handle = self.preview.hscroll_handle(&format!("tbl-{i}"));
@@ -213,17 +215,13 @@ impl MainWindow {
         math: &SvgMath,
         eqno: Option<&Eqno>,
         view: EntityId,
+        pane_w: f32,
         font: ContentFontSize,
         cx: &mut App,
     ) -> AnyElement {
         let handle = self.preview.hscroll_handle(&format!("d-{i}"));
-        let measured: f32 = handle.bounds().size.width.into();
-        if measured > 1.0 {
-            self.preview.pane_w = measured;
-        }
-        let view_w = self.preview.pane_w;
         let tag_w = eqno.map(Eqno::width).unwrap_or(0.0);
-        let trailing = eqno.is_some() && eqno_should_trail(math.width, tag_w, view_w);
+        let trailing = eqno.is_some() && eqno_should_trail(math.width, tag_w, pane_w);
 
         if trailing {
             let eqno = eqno.expect("trailing requires eqno");
@@ -271,7 +269,7 @@ impl MainWindow {
                 },
                 math.width,
                 math.height,
-                hscroll_should_center(math.width, view_w),
+                hscroll_should_center(math.width, pane_w),
                 img,
             )
         };
