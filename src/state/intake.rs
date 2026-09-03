@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
@@ -83,7 +84,7 @@ impl IntakeBatch {
     }
 
     pub fn is_accepting(&self) -> bool {
-        !self.items.is_empty()
+        !self.items.is_empty() && !self.all_terminal()
     }
 
     pub fn counts(&self) -> IntakeCounts {
@@ -93,41 +94,20 @@ impl IntakeBatch {
         }
     }
 
-    pub fn progress(&self) -> (usize, usize) {
-        let done = self
-            .items
-            .iter()
-            .filter(|item| item.work.is_terminal())
-            .count();
-        (done, self.items.len())
-    }
-
-    pub fn results(&self) -> (usize, usize) {
-        let succeeded = self
-            .items
-            .iter()
-            .filter(|item| item.work == IntakeWork::Succeeded)
-            .count();
-        let failed = self
-            .items
-            .iter()
-            .filter(|item| item.work == IntakeWork::Failed)
-            .count();
-        (succeeded, failed)
-    }
-
     pub fn all_terminal(&self) -> bool {
         !self.items.is_empty() && self.items.iter().all(|item| item.work.is_terminal())
     }
 
     pub fn extend(&mut self, paths: Vec<PathBuf>, skipped: usize) {
         self.skipped = self.skipped.saturating_add(skipped);
+        let mut active: HashSet<_> = self
+            .items
+            .iter()
+            .filter(|item| !item.work.is_terminal())
+            .map(|item| item.path.clone())
+            .collect();
         for path in paths {
-            let already = self
-                .items
-                .iter()
-                .any(|item| item.path == path && !item.work.is_terminal());
-            if already {
+            if !active.insert(path.clone()) {
                 continue;
             }
             let key = self.next_item_key;
@@ -263,6 +243,14 @@ mod tests {
         assert!(batch.finish_id(Uuid::nil(), true));
         assert!(!batch.finish_id(Uuid::nil(), false));
         assert!(batch.all_terminal());
-        assert_eq!(batch.results(), (1, 0));
+        assert_eq!(batch.items[0].work, IntakeWork::Succeeded);
+    }
+
+    #[test]
+    fn completed_batch_stops_accepting_new_files() {
+        let mut batch = IntakeBatch::from_paths(vec![PathBuf::from("a.png")], 0, 3);
+        assert!(batch.is_accepting());
+        assert!(batch.finish_key(1, true));
+        assert!(!batch.is_accepting());
     }
 }

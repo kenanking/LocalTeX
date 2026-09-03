@@ -19,9 +19,9 @@ const REEL_H: f32 = 118.0;
 const CARD_SIZE: f32 = 82.0;
 const PROGRESS_W: f32 = 330.0;
 pub(crate) const INTAKE_REJECT_HOLD: Duration = Duration::from_millis(700);
-pub(crate) const INTAKE_RESULT_HOLD: Duration = Duration::from_millis(480);
-pub(crate) const INTAKE_LEAVE: Duration = Duration::from_millis(260);
-pub(crate) const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(1_500);
+pub(crate) const INTAKE_FEEDBACK_OUT: Duration = Duration::from_millis(160);
+pub(crate) const INTAKE_COMPLETE_EFFECT: Duration = Duration::from_millis(360);
+pub(crate) const INTAKE_COMPLETE_HOLD: Duration = Duration::from_millis(550);
 pub(crate) const INTAKE_PLATEN_OUT: Duration = Duration::from_millis(280);
 const INTAKE_WINDOW: usize = 5;
 
@@ -36,7 +36,6 @@ pub(crate) enum IntakeVisual {
     Backlog,
     Visible,
     Feedback,
-    Leaving,
     Gone,
 }
 
@@ -65,10 +64,19 @@ pub(crate) struct IntakePresentation {
     done: usize,
     succeeded: usize,
     failed: usize,
+    slots: [Option<usize>; INTAKE_WINDOW],
+    backlog: usize,
+    next_backlog: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct IntakeSync {
+    pub feedback: Vec<u64>,
+    pub complete: bool,
 }
 
 impl IntakePresentation {
-    pub fn new(batch: &IntakeBatch) -> (Self, Vec<u64>) {
+    pub fn new(batch: &IntakeBatch) -> (Self, IntakeSync) {
         let mut presentation = Self {
             gen: batch.gen,
             counts: batch.counts(),
@@ -77,108 +85,119 @@ impl IntakePresentation {
             done: 0,
             succeeded: 0,
             failed: 0,
+            slots: [None; INTAKE_WINDOW],
+            backlog: 0,
+            next_backlog: 0,
         };
         let feedback = presentation.sync(batch);
         (presentation, feedback)
     }
 
-    pub fn sync(&mut self, batch: &IntakeBatch) -> Vec<u64> {
+    pub fn sync(&mut self, batch: &IntakeBatch) -> IntakeSync {
         debug_assert_eq!(self.gen, batch.gen);
         self.counts = batch.counts();
-        let (done, total) = batch.progress();
-        let (succeeded, failed) = batch.results();
-        self.done = done;
-        self.counts.images = total;
-        self.succeeded = succeeded;
-        self.failed = failed;
+        self.done = 0;
+        self.succeeded = 0;
+        self.failed = 0;
 
         let mut feedback = Vec::new();
-        for item in &batch.items {
-            if let Some(card) = self.cards.iter_mut().find(|card| card.key == item.key) {
+        for (index, item) in batch.items.iter().enumerate() {
+            if let Some(card) = self.cards.get_mut(index) {
+                debug_assert_eq!(card.key, item.key);
                 let became_terminal = !card.work.is_terminal() && item.work.is_terminal();
                 card.id = item.id;
                 card.work = item.work;
                 if became_terminal && card.visual == IntakeVisual::Visible {
                     card.visual = IntakeVisual::Feedback;
                     feedback.push(card.key);
+                } else if became_terminal && card.visual == IntakeVisual::Backlog {
+                    card.visual = IntakeVisual::Gone;
+                    self.backlog = self.backlog.saturating_sub(1);
                 }
-                continue;
+            } else {
+                let slot = self.first_vacant_slot();
+                let visual = match (slot, item.work.is_terminal()) {
+                    (Some(_), true) => IntakeVisual::Feedback,
+                    (Some(_), false) => IntakeVisual::Visible,
+                    (None, true) => IntakeVisual::Gone,
+                    (None, false) => IntakeVisual::Backlog,
+                };
+                self.cards.push(IntakeCard {
+                    key: item.key,
+                    id: item.id,
+                    work: item.work,
+                    visual,
+                    slot,
+                });
+                let card_index = self.cards.len() - 1;
+                if let Some(slot) = slot {
+                    self.slots[slot] = Some(card_index);
+                } else if visual == IntakeVisual::Backlog {
+                    self.backlog += 1;
+                }
+                if visual == IntakeVisual::Feedback {
+                    feedback.push(item.key);
+                }
             }
-            let slot = self.first_vacant_slot();
-            let visual = match (slot, item.work.is_terminal()) {
-                (Some(_), true) => IntakeVisual::Feedback,
-                (Some(_), false) => IntakeVisual::Visible,
-                (None, _) => IntakeVisual::Backlog,
-            };
-            self.cards.push(IntakeCard {
-                key: item.key,
-                id: item.id,
-                work: item.work,
-                visual,
-                slot,
-            });
-            if visual == IntakeVisual::Feedback {
-                feedback.push(item.key);
-            }
+
+            self.done += usize::from(item.work.is_terminal());
+            self.succeeded += usize::from(item.work == IntakeWork::Succeeded);
+            self.failed += usize::from(item.work == IntakeWork::Failed);
         }
-        feedback
+        let complete = batch.all_terminal() && self.phase == IntakePhase::Running;
+        if complete {
+            feedback.clear();
+        }
+        IntakeSync { feedback, complete }
     }
 
     fn first_vacant_slot(&self) -> Option<usize> {
-        (0..INTAKE_WINDOW).find(|slot| {
-            !self
-                .cards
-                .iter()
-                .any(|card| card.slot == Some(*slot) && card.visual != IntakeVisual::Gone)
-        })
+        self.slots.iter().position(Option::is_none)
     }
 
-    pub fn begin_leave(&mut self, key: u64) -> bool {
-        let Some(card) = self.cards.iter_mut().find(|card| card.key == key) else {
-            return false;
-        };
-        if card.visual != IntakeVisual::Feedback {
+    pub fn finish_feedback_and_promote(&mut self, key: u64) -> bool {
+        if self.phase != IntakePhase::Running {
             return false;
         }
-        card.visual = IntakeVisual::Leaving;
+        let Some(index) = key.checked_sub(1).map(|key| key as usize) else {
+            return false;
+        };
+        let slot = {
+            let Some(card) = self.cards.get_mut(index) else {
+                return false;
+            };
+            if card.key != key || card.visual != IntakeVisual::Feedback {
+                return false;
+            }
+            card.visual = IntakeVisual::Gone;
+            let Some(slot) = card.slot.take() else {
+                return false;
+            };
+            self.slots[slot] = None;
+            slot
+        };
+        while self.next_backlog < self.cards.len() {
+            let replacement_index = self.next_backlog;
+            self.next_backlog += 1;
+            let replacement = &mut self.cards[replacement_index];
+            if replacement.visual != IntakeVisual::Backlog {
+                continue;
+            }
+            self.backlog = self.backlog.saturating_sub(1);
+            if replacement.work.is_terminal() {
+                replacement.visual = IntakeVisual::Gone;
+                continue;
+            }
+            replacement.slot = Some(slot);
+            replacement.visual = IntakeVisual::Visible;
+            self.slots[slot] = Some(replacement_index);
+            break;
+        }
         true
     }
 
-    pub fn mark_gone_and_promote(&mut self, key: u64) -> Option<u64> {
-        let slot = {
-            let card = self.cards.iter_mut().find(|card| card.key == key)?;
-            if card.visual != IntakeVisual::Leaving {
-                return None;
-            }
-            card.visual = IntakeVisual::Gone;
-            card.slot.take()?
-        };
-        let replacement = self
-            .cards
-            .iter_mut()
-            .find(|card| card.visual == IntakeVisual::Backlog)?;
-        replacement.slot = Some(slot);
-        replacement.visual = if replacement.work.is_terminal() {
-            IntakeVisual::Feedback
-        } else {
-            IntakeVisual::Visible
-        };
-        (replacement.visual == IntakeVisual::Feedback).then_some(replacement.key)
-    }
-
-    pub fn all_gone(&self) -> bool {
-        !self.cards.is_empty()
-            && self
-                .cards
-                .iter()
-                .all(|card| card.visual == IntakeVisual::Gone)
-    }
-
     pub fn backlog_count(&self) -> usize {
-        self.cards
-            .iter()
-            .filter(|card| card.visual == IntakeVisual::Backlog)
-            .count()
+        self.backlog
     }
 
     pub fn progress(&self) -> (usize, usize) {
@@ -213,12 +232,6 @@ impl IntakePresentation {
         )
     }
 
-    pub fn thumb_ids(&self) -> Vec<uuid::Uuid> {
-        self.visible_cards()
-            .filter_map(|(_, card)| card.id)
-            .collect()
-    }
-
     pub fn paper_jobs(&self) -> Vec<(uuid::Uuid, IntakePaperSpec)> {
         self.visible_cards()
             .filter_map(|(slot, card)| {
@@ -229,14 +242,10 @@ impl IntakePresentation {
     }
 
     fn visible_cards(&self) -> impl Iterator<Item = (usize, &IntakeCard)> {
-        let mut visible: Vec<_> = self
-            .cards
+        self.slots
             .iter()
-            .filter(|card| card.visual != IntakeVisual::Gone)
-            .filter_map(|card| card.slot.map(|slot| (slot, card)))
-            .collect();
-        visible.sort_by_key(|(slot, _)| *slot);
-        visible.into_iter()
+            .enumerate()
+            .filter_map(|(slot, index)| index.map(|index| (slot, &self.cards[index])))
     }
 }
 
@@ -266,7 +275,7 @@ pub(crate) struct IntakeSlot {
 
 pub(crate) fn slots_from_batch(
     batch: &IntakePresentation,
-    thumbs: impl Fn(uuid::Uuid, bool) -> Option<Arc<RenderImage>>,
+    thumbs: impl Fn(uuid::Uuid) -> Option<Arc<RenderImage>>,
 ) -> Vec<IntakeSlot> {
     batch
         .visible_cards()
@@ -276,9 +285,7 @@ pub(crate) fn slots_from_batch(
                 key: SharedString::from(item.key.to_string()),
                 work: item.work,
                 visual: item.visual,
-                thumb: item
-                    .id
-                    .and_then(|id| thumbs(id, item.work == IntakeWork::Working)),
+                thumb: item.id.and_then(&thumbs),
                 slot,
                 degrees: paper.degrees,
             }
@@ -343,6 +350,10 @@ pub(crate) fn render_intake_overlay(
                 )
         });
     let complete_view = complete.then(|| render_complete(batch.expect("complete batch exists")));
+    let animation_key = batch.map_or_else(
+        || SharedString::from("intake-platen-hover"),
+        |batch| SharedString::from(format!("intake-platen-{}-{:?}", batch.gen, batch.phase)),
+    );
     let platen = div()
         .id("intake-platen")
         .w_full()
@@ -379,14 +390,19 @@ pub(crate) fn render_intake_overlay(
                 .children(complete_view),
         )
         .with_animation(
-            if fading {
-                "intake-platen-out"
+            animation_key,
+            Animation::new(if fading {
+                INTAKE_PLATEN_OUT
+            } else if complete {
+                INTAKE_COMPLETE_EFFECT
             } else {
-                "intake-platen-in"
+                Duration::from_millis(180)
+            })
+            .with_easing(ease_out_quint()),
+            move |this, delta| {
+                let opacity = if fading { 1.0 - delta } else { delta.min(1.0) };
+                this.opacity(opacity)
             },
-            Animation::new(Duration::from_millis(if fading { 280 } else { 180 }))
-                .with_easing(ease_out_quint()),
-            move |this, delta| this.opacity(if fading { 1.0 - delta } else { delta }),
         );
 
     div()
@@ -445,19 +461,19 @@ fn render_slot(slot: &IntakeSlot, center_offset: f32) -> AnyElement {
     let waiting = slot.work == IntakeWork::Waiting;
     let working = slot.work == IntakeWork::Working;
     let failed = slot.work == IntakeWork::Failed;
-    let leaving = slot.visual == IntakeVisual::Leaving;
+    let feedback = slot.visual == IntakeVisual::Feedback;
     let thumb = slot.thumb.clone();
     let left = REEL_W * 0.5 + pose.dx + center_offset - CARD_SIZE * 0.5;
     let top = REEL_H * 0.5 + pose.dy - CARD_SIZE * 0.5;
     let pane = render_thumb_pane(slot, thumb, working);
-    let inner = if leaving {
+    let inner = if feedback {
         div()
             .size_full()
             .child(pane)
             .with_animation(
-                SharedString::from(format!("intake-leave-{}", slot.key)),
-                Animation::new(Duration::from_millis(260)).with_easing(ease_out_quint()),
-                |this, delta| this.p(px(delta * 6.)).opacity(1.0 - delta),
+                SharedString::from(format!("intake-feedback-{}", slot.key)),
+                Animation::new(INTAKE_FEEDBACK_OUT).with_easing(ease_out_quint()),
+                |this, delta| this.p(px(delta * 5.)).opacity(1.0 - delta),
             )
             .into_any_element()
     } else {
@@ -490,6 +506,9 @@ fn render_thumb_pane(
     let pane = div()
         .relative()
         .size_full()
+        .when(thumb.is_none(), |d| {
+            d.child(img("icons/intake-paper.svg").size_full())
+        })
         .when_some(thumb, |d, img_data| {
             d.child(
                 img(img_data)
@@ -500,7 +519,9 @@ fn render_thumb_pane(
     if working {
         pane.with_animation(
             SharedString::from(format!("intake-glow-{}", slot.key)),
-            Animation::new(Duration::from_millis(1_050)).repeat(),
+            Animation::new(Duration::from_millis(1_050))
+                .repeat_synced()
+                .with_max_fps(30.0),
             |this, delta| {
                 let wave = (delta - 0.5).abs() * 2.0;
                 this.opacity(0.72 + 0.28 * wave)
@@ -513,16 +534,13 @@ fn render_thumb_pane(
 }
 
 fn render_slot_check(slot: &IntakeSlot, center_offset: f32) -> Option<AnyElement> {
-    if slot.work != IntakeWork::Succeeded
-        || !matches!(slot.visual, IntakeVisual::Feedback | IntakeVisual::Leaving)
-    {
+    if slot.work != IntakeWork::Succeeded || slot.visual != IntakeVisual::Feedback {
         return None;
     }
     let pose = intake_pose(slot.slot);
     let (check_dx, check_dy) = rotated_check_offset(slot.degrees);
     let left = REEL_W * 0.5 + pose.dx + center_offset + check_dx - 13.0;
     let top = REEL_H * 0.5 + pose.dy + check_dy - 13.0;
-    let leaving = slot.visual == IntakeVisual::Leaving;
     Some(
         div()
             .absolute()
@@ -545,14 +563,16 @@ fn render_slot_check(slot: &IntakeSlot, center_offset: f32) -> Option<AnyElement
                     .text_color(rgb(theme::ON_ACCENT)),
             )
             .with_animation(
-                SharedString::from(format!(
-                    "intake-check-{}-{}",
-                    if leaving { "leave" } else { "show" },
-                    slot.key
-                )),
-                Animation::new(Duration::from_millis(if leaving { 260 } else { 340 }))
-                    .with_easing(ease_out_quint()),
-                move |this, delta| this.opacity(if leaving { 1.0 - delta } else { delta }),
+                SharedString::from(format!("intake-check-{}", slot.key)),
+                Animation::new(INTAKE_FEEDBACK_OUT).with_easing(ease_out_quint()),
+                |this, delta| {
+                    let opacity = if delta < 0.35 {
+                        delta / 0.35
+                    } else {
+                        1.0 - (delta - 0.35) / 0.65
+                    };
+                    this.opacity(opacity)
+                },
             )
             .into_any_element(),
     )
@@ -655,7 +675,7 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
                 )
                 .with_animation(
                     SharedString::from(format!("intake-complete-mark-{gen}")),
-                    Animation::new(Duration::from_millis(520)).with_easing(ease_out_quint()),
+                    Animation::new(INTAKE_COMPLETE_EFFECT).with_easing(ease_out_quint()),
                     |this, delta| this.opacity(delta),
                 ),
         )
@@ -680,7 +700,7 @@ fn complete_ring(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
         .border_color(rgb(0x79c990))
         .with_animation(
             SharedString::from(format!("intake-complete-ring-{gen}-{index}")),
-            Animation::new(Duration::from_millis(1_000)),
+            Animation::new(INTAKE_COMPLETE_EFFECT),
             move |this, delta| {
                 let delay = index as f32 * 0.14;
                 let local = ((delta - delay) / (1.0 - delay)).clamp(0.0, 1.0);
@@ -708,7 +728,7 @@ fn complete_spark(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
         }))
         .with_animation(
             SharedString::from(format!("intake-complete-spark-{gen}-{index}")),
-            Animation::new(Duration::from_millis(720)),
+            Animation::new(INTAKE_COMPLETE_EFFECT),
             move |this, delta| {
                 let delay = index as f32 * 0.035;
                 let local = ((delta - delay) / (1.0 - delay)).clamp(0.0, 1.0);
@@ -857,14 +877,13 @@ mod tests {
             .map(|index| PathBuf::from(format!("{index}.png")))
             .collect();
         let mut batch = IntakeBatch::from_paths(paths, 0, 4);
-        let (mut presentation, feedback) = IntakePresentation::new(&batch);
-        assert!(feedback.is_empty());
+        let (mut presentation, sync) = IntakePresentation::new(&batch);
+        assert!(sync.feedback.is_empty());
         assert_eq!(presentation.backlog_count(), 2);
 
         assert!(batch.finish_key(2, true));
-        assert_eq!(presentation.sync(&batch), vec![2]);
-        assert!(presentation.begin_leave(2));
-        assert_eq!(presentation.mark_gone_and_promote(2), None);
+        assert_eq!(presentation.sync(&batch).feedback, vec![2]);
+        assert!(presentation.finish_feedback_and_promote(2));
         let replacement = presentation
             .cards
             .iter()
@@ -875,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_backlog_card_shows_feedback_when_promoted() {
+    fn terminal_backlog_card_is_not_replayed_when_a_slot_opens() {
         let paths = (0..6)
             .map(|index| PathBuf::from(format!("{index}.png")))
             .collect();
@@ -883,9 +902,46 @@ mod tests {
         let (mut presentation, _) = IntakePresentation::new(&batch);
         assert!(batch.finish_key(6, true));
         assert!(batch.finish_key(1, true));
-        assert_eq!(presentation.sync(&batch), vec![1]);
-        assert!(presentation.begin_leave(1));
-        assert_eq!(presentation.mark_gone_and_promote(1), Some(6));
+        assert_eq!(presentation.sync(&batch).feedback, vec![1]);
+        assert!(presentation.finish_feedback_and_promote(1));
+        let terminal = presentation
+            .cards
+            .iter()
+            .find(|card| card.key == 6)
+            .expect("terminal backlog card exists");
+        assert_eq!(terminal.visual, IntakeVisual::Gone);
+        assert_eq!(terminal.slot, None);
+        assert_eq!(presentation.backlog_count(), 0);
+    }
+
+    #[test]
+    fn large_batch_sync_keeps_only_five_render_slots() {
+        let paths = (0..200)
+            .map(|index| PathBuf::from(format!("{index}.png")))
+            .collect();
+        let mut batch = IntakeBatch::from_paths(paths, 0, 8);
+        for key in 1..=5 {
+            batch.bind_item(key, uuid::Uuid::from_u128(key as u128));
+        }
+        let (presentation, sync) = IntakePresentation::new(&batch);
+        assert!(!sync.complete);
+        assert_eq!(presentation.visible_cards().count(), INTAKE_WINDOW);
+        assert_eq!(presentation.backlog_count(), 195);
+        assert_eq!(presentation.paper_jobs().len(), INTAKE_WINDOW);
+    }
+
+    #[test]
+    fn all_terminal_batch_fast_forwards_to_complete() {
+        let paths = (0..36)
+            .map(|index| PathBuf::from(format!("{index}.png")))
+            .collect();
+        let mut batch = IntakeBatch::from_paths(paths, 0, 8);
+        for key in 1..=36 {
+            assert!(batch.finish_key(key, true));
+        }
+        let (_, sync) = IntakePresentation::new(&batch);
+        assert!(sync.complete);
+        assert!(sync.feedback.is_empty());
     }
 
     #[test]

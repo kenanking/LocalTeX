@@ -1,17 +1,12 @@
 use image::{imageops, GrayImage, Luma, Rgba, RgbaImage};
 
 pub(crate) const INTAKE_PAPER_SIZE: u32 = 82;
-const INTAKE_PAPER_SCALE: u32 = 3;
+const INTAKE_PAPER_SCALE: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct IntakePaperSpec {
     pub degrees: f32,
     pub edge_seed: u64,
-}
-
-pub(crate) struct IntakePaperVariants {
-    pub neutral: RgbaImage,
-    pub working: RgbaImage,
 }
 
 pub(crate) fn intake_paper_spec(batch_gen: u64, item_key: u64, slot: usize) -> IntakePaperSpec {
@@ -29,23 +24,15 @@ pub(crate) fn intake_paper_spec(batch_gen: u64, item_key: u64, slot: usize) -> I
     }
 }
 
-pub(crate) fn intake_paper_variants(img: &RgbaImage, spec: IntakePaperSpec) -> IntakePaperVariants {
+pub(crate) fn intake_paper_image(img: &RgbaImage, spec: IntakePaperSpec) -> RgbaImage {
     let (base, polygon) = intake_paper_base(img, spec.edge_seed, spec.degrees);
-    let neutral = finish_intake_paper(
+    finish_intake_paper(
         &base,
         &polygon,
         spec.degrees,
         Rgba([201, 197, 188, 255]),
         0.9,
-    );
-    let working = finish_intake_paper(
-        &base,
-        &polygon,
-        spec.degrees,
-        Rgba([37, 99, 235, 255]),
-        1.05,
-    );
-    IntakePaperVariants { neutral, working }
+    )
 }
 
 fn intake_paper_base(img: &RgbaImage, seed: u64, degrees: f32) -> (RgbaImage, Vec<(f32, f32)>) {
@@ -199,15 +186,23 @@ fn point_in_polygon(points: &[(f32, f32)], x: f32, y: f32) -> bool {
 
 fn paint_polygon_stroke(image: &mut RgbaImage, points: &[(f32, f32)], width: f32, color: Rgba<u8>) {
     let radius_sq = (width * 0.5).powi(2);
-    for y in 0..image.height() {
-        for x in 0..image.width() {
-            let p = (x as f32 + 0.5, y as f32 + 0.5);
-            let on_edge = points.iter().enumerate().any(|(index, &a)| {
-                let b = points[(index + 1) % points.len()];
-                distance_to_segment_sq(p, a, b) <= radius_sq
-            });
-            if on_edge {
-                image.put_pixel(x, y, color);
+    let radius = width * 0.5;
+    for (index, &a) in points.iter().enumerate() {
+        let b = points[(index + 1) % points.len()];
+        let min_x = (a.0.min(b.0) - radius).floor().max(0.0) as u32;
+        let max_x = (a.0.max(b.0) + radius)
+            .ceil()
+            .min(image.width().saturating_sub(1) as f32) as u32;
+        let min_y = (a.1.min(b.1) - radius).floor().max(0.0) as u32;
+        let max_y = (a.1.max(b.1) + radius)
+            .ceil()
+            .min(image.height().saturating_sub(1) as f32) as u32;
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let p = (x as f32 + 0.5, y as f32 + 0.5);
+                if distance_to_segment_sq(p, a, b) <= radius_sq {
+                    image.put_pixel(x, y, color);
+                }
             }
         }
     }
@@ -322,21 +317,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn intake_paper_variants_are_stable_and_keep_matching_geometry() {
+    fn intake_paper_image_is_stable() {
         let img = RgbaImage::from_pixel(120, 80, Rgba([12, 40, 90, 255]));
         let spec = intake_paper_spec(4, 7, 2);
-        let first = intake_paper_variants(&img, spec);
-        let second = intake_paper_variants(&img, spec);
-        assert_eq!(
-            first.neutral.dimensions(),
-            (INTAKE_PAPER_SIZE, INTAKE_PAPER_SIZE)
-        );
-        assert_eq!(first.working.dimensions(), first.neutral.dimensions());
-        assert_eq!(first.neutral, second.neutral);
-        assert_ne!(first.neutral, first.working);
-        assert!(first.neutral.pixels().any(|pixel| pixel.0[3] == 0));
+        let first = intake_paper_image(&img, spec);
+        let second = intake_paper_image(&img, spec);
+        assert_eq!(first.dimensions(), (INTAKE_PAPER_SIZE, INTAKE_PAPER_SIZE));
+        assert_eq!(first, second);
+        assert!(first.pixels().any(|pixel| pixel.0[3] == 0));
         assert!(first
-            .neutral
             .pixels()
             .any(|pixel| pixel.0[0] > 245 && pixel.0[3] == 255));
     }
@@ -360,9 +349,9 @@ mod tests {
     #[test]
     fn intake_paper_edge_changes_with_seed() {
         let img = RgbaImage::from_pixel(120, 80, Rgba([12, 40, 90, 255]));
-        let first = intake_paper_variants(&img, intake_paper_spec(1, 1, 0));
-        let second = intake_paper_variants(&img, intake_paper_spec(1, 2, 0));
-        assert_ne!(first.neutral, second.neutral);
+        let first = intake_paper_image(&img, intake_paper_spec(1, 1, 0));
+        let second = intake_paper_image(&img, intake_paper_spec(1, 2, 0));
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -370,16 +359,14 @@ mod tests {
         let img = RgbaImage::from_pixel(120, 80, Rgba([12, 40, 90, 255]));
         for edge_seed in 0..8 {
             for degrees in [-9.0, 9.0] {
-                let variants = intake_paper_variants(&img, IntakePaperSpec { degrees, edge_seed });
-                for rendered in [&variants.neutral, &variants.working] {
-                    let last = rendered.width() - 1;
-                    assert!((0..rendered.width()).all(|position| {
-                        rendered.get_pixel(position, 0).0[3] < 128
-                            && rendered.get_pixel(position, last).0[3] < 128
-                            && rendered.get_pixel(0, position).0[3] < 128
-                            && rendered.get_pixel(last, position).0[3] < 128
-                    }));
-                }
+                let rendered = intake_paper_image(&img, IntakePaperSpec { degrees, edge_seed });
+                let last = rendered.width() - 1;
+                assert!((0..rendered.width()).all(|position| {
+                    rendered.get_pixel(position, 0).0[3] < 128
+                        && rendered.get_pixel(position, last).0[3] < 128
+                        && rendered.get_pixel(0, position).0[3] < 128
+                        && rendered.get_pixel(last, position).0[3] < 128
+                }));
             }
         }
     }

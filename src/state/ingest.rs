@@ -91,6 +91,13 @@ impl AppState {
     }
 
     pub(super) fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) -> Uuid {
+        let id = self.insert_pixels(image);
+        self.enqueue_ocr(id, cx);
+        cx.notify();
+        id
+    }
+
+    fn insert_pixels(&mut self, image: RgbaImage) -> Uuid {
         self.capture.set(Capture::Idle);
         let (w0, h0) = image.dimensions();
         let image = crate::imgutil::cap_megapixels(image);
@@ -104,8 +111,6 @@ impl AppState {
         let doc = Document::pending(Arc::new(image));
         let id = doc.id;
         self.library.insert_newest(doc);
-        self.enqueue_ocr(id, cx);
-        cx.notify();
         id
     }
 
@@ -152,10 +157,12 @@ impl AppState {
                 }
                 match decoded {
                     Ok(img) => {
-                        let id = this.ingest_pixels(img, cx);
+                        let id = this.insert_pixels(img);
                         if let Some(batch) = &mut this.intake {
                             batch.bind_item(key, id);
                         }
+                        this.enqueue_ocr(id, cx);
+                        cx.notify();
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: open image: {err}");

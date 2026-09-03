@@ -15,7 +15,7 @@ use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::intake::{
     render_intake_overlay, slots_from_batch, IntakeKind, IntakePhase, IntakePresentation,
-    INTAKE_COMPLETE_HOLD, INTAKE_LEAVE, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD, INTAKE_RESULT_HOLD,
+    INTAKE_COMPLETE_HOLD, INTAKE_FEEDBACK_OUT, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD,
 };
 use super::media::WindowMedia;
 use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
@@ -117,7 +117,7 @@ pub struct MainWindow {
     pub(crate) history: HistoryPane,
     pub(crate) source_panel: SourceBinding,
     drop_hover: Option<IntakeCounts>,
-    intake: Option<IntakePresentation>,
+    pub(crate) intake: Option<IntakePresentation>,
 }
 
 impl MainWindow {
@@ -136,8 +136,10 @@ impl MainWindow {
         });
         cx.observe(&state, |this, _, cx| {
             this.sync_intake(cx);
-            this.ensure_selected_full(cx);
-            this.schedule_derived_from_app(cx);
+            if this.intake.is_none() {
+                this.ensure_selected_full(cx);
+                this.schedule_derived_from_app(cx);
+            }
             this.schedule_media_gc(cx);
             if this.orig.open && this.state.read(cx).selected().is_none() {
                 this.orig.close();
@@ -204,7 +206,9 @@ impl MainWindow {
             intake: None,
         };
         this.sync_intake(cx);
-        this.schedule_derived(window, cx);
+        if this.intake.is_none() {
+            this.schedule_derived(window, cx);
+        }
         this
     }
 
@@ -277,10 +281,10 @@ impl MainWindow {
             .intake
             .as_ref()
             .is_none_or(|intake| intake.gen != batch.gen);
-        let feedback = if is_new {
-            let (presentation, feedback) = IntakePresentation::new(&batch);
+        let sync = if is_new {
+            let (presentation, sync) = IntakePresentation::new(&batch);
             self.intake = Some(presentation);
-            feedback
+            sync
         } else {
             self.intake
                 .as_mut()
@@ -291,14 +295,24 @@ impl MainWindow {
         if is_new && batch.items.is_empty() {
             self.schedule_intake_reject(batch.gen, cx);
         }
-        for key in feedback {
-            self.schedule_intake_feedback(batch.gen, key, cx);
+        if sync.complete {
+            if let Some(intake) = &mut self.intake {
+                intake.phase = IntakePhase::Complete;
+            }
+            self.acknowledge_intake(batch.gen, cx);
+            self.schedule_intake_complete(batch.gen, cx);
+        } else {
+            for key in sync.feedback {
+                self.schedule_intake_feedback(batch.gen, key, cx);
+            }
         }
 
+        self.refresh_intake_media(cx);
+    }
+
+    pub(crate) fn refresh_intake_media(&self, cx: &mut Context<Self>) {
         if let Some(intake) = &self.intake {
-            let ids = intake.thumb_ids();
             let paper_jobs = intake.paper_jobs();
-            self.ensure_thumbs(&ids, cx);
             self.ensure_intake_polaroids(&paper_jobs, cx);
         }
     }
@@ -333,6 +347,7 @@ impl MainWindow {
                     }) {
                         this.intake = None;
                         this.release_intake_polaroids(cx);
+                        this.resume_deferred_media(cx);
                         cx.notify();
                     }
                 });
@@ -342,35 +357,17 @@ impl MainWindow {
 
     fn schedule_intake_feedback(&mut self, gen: u64, key: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(INTAKE_RESULT_HOLD).await;
+            cx.background_executor().timer(INTAKE_FEEDBACK_OUT).await;
             let _ = this.update(cx, |this, cx| {
-                if this
+                let changed = this
                     .intake
                     .as_mut()
-                    .filter(|intake| intake.gen == gen)
-                    .is_some_and(|intake| intake.begin_leave(key))
-                {
+                    .filter(|intake| intake.gen == gen && intake.phase == IntakePhase::Running)
+                    .is_some_and(|intake| intake.finish_feedback_and_promote(key));
+                if changed {
+                    this.refresh_intake_media(cx);
                     cx.notify();
                 }
-            });
-            cx.background_executor().timer(INTAKE_LEAVE).await;
-            let _ = this.update(cx, |this, cx| {
-                let Some(intake) = this.intake.as_mut().filter(|intake| intake.gen == gen) else {
-                    return;
-                };
-                let promoted = intake.mark_gone_and_promote(key);
-                let complete = intake.all_gone();
-                if let Some(promoted) = promoted {
-                    this.schedule_intake_feedback(gen, promoted, cx);
-                }
-                if complete {
-                    if let Some(intake) = this.intake.as_mut() {
-                        intake.phase = IntakePhase::Complete;
-                    }
-                    this.acknowledge_intake(gen, cx);
-                    this.schedule_intake_complete(gen, cx);
-                }
-                cx.notify();
             });
         })
         .detach();
@@ -397,11 +394,18 @@ impl MainWindow {
                     }) {
                         this.intake = None;
                         this.release_intake_polaroids(cx);
+                        this.resume_deferred_media(cx);
                         cx.notify();
                     }
                 });
         })
         .detach();
+    }
+
+    fn resume_deferred_media(&mut self, cx: &mut Context<Self>) {
+        self.ensure_selected_full(cx);
+        self.schedule_derived_from_app(cx);
+        self.schedule_media_gc(cx);
     }
 
     fn start_draw(&mut self, _: &StartDraw, window: &mut Window, cx: &mut Context<Self>) {
@@ -738,16 +742,21 @@ impl gpui::Render for MainWindow {
         } else {
             None
         };
-        let presentation = self.intake.clone();
-        let intake = match (hover, presentation) {
-            (Some(counts), _) => Some((IntakeKind::Hover, counts, None, Vec::new())),
+        let intake = match (hover, self.intake.as_ref()) {
+            (Some(counts), _) => {
+                Some(render_intake_overlay(IntakeKind::Hover, counts, None, &[]).into_any_element())
+            }
             (None, Some(presentation)) => {
-                let slots = slots_from_batch(&presentation, |id, working| {
-                    self.intake_polaroid(id, working)
-                        .or_else(|| self.media.cache.borrow().thumb(id))
-                });
-                let counts = presentation.counts;
-                Some((IntakeKind::Flash, counts, Some(presentation), slots))
+                let slots = slots_from_batch(presentation, |id| self.intake_polaroid(id));
+                Some(
+                    render_intake_overlay(
+                        IntakeKind::Flash,
+                        presentation.counts,
+                        Some(presentation),
+                        &slots,
+                    )
+                    .into_any_element(),
+                )
             }
             (None, None) => None,
         };
@@ -851,9 +860,7 @@ impl gpui::Render for MainWindow {
                     }),
             )
             .child(self.render_footer(status_kind, status_label))
-            .when_some(intake, |d, (kind, counts, batch, slots)| {
-                d.child(render_intake_overlay(kind, counts, batch.as_ref(), &slots))
-            })
+            .when_some(intake, |d, overlay| d.child(overlay))
             .children(wipe_confirmation)
             .map(|content| super::chrome::client_frame(content, window))
     }
