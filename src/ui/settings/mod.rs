@@ -76,14 +76,16 @@ impl SettingsPane {
 
     pub fn set_listen(&mut self, id: Option<ShortcutId>) {
         self.listen = id;
+        crate::desktop::suspend_global_hotkeys(id.is_some());
     }
 
     pub fn dismiss_listen(&mut self) {
-        self.listen = None;
+        self.set_listen(None);
         self.hide();
     }
 
     pub fn hide(&mut self) {
+        self.set_listen(None);
         self.visible = false;
         self.wipe_confirmation_open = false;
     }
@@ -184,7 +186,7 @@ impl SettingsPane {
             move |tab, cx: &mut App| {
                 entity.update(cx, |this, cx| {
                     this.tab = tab;
-                    this.listen = None;
+                    this.set_listen(None);
                     this.reset_scroll();
                     cx.notify();
                 });

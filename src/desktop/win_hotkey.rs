@@ -2,15 +2,16 @@
 //! while Ctrl+Alt stay down and the GPUI window is focused (those become
 //! SYSKEY).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -19,8 +20,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::DesktopCmd;
 use crate::identity::APP_SLUG;
-
-const REPEAT_GAP: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Copy)]
 struct WinChord {
@@ -38,10 +37,23 @@ struct LiveMods {
     alt: bool,
     shift: bool,
     win: bool,
+    altgr: bool,
+}
+
+#[derive(Default)]
+struct PhysicalMods {
+    left_ctrl: bool,
+    right_ctrl: bool,
+    left_alt: bool,
+    right_alt: bool,
+    left_shift: bool,
+    right_shift: bool,
+    left_win: bool,
+    right_win: bool,
 }
 
 struct HookState {
-    last_fire: Option<(u16, Instant)>,
+    mods: PhysicalMods,
     eating: Option<u16>,
 }
 
@@ -51,10 +63,20 @@ struct Consider {
 }
 
 static WIN_CHORDS: RwLock<Vec<WinChord>> = RwLock::new(Vec::new());
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
 static HOOK: Mutex<Option<isize>> = Mutex::new(None);
 static HOOK_TX: Mutex<Option<Sender<DesktopCmd>>> = Mutex::new(None);
 static HOOK_STATE: Mutex<HookState> = Mutex::new(HookState {
-    last_fire: None,
+    mods: PhysicalMods {
+        left_ctrl: false,
+        right_ctrl: false,
+        left_alt: false,
+        right_alt: false,
+        left_shift: false,
+        right_shift: false,
+        left_win: false,
+        right_win: false,
+    },
     eating: None,
 });
 
@@ -91,42 +113,57 @@ fn gpui_key_to_vk(key: &str) -> Option<u16> {
     })
 }
 
-fn async_down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
-    unsafe { GetAsyncKeyState(i32::from(vk.0)) as u16 & 0x8000 != 0 }
-}
+impl PhysicalMods {
+    fn update(&mut self, vk: u16, down: bool) {
+        match vk {
+            v if v == VK_CONTROL.0 || v == VK_LCONTROL.0 => self.left_ctrl = down,
+            v if v == VK_RCONTROL.0 => self.right_ctrl = down,
+            v if v == VK_MENU.0 || v == VK_LMENU.0 => self.left_alt = down,
+            v if v == VK_RMENU.0 => self.right_alt = down,
+            v if v == VK_SHIFT.0 || v == VK_LSHIFT.0 => self.left_shift = down,
+            v if v == VK_RSHIFT.0 => self.right_shift = down,
+            v if v == VK_LWIN.0 => self.left_win = down,
+            v if v == VK_RWIN.0 => self.right_win = down,
+            _ => {}
+        }
+    }
 
-fn query_live_mods() -> LiveMods {
-    LiveMods {
-        ctrl: async_down(VK_CONTROL),
-        alt: async_down(VK_MENU),
-        shift: async_down(VK_SHIFT),
-        win: async_down(VK_LWIN) || async_down(VK_RWIN),
+    fn live(&self) -> LiveMods {
+        let ctrl = self.left_ctrl || self.right_ctrl;
+        LiveMods {
+            ctrl,
+            alt: self.left_alt || self.right_alt,
+            shift: self.left_shift || self.right_shift,
+            win: self.left_win || self.right_win,
+            // Windows reports AltGr as left Ctrl + right Alt.
+            altgr: self.right_alt && self.left_ctrl && !self.right_ctrl,
+        }
     }
 }
 
 fn mods_match(grab: &WinChord, live: LiveMods) -> bool {
-    live.ctrl == grab.control
+    !((grab.control && grab.alt) && live.altgr)
+        && live.ctrl == grab.control
         && live.alt == grab.alt
         && live.shift == grab.shift
         && live.win == grab.platform
-}
-
-fn should_emit_keydown(last: Option<(u16, Instant)>, vk: u16, now: Instant) -> bool {
-    match last {
-        Some((prev, at)) if prev == vk && now.saturating_duration_since(at) < REPEAT_GAP => false,
-        _ => true,
-    }
 }
 
 fn consider_event(
     vk: u16,
     is_up: bool,
     injected: bool,
-    live: LiveMods,
+    suspended: bool,
     grabs: &[WinChord],
     state: &mut HookState,
-    now: Instant,
 ) -> Consider {
+    if injected {
+        return Consider {
+            eat: false,
+            cmd: None,
+        };
+    }
+    state.mods.update(vk, !is_up);
     if is_up {
         if state.eating == Some(vk) {
             state.eating = None;
@@ -136,33 +173,34 @@ fn consider_event(
             cmd: None,
         };
     }
-    if injected {
+    if suspended {
         return Consider {
             eat: false,
             cmd: None,
         };
     }
-    let Some(grab) = grabs.iter().copied().find(|g| g.vk == vk) else {
+    if state.eating == Some(vk) {
         return Consider {
-            eat: false,
-            cmd: None,
-        };
-    };
-    if !mods_match(&grab, live) {
-        state.eating = None;
-        return Consider {
-            eat: false,
+            eat: true,
             cmd: None,
         };
     }
-    let cmd = if should_emit_keydown(state.last_fire, vk, now) {
-        state.last_fire = Some((vk, now));
-        Some(grab.cmd)
-    } else {
-        None
+    let live = state.mods.live();
+    let Some(grab) = grabs
+        .iter()
+        .copied()
+        .find(|g| g.vk == vk && mods_match(g, live))
+    else {
+        return Consider {
+            eat: false,
+            cmd: None,
+        };
     };
     state.eating = Some(vk);
-    Consider { eat: true, cmd }
+    Consider {
+        eat: true,
+        cmd: Some(grab.cmd),
+    }
 }
 
 pub(crate) fn set_chords(desired: &[(String, DesktopCmd)]) {
@@ -185,6 +223,10 @@ pub(crate) fn set_chords(desired: &[(String, DesktopCmd)]) {
         Ok(mut slot) => *slot = grabs,
         Err(poisoned) => *poisoned.into_inner() = grabs,
     }
+}
+
+pub(crate) fn set_suspended(suspended: bool) {
+    SUSPENDED.store(suspended, Ordering::SeqCst);
 }
 
 pub(crate) fn install_chord_hook(tx: Sender<DesktopCmd>) {
@@ -255,7 +297,6 @@ fn dispatch_chord(lparam: LPARAM) -> bool {
     let is_up = info.flags.contains(LLKHF_UP);
     let injected =
         info.flags.contains(LLKHF_INJECTED) || info.flags.contains(LLKHF_LOWER_IL_INJECTED);
-    let live = query_live_mods();
     let grabs = match WIN_CHORDS.read() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
@@ -264,8 +305,14 @@ fn dispatch_chord(lparam: LPARAM) -> bool {
         Ok(s) => s,
         Err(poisoned) => poisoned.into_inner(),
     };
-    let now = Instant::now();
-    let result = consider_event(vk, is_up, injected, live, &grabs, &mut state, now);
+    let result = consider_event(
+        vk,
+        is_up,
+        injected,
+        SUSPENDED.load(Ordering::SeqCst),
+        &grabs,
+        &mut state,
+    );
     if let Some(cmd) = result.cmd {
         let tx = match HOOK_TX.lock() {
             Ok(slot) => slot.clone(),
@@ -281,15 +328,17 @@ fn dispatch_chord(lparam: LPARAM) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        consider_event, gpui_key_to_vk, mods_match, set_chords, should_emit_keydown, Consider,
-        HookState, LiveMods, WinChord, REPEAT_GAP, WIN_CHORDS,
+        consider_event, gpui_key_to_vk, set_chords, HookState, PhysicalMods, WinChord, WIN_CHORDS,
     };
     use crate::desktop::DesktopCmd;
-    use std::time::{Duration, Instant};
 
     const VK_L: u16 = 0x4C;
     const VK_M: u16 = 0x4D;
-    const VK_LMENU: u16 = 0xA4;
+    const LCTRL: u16 = 0xA2;
+    const RCTRL: u16 = 0xA3;
+    const LSHIFT: u16 = 0xA0;
+    const LALT: u16 = 0xA4;
+    const RALT: u16 = 0xA5;
 
     fn show_l() -> WinChord {
         WinChord {
@@ -313,29 +362,26 @@ mod tests {
         }
     }
 
-    fn held() -> LiveMods {
-        LiveMods {
-            ctrl: true,
-            alt: true,
-            shift: false,
-            win: false,
+    fn capture_shift_l() -> WinChord {
+        WinChord {
+            vk: VK_L,
+            control: true,
+            alt: false,
+            shift: true,
+            platform: false,
+            cmd: DesktopCmd::Capture,
         }
     }
 
-    fn none_held() -> LiveMods {
-        LiveMods::default()
+    fn state() -> HookState {
+        HookState {
+            mods: PhysicalMods::default(),
+            eating: None,
+        }
     }
 
-    fn run(
-        state: &mut HookState,
-        vk: u16,
-        is_up: bool,
-        injected: bool,
-        live: LiveMods,
-        now: Instant,
-    ) -> Consider {
-        let grabs = [show_l(), capture_m()];
-        consider_event(vk, is_up, injected, live, &grabs, state, now)
+    fn send(state: &mut HookState, vk: u16, is_up: bool, injected: bool) -> super::Consider {
+        consider_event(vk, is_up, injected, false, &[show_l(), capture_m()], state)
     }
 
     #[test]
@@ -362,144 +408,103 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_alt_l_matches_only_those_modifiers() {
-        let grab = show_l();
-        assert!(mods_match(&grab, held()));
-        assert!(!mods_match(&grab, none_held()));
-        assert!(!mods_match(
-            &grab,
-            LiveMods {
-                ctrl: true,
-                alt: false,
-                shift: false,
-                win: false,
-            }
-        ));
-        assert!(!mods_match(
-            &grab,
-            LiveMods {
-                ctrl: true,
-                alt: true,
-                shift: true,
-                win: false,
-            }
-        ));
-    }
-
-    #[test]
     fn bare_l_does_not_fire_or_eat() {
-        let mut state = HookState {
-            last_fire: None,
-            eating: None,
-        };
-        let r = run(&mut state, VK_L, false, false, none_held(), Instant::now());
+        let mut state = state();
+        let r = send(&mut state, VK_L, false, false);
         assert!(r.cmd.is_none());
         assert!(!r.eat);
     }
 
     #[test]
-    fn held_ctrl_alt_l_fires_and_repeat_after_gap() {
-        let mut state = HookState {
-            last_fire: None,
-            eating: None,
-        };
-        let t0 = Instant::now();
-        let down = run(&mut state, VK_L, false, false, held(), t0);
+    fn physical_ctrl_alt_l_fires_once_until_keyup() {
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, LALT, false, false);
+        let down = send(&mut state, VK_L, false, false);
         assert_eq!(down.cmd, Some(DesktopCmd::Show));
         assert!(down.eat);
-        let up = run(
-            &mut state,
-            VK_L,
-            true,
-            false,
-            held(),
-            t0 + Duration::from_millis(10),
-        );
+        let repeat = send(&mut state, VK_L, false, false);
+        assert!(repeat.cmd.is_none());
+        assert!(repeat.eat);
+        let up = send(&mut state, VK_L, true, false);
         assert!(up.cmd.is_none());
         assert!(!up.eat);
-        let again = run(
-            &mut state,
-            VK_L,
-            false,
-            false,
-            held(),
-            t0 + REPEAT_GAP + Duration::from_millis(1),
-        );
+        let again = send(&mut state, VK_L, false, false);
         assert_eq!(again.cmd, Some(DesktopCmd::Show));
         assert!(again.eat);
     }
 
     #[test]
     fn injected_alt_pair_then_bare_l_does_not_fire() {
-        let mut state = HookState {
-            last_fire: None,
-            eating: None,
-        };
-        let t0 = Instant::now();
-        let first = run(&mut state, VK_L, false, false, held(), t0);
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, LALT, false, false);
+        let first = send(&mut state, VK_L, false, false);
         assert_eq!(first.cmd, Some(DesktopCmd::Show));
-        let _ = run(
-            &mut state,
-            VK_L,
-            true,
-            false,
-            held(),
-            t0 + Duration::from_millis(10),
-        );
-        let inj_down = run(
-            &mut state,
-            VK_LMENU,
-            false,
-            true,
-            none_held(),
-            t0 + Duration::from_millis(20),
-        );
+        send(&mut state, VK_L, true, false);
+        send(&mut state, LCTRL, true, false);
+        send(&mut state, LALT, true, false);
+        let inj_down = send(&mut state, LALT, false, true);
         assert!(inj_down.cmd.is_none());
-        let inj_up = run(
-            &mut state,
-            VK_LMENU,
-            true,
-            true,
-            none_held(),
-            t0 + Duration::from_millis(21),
-        );
+        let inj_up = send(&mut state, LALT, true, true);
         assert!(inj_up.cmd.is_none());
-        let bare = run(
-            &mut state,
-            VK_L,
-            false,
-            false,
-            none_held(),
-            t0 + Duration::from_millis(80),
-        );
+        let bare = send(&mut state, VK_L, false, false);
         assert!(bare.cmd.is_none());
         assert!(!bare.eat);
     }
 
     #[test]
     fn injected_l_does_not_fire_even_with_mods_down() {
-        let mut state = HookState {
-            last_fire: None,
-            eating: None,
-        };
-        let r = run(&mut state, VK_L, false, true, held(), Instant::now());
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, LALT, false, false);
+        let r = send(&mut state, VK_L, false, true);
         assert!(r.cmd.is_none());
         assert!(!r.eat);
     }
 
     #[test]
-    fn keydown_emits_again_after_repeat_gap() {
-        let t0 = Instant::now();
-        assert!(should_emit_keydown(None, VK_L, t0));
-        assert!(!should_emit_keydown(
-            Some((VK_L, t0)),
-            VK_L,
-            t0 + Duration::from_millis(20)
-        ));
-        assert!(should_emit_keydown(
-            Some((VK_L, t0)),
-            VK_L,
-            t0 + REPEAT_GAP + Duration::from_millis(1)
-        ));
+    fn same_key_with_different_modifiers_finds_the_full_chord() {
+        let grabs = [show_l(), capture_shift_l()];
+        let mut state = state();
+        consider_event(LCTRL, false, false, false, &grabs, &mut state);
+        consider_event(LSHIFT, false, false, false, &grabs, &mut state);
+        let result = consider_event(VK_L, false, false, false, &grabs, &mut state);
+        assert_eq!(result.cmd, Some(DesktopCmd::Capture));
+    }
+
+    #[test]
+    fn suspended_hook_tracks_modifiers_without_eating_the_chord() {
+        let grabs = [show_l()];
+        let mut state = state();
+        consider_event(LCTRL, false, false, true, &grabs, &mut state);
+        consider_event(LALT, false, false, true, &grabs, &mut state);
+        let recording = consider_event(VK_L, false, false, true, &grabs, &mut state);
+        assert!(recording.cmd.is_none());
+        assert!(!recording.eat);
+        consider_event(VK_L, true, false, true, &grabs, &mut state);
+        let resumed = consider_event(VK_L, false, false, false, &grabs, &mut state);
+        assert_eq!(resumed.cmd, Some(DesktopCmd::Show));
+    }
+
+    #[test]
+    fn altgr_does_not_match_ctrl_alt_chord() {
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, RALT, false, false);
+        let result = send(&mut state, VK_L, false, false);
+        assert!(result.cmd.is_none());
+        assert!(!result.eat);
+    }
+
+    #[test]
+    fn releasing_one_control_keeps_the_other_control_down() {
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, RCTRL, false, false);
+        send(&mut state, LCTRL, true, false);
+        send(&mut state, LALT, false, false);
+        let result = send(&mut state, VK_L, false, false);
+        assert_eq!(result.cmd, Some(DesktopCmd::Show));
     }
 }

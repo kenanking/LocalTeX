@@ -211,6 +211,9 @@ pub fn assign(
     chord: String,
 ) -> Result<Option<ShortcutId>, AssignError> {
     let chord = normalize(&chord)?;
+    if spec(id).global() && to_global_hotkey(&chord).is_none() {
+        return Err(AssignError::Invalid);
+    }
     if effective(over, id).as_deref() == Some(chord.as_str()) {
         return Ok(None);
     }
@@ -560,6 +563,16 @@ mod tests {
     fn global_hotkey_needs_a_modifier() {
         assert!(to_global_hotkey("ctrl-shift-s").is_some());
         assert!(to_global_hotkey("s").is_none());
+    }
+
+    #[test]
+    fn global_assignment_rejects_a_bare_key() {
+        let mut over = Overrides::new();
+        assert_eq!(
+            assign(&mut over, ShortcutId::Show, "l".into()),
+            Err(AssignError::Invalid)
+        );
+        assert!(!is_customized(&over, ShortcutId::Show));
     }
 
     #[test]

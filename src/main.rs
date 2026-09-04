@@ -87,7 +87,8 @@ fn run(mut seat: instance::Seat) {
 
             let state = cx.new(|_| AppState::new(prefs));
             if startup_mode == StartupMode::Interactive {
-                open_main_window(state.clone(), false, cx).expect("open main window");
+                open_main_window(state.clone(), cfg!(target_os = "windows"), cx)
+                    .expect("open main window");
             }
             state.update(cx, |state, cx| {
                 state.start_model_inspect(cx);

@@ -21,14 +21,17 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, ReleaseCapture, SetCapture, UnregisterHotKey, MOD_NOREPEAT, VK_ESCAPE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
     GetWindowLongPtrW, LoadCursorW, PeekMessageW, RegisterClassW, SetCursor, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, GWLP_USERDATA, HCURSOR,
     HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SWP_SHOWWINDOW, SW_SHOW, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-    WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_ERASEBKGND, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 
 use super::win;
@@ -39,6 +42,7 @@ use crate::identity::APP_SLUG;
 const ACCENT: (u8, u8, u8) = (0x25, 0x63, 0xeb);
 const CLASS_NAME: PCWSTR = w!("LocalTeXSnip");
 const OVERLAY_TIMEOUT: Duration = Duration::from_secs(300);
+const ESCAPE_HOTKEY_ID: i32 = 0x4C54;
 
 struct Dib {
     info: BITMAPINFO,
@@ -160,13 +164,30 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
             back_bmp,
             back_old,
         });
-        unsafe {
-            SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_SHOWWINDOW).ok();
-            let _ = ShowWindow(hwnd, SW_SHOW);
-        }
     }
     if session.overlays.is_empty() {
         return Err(anyhow!("no snip overlay window"));
+    }
+    let escape_registered =
+        unsafe { RegisterHotKey(None, ESCAPE_HOTKEY_ID, MOD_NOREPEAT, u32::from(VK_ESCAPE.0)) }
+            .is_ok();
+    if !escape_registered {
+        eprintln!("{APP_SLUG}: register snip Escape hotkey failed");
+    }
+    for overlay in &session.overlays {
+        unsafe {
+            SetWindowPos(
+                overlay.hwnd,
+                Some(HWND_TOPMOST),
+                overlay.origin_x,
+                overlay.origin_y,
+                overlay.dim.width,
+                overlay.dim.height,
+                SWP_SHOWWINDOW,
+            )
+            .ok();
+            let _ = ShowWindow(overlay.hwnd, SW_SHOW);
+        }
     }
     unsafe {
         let hwnd = session.overlays[0].hwnd;
@@ -184,6 +205,10 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         let mut msg = MSG::default();
         let had = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) };
         if had.as_bool() {
+            if is_escape_hotkey(msg.message, msg.wParam) {
+                cancel_snip(&mut session);
+                continue;
+            }
             unsafe {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -193,6 +218,9 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         }
     }
 
+    if escape_registered {
+        let _ = unsafe { UnregisterHotKey(None, ESCAPE_HOTKEY_ID) };
+    }
     let crop = session.done.take().flatten();
     for overlay in session.overlays.drain(..) {
         unsafe {
@@ -205,6 +233,10 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
     }
     win::reset_pointer_state();
     Ok(crop)
+}
+
+fn is_escape_hotkey(message: u32, wparam: WPARAM) -> bool {
+    message == WM_HOTKEY && wparam.0 as i32 == ESCAPE_HOTKEY_ID
 }
 
 fn overlay_rects(shot: &DesktopShot) -> Vec<(i32, i32, i32, i32)> {
@@ -745,5 +777,21 @@ mod tests {
         };
         let u = union_rect(old, new);
         assert_eq!((u.left, u.top, u.right, u.bottom), (10, 10, 80, 50));
+    }
+
+    #[test]
+    fn escape_hotkey_matches_only_its_registered_message() {
+        assert!(is_escape_hotkey(
+            WM_HOTKEY,
+            WPARAM(ESCAPE_HOTKEY_ID as usize)
+        ));
+        assert!(!is_escape_hotkey(
+            WM_HOTKEY,
+            WPARAM((ESCAPE_HOTKEY_ID + 1) as usize)
+        ));
+        assert!(!is_escape_hotkey(
+            WM_KEYDOWN,
+            WPARAM(ESCAPE_HOTKEY_ID as usize)
+        ));
     }
 }

@@ -244,7 +244,12 @@ impl AppState {
         chord: String,
         cx: &mut Context<Self>,
     ) -> Result<Option<ShortcutId>, AssignError> {
-        let stolen = keymap::assign(&mut self.prefs.shortcuts, id, chord)?;
+        let stolen = keymap::assign(&mut self.prefs.shortcuts, id, chord).map_err(|err| {
+            if keymap::spec(id).global() && err == AssignError::Invalid {
+                self.flash_error("Global shortcuts need a supported key and modifier", cx);
+            }
+            err
+        })?;
         self.commit_shortcuts(cx);
         Ok(stolen)
     }

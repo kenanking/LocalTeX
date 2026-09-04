@@ -186,6 +186,13 @@ pub fn rebind_globals(over: &crate::keymap::Overrides) {
     });
 }
 
+pub fn suspend_global_hotkeys(suspended: bool) {
+    #[cfg(target_os = "windows")]
+    win_hotkey::set_suspended(suspended);
+    #[cfg(not(target_os = "windows"))]
+    let _ = suspended;
+}
+
 fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
     let manager = match GlobalHotKeyManager::new() {
         Ok(m) => m,

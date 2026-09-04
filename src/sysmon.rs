@@ -353,7 +353,7 @@ mod tests {
         let mut mon = SysMon::new();
         let first = mon.sample();
         assert!(first.cpu_pct.is_none());
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(25));
         let second = mon.sample();
         assert!(second.cpu_pct.is_some());
         assert!(second.mem_total.unwrap_or(0) > 0);
