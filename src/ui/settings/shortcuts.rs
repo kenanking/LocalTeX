@@ -163,7 +163,7 @@ fn shortcut_row(
         .items_center()
         .gap(px(4.))
         .px_2()
-        .py(px(3.))
+        .h(px(28.))
         .rounded_md()
         .when(listening, |d| {
             d.border_1()
