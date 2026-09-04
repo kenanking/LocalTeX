@@ -125,7 +125,7 @@ pub(crate) fn open_main_window(
                 title: Some(APP_NAME.into()),
                 ..Default::default()
             }),
-            focus: activate,
+            focus: crate::desktop::window_open_focus(activate),
             app_id: Some(APP_ID.into()),
             window_min_size: Some(size(px(520.), px(400.))),
             window_background: gpui::WindowBackgroundAppearance::Opaque,
@@ -145,7 +145,7 @@ pub(crate) fn open_main_window(
         state.boot_selected(cx);
     });
     if activate {
-        handle.update(cx, |_, window, _| window.activate_window())?;
+        crate::desktop::focus_new_main(handle, cx)?;
     }
     Ok(())
 }

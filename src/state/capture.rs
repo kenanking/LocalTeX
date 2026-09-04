@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{App, AppContext, Context, Window, WindowHandle};
+use gpui::{AppContext, Context, Window};
 use image::RgbaImage;
 
 use super::intake::{is_ingest_image_path, IMAGE_EXTS};
@@ -333,7 +333,7 @@ impl AppState {
         let handle = self.main_window.handle();
         cx.defer(move |cx| {
             if let Some(handle) = handle {
-                activate_window(handle, cx);
+                crate::desktop::gpui_activate_main(handle, cx);
             }
         });
     }
@@ -346,14 +346,6 @@ fn clipboard_image_paths(text: &str) -> Vec<PathBuf> {
         .map(|line| PathBuf::from(line.strip_prefix("file://").unwrap_or(line)))
         .filter(|path| path.is_file() && is_ingest_image_path(path))
         .collect()
-}
-
-fn activate_window<V: 'static>(handle: WindowHandle<V>, cx: &mut App) {
-    if let Err(err) = handle.update(cx, |_, window, _| {
-        window.activate_window();
-    }) {
-        eprintln!("{APP_SLUG}: activate window: {err}");
-    }
 }
 
 #[cfg(test)]

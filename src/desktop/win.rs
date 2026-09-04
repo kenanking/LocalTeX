@@ -9,13 +9,16 @@ use std::time::{Duration, Instant};
 
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
-use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+use windows::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetActiveWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CallNextHookEx, ClipCursor, EnumWindows, GetWindowLongPtrW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetWindowsHookExW, ShowCursor, ShowWindow,
-    ASFW_ANY, CWPSTRUCT, GWL_EXSTYLE, SW_HIDE, SW_RESTORE, WH_CALLWNDPROC, WM_ENDSESSION,
-    WM_QUERYENDSESSION, WS_EX_TOOLWINDOW,
+    AllowSetForegroundWindow, BringWindowToTop, CallNextHookEx, ClipCursor, EnumWindows,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SetForegroundWindow, SetWindowsHookExW, ShowCursor, ShowWindow, ASFW_ANY, CWPSTRUCT,
+    GWL_EXSTYLE, SW_HIDE, SW_RESTORE, WH_CALLWNDPROC, WM_ENDSESSION, WM_QUERYENDSESSION,
+    WS_EX_TOOLWINDOW,
 };
 
 use super::DesktopCmd;
@@ -104,10 +107,35 @@ pub(crate) fn hide_main_window() {
 
 pub(crate) fn show_main_window() {
     let stored = TRAY_HIDDEN.with(|slot| slot.replace(Vec::new()));
-    for raw in stored {
-        let hwnd = HWND(raw as *mut core::ffi::c_void);
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+    let hwnds: Vec<HWND> = if stored.is_empty() {
+        taskbar_main_windows()
+    } else {
+        stored
+            .into_iter()
+            .map(|raw| HWND(raw as *mut core::ffi::c_void))
+            .collect()
+    };
+    for hwnd in hwnds {
+        focus_hwnd(hwnd);
+    }
+}
+
+/// Restore and focus without GPUI's `activate()`, which SendInput's an Alt
+/// pair and desyncs chord matching from physical modifier keys.
+fn focus_hwnd(hwnd: HWND) {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+        let fg = GetForegroundWindow();
+        let fg_tid = GetWindowThreadProcessId(fg, None);
+        let us = GetCurrentThreadId();
+        let attached = fg_tid != 0 && fg_tid != us && AttachThreadInput(fg_tid, us, true).as_bool();
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetActiveWindow(hwnd);
+        let _ = SetFocus(Some(hwnd));
+        if attached {
+            let _ = AttachThreadInput(fg_tid, us, false);
         }
     }
 }

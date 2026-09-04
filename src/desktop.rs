@@ -308,6 +308,40 @@ pub fn deiconify_main_window() {
     win::show_main_window();
 }
 
+pub fn window_open_focus(activate: bool) -> bool {
+    activate && cfg!(not(target_os = "windows"))
+}
+
+pub fn focus_new_main<V: 'static>(
+    handle: gpui::WindowHandle<V>,
+    cx: &mut gpui::App,
+) -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (handle, cx);
+        deiconify_main_window();
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        handle.update(cx, |_, window, _| window.activate_window())?;
+        Ok(())
+    }
+}
+
+pub fn gpui_activate_main<V: 'static>(handle: gpui::WindowHandle<V>, cx: &mut gpui::App) {
+    #[cfg(not(target_os = "windows"))]
+    if let Err(err) = handle.update(cx, |_, window, _| {
+        window.activate_window();
+    }) {
+        eprintln!("{APP_SLUG}: activate window: {err}");
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (handle, cx);
+    }
+}
+
 pub fn wait_until_iconified() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     linux::wait_until_iconified()?;
