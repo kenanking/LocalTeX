@@ -39,6 +39,8 @@ Windows global shortcuts use a low-level keyboard hook. Other platforms use `glo
 
 ## Build
 
+The footer of Settings → System shows the package version from `Cargo.toml` and the build-time Git HEAD (12 characters, with the full commit in a tooltip). Uncommitted changes are not reflected. Shallow clones work; building without Git or project Git metadata still succeeds and shows `Git unavailable` for the commit. Running the app does not require Git.
+
 Rust stable. On Linux you need X11 and the usual GPUI/Vulkan stack.
 
 ```bash

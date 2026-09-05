@@ -105,6 +105,26 @@ pub(super) fn system_page(
             "Library",
             vec![wipe_library_row(settings, snip_count)],
         ))
+        .child({
+            let commit = env!("LOCALTEX_GIT_COMMIT");
+            let label = if commit.is_empty() {
+                "Git unavailable"
+            } else {
+                &commit[..12.min(commit.len())]
+            };
+            div()
+                .id("app-version")
+                .px_1()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .whitespace_nowrap()
+                .tooltip(Tooltip::text(if commit.is_empty() {
+                    "Git metadata was unavailable when this app was built."
+                } else {
+                    commit
+                }))
+                .child(format!("LocalTeX {} · {label}", env!("CARGO_PKG_VERSION")))
+        })
 }
 
 fn model_pack_list(models: &ModelInfo) -> AnyElement {

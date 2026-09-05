@@ -1,4 +1,4 @@
-//! Windows PE resources. GPUI `load_icon` reads `HICON` resource id 1 from
+//! Build identity and Windows PE resources. GPUI `load_icon` reads `HICON` resource id 1 from
 //! this exe; Explorer and the taskbar use the same ICON. Do not embed a
 //! second RT_MANIFEST here — gpui already ships PerMonitorV2.
 
@@ -8,10 +8,45 @@ mod icon_mark;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/icon_mark.rs");
+    embed_git_commit();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
     embed_windows_icon();
+}
+
+fn embed_git_commit() {
+    let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let git = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .current_dir(&root)
+            .args(args)
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+
+    // Require this project's metadata so a source archive cannot inherit a parent repo's HEAD.
+    if !root.join(".git").is_dir() {
+        println!("cargo:rerun-if-changed={}", root.join(".git").display());
+    }
+    let commit = if root.join(".git").exists() {
+        for name in ["HEAD", "refs", "packed-refs"] {
+            if let Some(path) = git(&["rev-parse", "--git-path", name]) {
+                let path = root.join(path);
+                if path.exists() {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+        }
+        git(&["rev-parse", "--verify", "HEAD^{commit}"]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    println!("cargo:rustc-env=LOCALTEX_GIT_COMMIT={commit}");
 }
 
 fn embed_windows_icon() {
