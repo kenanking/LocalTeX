@@ -6,6 +6,82 @@ use gpui::{
 use super::theme;
 use crate::doc::OcrMeta;
 
+// The pinned GPUI exposes no disabled setter for Div accessibility properties.
+// Keep its layout and input handling, adding the native disabled state only.
+pub(super) struct ButtonElement {
+    pub(super) element: gpui::Stateful<gpui::Div>,
+    pub(super) enabled: bool,
+}
+
+impl IntoElement for ButtonElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for ButtonElement {
+    type RequestLayoutState = <gpui::Stateful<gpui::Div> as gpui::Element>::RequestLayoutState;
+    type PrepaintState = <gpui::Stateful<gpui::Div> as gpui::Element>::PrepaintState;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        gpui::Element::id(&self.element)
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.element.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.element.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.element
+            .prepaint(id, inspector_id, bounds, layout, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.element
+            .paint(id, inspector_id, bounds, layout, prepaint, window, cx);
+    }
+
+    fn a11y_role(&self) -> Option<gpui::Role> {
+        self.element.a11y_role()
+    }
+
+    fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
+        self.element.write_a11y_info(node);
+        if !self.enabled {
+            node.set_disabled();
+        }
+    }
+}
+
 /// Hover card for icon chrome. GPUI already owns delay / placement /
 /// dismissal via `.tooltip()`; this is only the view it asks for.
 /// Adapted from Waku's tooltip surface (no `shadow_md` on gpui 0.2).
@@ -164,8 +240,14 @@ pub fn icon_btn_sized(
 ) -> impl IntoElement {
     let id = id.into();
     let hint = hint.into();
-    div()
-        .id(id)
+    let element = div()
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(hint.clone())
+        .aria_selected(active)
+        .when(enabled, |d| d.focusable().tab_stop(true))
+        .when(!enabled, |d| d.aria_description("Unavailable"))
         .size(size.hit)
         .rounded_md()
         .flex()
@@ -203,7 +285,8 @@ pub fn icon_btn_sized(
                     .text_color(rgb(theme::MUTED))
                     .child(digit.to_string()),
             )
-        })
+        });
+    ButtonElement { element, enabled }
 }
 
 pub fn icon_btn_kbd(
@@ -232,11 +315,23 @@ pub fn icon_btn_kbd(
 
 pub fn switch(
     id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
     checked: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let id = id.into();
     div()
-        .id(id.into())
+        .id(id.clone())
+        .role(gpui::Role::Switch)
+        .aria_label(label.into())
+        .accessibility_id(id)
+        .aria_toggled(if checked {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .focusable()
+        .tab_stop(true)
         .w(px(34.))
         .h(px(20.))
         .p(px(2.))
@@ -267,8 +362,13 @@ pub fn btn(
 ) -> impl IntoElement {
     let id = id.into();
     let label = label.into();
-    div()
-        .id(id)
+    let element = div()
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .when(enabled, |d| d.focusable().tab_stop(true))
+        .when(!enabled, |d| d.aria_description("Unavailable"))
         .px_3()
         .h(px(28.))
         .flex()
@@ -291,7 +391,8 @@ pub fn btn(
         .when(enabled, |d| {
             d.on_click(move |_, window, cx| on_click(window, cx))
         })
-        .child(label)
+        .child(label);
+    ButtonElement { element, enabled }
 }
 
 pub fn ghost_btn(
@@ -302,8 +403,13 @@ pub fn ghost_btn(
 ) -> impl IntoElement {
     let id = id.into();
     let label = label.into();
-    div()
-        .id(id)
+    let element = div()
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .when(enabled, |d| d.focusable().tab_stop(true))
+        .when(!enabled, |d| d.aria_description("Unavailable"))
         .px_2()
         .h(px(24.))
         .flex()
@@ -318,7 +424,8 @@ pub fn ghost_btn(
         .when(enabled, |d| {
             d.on_click(move |_, window, cx| on_click(window, cx))
         })
-        .child(label)
+        .child(label);
+    ButtonElement { element, enabled }
 }
 
 pub fn kbd_chip(label: impl Into<SharedString>) -> impl IntoElement {
@@ -375,12 +482,22 @@ pub fn seg_item(
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let label = label.into();
     div()
         .flex_1()
         .min_w_0()
         .child(
             div()
                 .id(id.into())
+                .role(gpui::Role::RadioButton)
+                .aria_label(label.clone())
+                .aria_toggled(if active {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .focusable()
+                .tab_stop(true)
                 .h(px(24.))
                 .w_full()
                 .px_2()
@@ -399,7 +516,7 @@ pub fn seg_item(
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |_, window, cx| on_click(window, cx))
-                .child(label.into()),
+                .child(label),
         )
         .into_any()
 }
@@ -426,8 +543,14 @@ pub fn pill_tab(
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let label = label.into();
     div()
         .id(id.into())
+        .role(gpui::Role::Tab)
+        .aria_label(label.clone())
+        .aria_selected(active)
+        .focusable()
+        .tab_stop(true)
         .h(px(26.))
         .px_3()
         .rounded_full()
@@ -448,7 +571,7 @@ pub fn pill_tab(
                 .hover(|d| d.text_color(rgb(theme::TEXT)))
         })
         .on_click(move |_, window, cx| on_click(window, cx))
-        .child(label.into())
+        .child(label)
         .into_any()
 }
 

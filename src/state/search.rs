@@ -48,7 +48,9 @@ impl AppState {
                         .iter_all()
                         .filter(|d| store.is_none() || !d.is_persisted())
                         .map(|d| {
-                            let blob = if matches!(d.status, DocStatus::Ready) {
+                            let blob = if let Some(raw) = &d.raw_text {
+                                raw.clone()
+                            } else if matches!(d.status, DocStatus::Ready) {
                                 Document::search_text_for_blocks(&d.blocks)
                             } else {
                                 d.first_line()

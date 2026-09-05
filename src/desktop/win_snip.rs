@@ -216,7 +216,9 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         let mut msg = MSG::default();
         let had = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) };
         if had.as_bool() {
-            if is_escape_hotkey(msg.message, msg.wParam) {
+            if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT
+                || is_escape_hotkey(msg.message, msg.wParam)
+            {
                 cancel_snip(&mut session);
                 continue;
             }
@@ -225,7 +227,20 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
                 DispatchMessageW(&msg);
             }
         } else {
-            std::thread::sleep(Duration::from_millis(8));
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    MsgWaitForMultipleObjectsEx, MWMO_INPUTAVAILABLE, QS_ALLINPUT,
+                };
+                MsgWaitForMultipleObjectsEx(
+                    None,
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis()
+                        .min(u32::MAX as u128) as u32,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                );
+            }
         }
     }
 
@@ -496,9 +511,9 @@ fn finish_drag(session: &mut Session, bx: i32, by: i32) {
 }
 
 fn cancel_snip(session: &mut Session) {
-    win::reset_pointer_state();
     session.anchor = None;
     session.done = Some(None);
+    win::reset_pointer_state();
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -544,7 +559,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let _ = unsafe { ReleaseCapture() };
             // Snip-button mouse-up can land on the overlay. Without an
             // overlay LBUTTONDOWN that must not cancel the snip.
             if session.anchor.is_none() {
@@ -557,6 +571,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             } else {
                 session.done = Some(None);
             }
+            let _ = unsafe { ReleaseCapture() };
+            LRESULT(0)
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_CAPTURECHANGED
+            if session.done.is_none() && session.anchor.is_some() =>
+        {
+            cancel_snip(session);
             LRESULT(0)
         }
         WM_RBUTTONUP | WM_DISPLAYCHANGE => {

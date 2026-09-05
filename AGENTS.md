@@ -7,7 +7,7 @@ LocalTeX is a single-crate, single-process Rust desktop app built with git `gpui
 - Keep one Cargo package and one application process. Do not introduce a workspace or extra crates unless explicitly requested.
 - Make the smallest coherent change. Avoid unrelated dependencies, abstractions, features, and formatting.
 - Preserve unrelated work in the tree. Read relevant callers, platform variants, and nearby tests before editing.
-- Linux X11 is the locally verifiable path. Wayland is out of scope; do not claim Windows or macOS runtime verification from this host.
+- Verify the current host before choosing platform checks. Windows and Linux X11 are supported runtime paths; Wayland is out of scope. Report only platforms actually exercised.
 
 ## Checks
 
@@ -19,7 +19,7 @@ cargo build --profile dev-opt
 
 Run checks relevant to the change and report what actually ran. For visible UI changes, inspect the running app when possible.
 
-Agent shells usually have no `DISPLAY`. This host's GNOME session is X11 on `:1` (`/tmp/.X11-unix/X1`). Build first, then start `target/dev-opt/localtex` on that display with `systemd-run --user` so the window outlives the shell. Pass `DISPLAY` and `XAUTHORITY` from `gnome-shell`'s environ, or `DISPLAY=:1` plus `$XDG_RUNTIME_DIR/gdm/Xauthority`. Do not assume `cargo run` from this shell opened a window. To inspect the window, grab a PNG with `ffmpeg -f x11grab` on that display. That is an agent screenshot, not the app capture path.
+On Linux, agent shells may lack `DISPLAY`. Discover the active X11 session and its `XAUTHORITY`, build first, then launch with `systemd-run --user` using those values. On Windows, build `target/dev-opt/localtex.exe` and verify the running process path before UI testing. Schema and destructive UI tests use the ignored `interactive_windows_ui` test with an absolute `LOCALTEX_TEST_ROOT`; that override exists only in test binaries.
 
 ## Rust and GPUI
 

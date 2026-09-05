@@ -123,9 +123,9 @@ pub struct MainWindow {
 impl MainWindow {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        let snip_list_focus = cx.focus_handle();
+        let snip_list_focus = cx.focus_handle().tab_stop(true);
         let orig_focus = cx.focus_handle();
-        let draw_focus = cx.focus_handle();
+        let draw_focus = cx.focus_handle().tab_stop(true);
         window.focus(&snip_list_focus, cx);
         #[cfg(target_os = "linux")]
         window.set_client_inset(px(0.));
@@ -457,7 +457,7 @@ impl MainWindow {
         self.toggle_settings(window, cx);
     }
 
-    pub(crate) fn toggle_settings(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if matches!(self.view, View::Draw) {
             self.board.leave_canvas();
             crate::desktop::set_os_cursor_visible(true);
@@ -470,6 +470,12 @@ impl MainWindow {
             self.settings.update(cx, |pane, _| pane.reset_scroll());
             View::Settings
         };
+        if matches!(self.view, View::Settings) {
+            let focus = self.settings.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        } else {
+            window.focus(&self.snip_list_focus, cx);
+        }
         cx.notify();
     }
 
@@ -490,6 +496,7 @@ impl MainWindow {
             return;
         }
         self.dismiss_sheet(cx);
+        window.focus(&self.snip_list_focus, cx);
     }
 
     fn capture(&mut self, _: &Capture, _: &mut Window, cx: &mut Context<Self>) {
@@ -607,7 +614,8 @@ impl MainWindow {
         self.state.update(cx, |state, cx| state.toggle_format(cx));
     }
 
-    fn retry(&mut self, _: &RetryOcr, _: &mut Window, cx: &mut Context<Self>) {
+    fn retry(&mut self, _: &RetryOcr, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.snip_list_focus, cx);
         self.state.update(cx, |state, cx| state.retry_selected(cx));
     }
 
@@ -735,27 +743,13 @@ impl gpui::Render for MainWindow {
         let workspace_h = workspace_height(viewport.height.into());
         let detail = self.render_detail(capturing, copy_pane_w, workspace_h, cx);
         let orig_open = self.orig.open;
-        if orig_open && !self.orig_focus.is_focused(window) {
-            cx.on_next_frame(window, |this, window, cx| {
-                if this.orig.open && !this.orig_focus.is_focused(window) {
-                    window.focus(&this.orig_focus, cx);
-                }
-            });
-        }
-        if matches!(self.view, View::Draw) && !self.draw_focus.is_focused(window) {
-            cx.on_next_frame(window, |this, window, cx| {
-                if matches!(this.view, View::Draw) && !this.draw_focus.is_focused(window) {
-                    window.focus(&this.draw_focus, cx);
-                }
-            });
-        }
         let view = self.view.clone();
         let (has_selected, can_open_docx) = {
             let state = self.state.read(cx);
             let has_selected = state.selected().is_some();
             let can_open_docx = state
                 .selected_doc()
-                .is_some_and(|doc| doc.has_ready_blocks());
+                .is_some_and(|doc| doc.has_ready_blocks() && doc.source_error.is_none());
             (has_selected, can_open_docx)
         };
         let accepting = self
@@ -799,6 +793,20 @@ impl gpui::Render for MainWindow {
             .id("main")
             .track_focus(&self.focus)
             .key_context(crate::identity::APP_SLUG)
+            .on_key_down(|event, window, cx| {
+                if event.keystroke.key == "tab"
+                    && !event.keystroke.modifiers.control
+                    && !event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.platform
+                {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev(cx);
+                    } else {
+                        window.focus_next(cx);
+                    }
+                    cx.stop_propagation();
+                }
+            })
             .on_action(cx.listener(Self::capture))
             .on_action(cx.listener(Self::upload))
             .on_action(cx.listener(Self::paste_snip))

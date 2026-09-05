@@ -362,18 +362,24 @@ impl MainWindow {
                             )
                             .child(source_hud_sep())
                             .child(div().opacity(if edited { 1. } else { 0.38 }).child(
-                                source_hud_disc("src-revert", IconKind::Reset, "Revert OCR", {
-                                    let entity = entity.clone();
-                                    move |_, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.revert_source(window, cx);
-                                        });
-                                    }
-                                }),
+                                source_hud_disc(
+                                    "src-revert",
+                                    IconKind::Reset,
+                                    "Revert OCR",
+                                    edited,
+                                    {
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.revert_source(window, cx);
+                                            });
+                                        }
+                                    },
+                                ),
                             ))
                             .child(source_hud_sep())
                             .child(div().opacity(if can_undo { 1. } else { 0.38 }).child(
-                                source_hud_disc("src-undo", IconKind::Undo, "Undo", {
+                                source_hud_disc("src-undo", IconKind::Undo, "Undo", can_undo, {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {
@@ -385,7 +391,7 @@ impl MainWindow {
                                 }),
                             ))
                             .child(div().opacity(if can_redo { 1. } else { 0.38 }).child(
-                                source_hud_disc("src-redo", IconKind::Redo, "Redo", {
+                                source_hud_disc("src-redo", IconKind::Redo, "Redo", can_redo, {
                                     let entity = entity.clone();
                                     move |_, window, cx| {
                                         entity.update(cx, |this, cx| {

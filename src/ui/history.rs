@@ -126,6 +126,8 @@ impl MainWindow {
         };
         let mut list = div()
             .id("history")
+            .role(gpui::Role::ListBox)
+            .aria_label("Snip history")
             .key_context("SnipList")
             .track_focus(&self.snip_list_focus)
             .on_mouse_down(
@@ -389,6 +391,10 @@ fn history_row(
 
     div()
         .id(SharedString::from(id.to_string()))
+        .role(gpui::Role::ListBoxOption)
+        .aria_label(title.clone())
+        .aria_selected(selected)
+        .when(selected, |d| d.aria_active_descendant())
         .w_full()
         .h(px(row_h))
         .overflow_hidden()
@@ -400,7 +406,16 @@ fn history_row(
         .cursor_pointer()
         .when(selected, |d| d.bg(theme::accent_soft()))
         .when(!selected, |d| d.hover(|d| d.bg(theme::row_hover())))
+        .on_a11y_action(gpui::AccessibleAction::Click, {
+            let state_ent = state_ent.clone();
+            let list_focus = list_focus.clone();
+            move |_, window, cx| {
+                window.focus(&list_focus, cx);
+                state_ent.update(cx, |s, cx| s.select(id, cx));
+            }
+        })
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
             window.focus(&list_focus, cx);
             state_ent.update(cx, |s, cx| s.select(id, cx));
         })

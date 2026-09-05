@@ -125,10 +125,13 @@ jobs:
 
       - name: Check
         shell: pwsh
-        run: |
-          cargo fmt --all -- --check
-          cargo test --locked
-          cargo clippy --all-targets -- -D warnings
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Bundle
         env:

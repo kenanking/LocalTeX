@@ -48,7 +48,7 @@ impl AppState {
     }
 
     pub fn request_capture(&mut self, cx: &mut Context<Self>) {
-        if self.is_bootstrapping() {
+        if self.is_bootstrapping() || self.is_shutting_down() {
             self.capture_after_bootstrap = true;
             return;
         }
@@ -91,6 +91,7 @@ impl AppState {
                 .background_spawn(async {
                     let shot = crate::capture::grab_desktop()?;
                     crate::desktop::select_region(&shot)
+                        .map(|image| image.map(crate::imgutil::cap_megapixels))
                 })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| match picked {
@@ -120,7 +121,7 @@ impl AppState {
     }
 
     pub fn request_upload(&mut self, cx: &mut Context<Self>) {
-        if self.is_bootstrapping() {
+        if self.is_bootstrapping() || self.is_shutting_down() {
             return;
         }
         if self.is_capturing() {
@@ -145,7 +146,7 @@ impl AppState {
     }
 
     pub fn request_paste(&mut self, cx: &mut Context<Self>) {
-        if self.is_bootstrapping() {
+        if self.is_bootstrapping() || self.is_shutting_down() {
             return;
         }
         if self.is_capturing() || self.capture.clipboard_loading() {
@@ -156,14 +157,18 @@ impl AppState {
             self.capture.set_clipboard_loading(true);
             cx.spawn(async move |this, cx| {
                 let candidates = cx
-                    .background_spawn(async { crate::desktop::read_clipboard_image() })
+                    .background_spawn(async {
+                        crate::desktop::read_clipboard_image().map(crate::imgutil::cap_megapixels)
+                    })
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     this.capture.set_clipboard_loading(false);
-                    if candidates.is_empty() {
-                        this.request_paste_fallback(cx);
+                    if let Some(image) = candidates {
+                        if !this.is_shutting_down() {
+                            this.ingest_pixels(image, cx);
+                        }
                     } else {
-                        this.decode_native_clipboard(candidates, cx);
+                        this.request_paste_fallback(cx);
                     }
                 });
             })
@@ -171,26 +176,6 @@ impl AppState {
         }
         #[cfg(not(target_os = "windows"))]
         self.request_paste_fallback(cx);
-    }
-
-    #[cfg(target_os = "windows")]
-    fn decode_native_clipboard(&mut self, candidates: Vec<Vec<u8>>, cx: &mut Context<Self>) {
-        // Windows: GPUI skips CF_DIB/CF_BITMAP and can return text when a
-        // bitmap is also present. Try every native candidate (PNG may be a
-        // stub; DIB/HBITMAP still work).
-        self.spawn_paste_image(
-            move || {
-                let mut last = None;
-                for raw in candidates {
-                    match crate::desktop::decode_clipboard_image(raw) {
-                        Ok(img) => return Ok(img),
-                        Err(err) => last = Some(err),
-                    }
-                }
-                Err(last.unwrap_or_else(|| anyhow::anyhow!("no clipboard image")))
-            },
-            cx,
-        );
     }
 
     fn request_paste_fallback(&mut self, cx: &mut Context<Self>) {
@@ -231,7 +216,9 @@ impl AppState {
         self.capture.set(Capture::Idle);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let decoded = cx.background_spawn(async move { decode() }).await;
+            let decoded = cx
+                .background_spawn(async move { decode().map(crate::imgutil::cap_megapixels) })
+                .await;
             if let Err(err) = this.update(cx, |this, cx| match decoded {
                 Ok(img) => {
                     this.ingest_pixels(img, cx);

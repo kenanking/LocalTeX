@@ -174,6 +174,8 @@ pub struct Document {
     pub revision: u64,
     /// Snapshot written at recognition. Edits change `blocks` only.
     pub ocr_blocks: Vec<Block>,
+    pub raw_text: Option<String>,
+    pub source_error: Option<String>,
 }
 
 impl Document {
@@ -192,6 +194,8 @@ impl Document {
             ink: None,
             revision: 0,
             ocr_blocks: Vec::new(),
+            raw_text: None,
+            source_error: None,
         }
     }
 
@@ -201,7 +205,7 @@ impl Document {
             created_at: item.created_at,
             image: ImageSlot::OnDisk,
             blocks: Vec::new(),
-            status: DocStatus::Ready,
+            status: item.status,
             first_line: item.first_line,
             thumb_jpeg: Vec::new(),
             persist: PersistState::Stored,
@@ -210,6 +214,8 @@ impl Document {
             ink: None,
             revision: 0,
             ocr_blocks: Vec::new(),
+            raw_text: None,
+            source_error: None,
         }
     }
 
@@ -229,6 +235,9 @@ impl Document {
     }
 
     pub fn first_line(&self) -> String {
+        if let Some(text) = &self.raw_text {
+            return collapse_preview_line(text);
+        }
         match &self.status {
             DocStatus::Recognizing => "Recognizing…".into(),
             DocStatus::Failed(err) => format!("Failed: {err}"),
@@ -243,13 +252,17 @@ impl Document {
     }
 
     pub fn refresh_first_line(&mut self) {
+        if let Some(text) = &self.raw_text {
+            self.first_line = collapse_preview_line(text);
+            return;
+        }
         if matches!(self.status, DocStatus::Ready) {
             self.first_line = ready_first_line(&self.blocks);
         }
     }
 
     pub fn is_edited(&self) -> bool {
-        self.blocks_loaded && self.blocks != self.ocr_blocks
+        self.raw_text.is_some() || (self.blocks_loaded && self.blocks != self.ocr_blocks)
     }
 
     pub fn has_ready_blocks(&self) -> bool {
@@ -295,6 +308,9 @@ impl Document {
     }
 
     pub fn text_for(&self, kind: CopyKind, prefs: &crate::prefs::Prefs) -> String {
+        if self.source_error.is_some() {
+            return self.raw_text.clone().unwrap_or_default();
+        }
         kind.render(&self.blocks, prefs)
     }
 }

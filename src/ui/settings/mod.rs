@@ -42,6 +42,7 @@ const TABS: [(&str, &str, SettingsTab); 4] = [
 ];
 
 pub struct SettingsPane {
+    pub(crate) focus: FocusHandle,
     tab: SettingsTab,
     listen: Option<ShortcutId>,
     scroll: ScrollHandle,
@@ -57,6 +58,7 @@ pub struct SettingsPane {
 impl SettingsPane {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            focus: cx.focus_handle(),
             tab: SettingsTab::General,
             listen: None,
             scroll: ScrollHandle::new(),
@@ -217,6 +219,10 @@ impl SettingsPane {
 
         div()
             .id("settings")
+            .role(gpui::Role::Pane)
+            .aria_label("Settings")
+            .track_focus(&self.focus)
+            .tab_stop(false)
             .relative()
             .flex_1()
             .min_h_0()
@@ -321,7 +327,7 @@ fn bool_row(
     setting_row(
         title,
         hint,
-        switch(id, value, move |_, cx| {
+        switch(id, title, value, move |_, cx| {
             state.update(cx, |s, cx| {
                 s.update_prefs(cx, |p| set(p, !value));
             });

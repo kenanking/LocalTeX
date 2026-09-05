@@ -250,6 +250,7 @@ impl Prefs {
 
 enum PrefsCommand {
     Save(Prefs),
+    Flush(Sender<anyhow::Result<()>>),
     Shutdown(Sender<anyhow::Result<()>>),
 }
 
@@ -265,12 +266,20 @@ impl PrefsWriter {
         let thread = std::thread::Builder::new()
             .name("localtex-prefs-writer".into())
             .spawn(move || {
+                let mut failure = None;
                 while let Ok(command) = rx.recv() {
                     match command {
                         PrefsCommand::Save(prefs) => {
-                            if let Err(err) = prefs.save() {
+                            failure = prefs.save().err().map(|err| {
                                 eprintln!("{APP_SLUG}: save prefs: {err:#}");
-                            }
+                                format!("{err:#}")
+                            });
+                        }
+                        PrefsCommand::Flush(reply) => {
+                            let result = failure
+                                .as_ref()
+                                .map_or(Ok(()), |err| Err(anyhow::anyhow!("{err}")));
+                            let _ = reply.send(result);
                         }
                         PrefsCommand::Shutdown(reply) => {
                             let _ = reply.send(Ok(()));
@@ -293,23 +302,36 @@ impl PrefsWriter {
     }
 
     pub fn shutdown(&self) -> anyhow::Result<()> {
+        let mut slot = self
+            .thread
+            .lock()
+            .map_err(|_| anyhow::anyhow!("prefs writer join lock"))?;
+        if slot.is_none() {
+            return Ok(());
+        }
+        self.flush_timeout(std::time::Duration::from_secs(30))?;
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(PrefsCommand::Shutdown(reply))
             .map_err(|_| anyhow::anyhow!("prefs writer stopped"))?;
         rx.recv()
             .map_err(|_| anyhow::anyhow!("prefs writer stopped"))??;
-        let thread = self
-            .thread
-            .lock()
-            .map_err(|_| anyhow::anyhow!("prefs writer join lock"))?
-            .take();
+        let thread = slot.take();
         if let Some(thread) = thread {
             thread
                 .join()
                 .map_err(|_| anyhow::anyhow!("prefs writer panicked"))?;
         }
         Ok(())
+    }
+
+    pub fn flush_timeout(&self, timeout: std::time::Duration) -> anyhow::Result<()> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(PrefsCommand::Flush(reply))
+            .map_err(|_| anyhow::anyhow!("prefs writer stopped"))?;
+        rx.recv_timeout(timeout)
+            .map_err(|err| anyhow::anyhow!("prefs flush: {err}"))?
     }
 }
 

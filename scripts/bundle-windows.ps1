@@ -19,7 +19,6 @@ if (-not $Version) {
 $osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
 $Arch = switch ($osArch) {
     "X64" { "x86_64" }
-    "Arm64" { "aarch64" }
     default { throw "localtex: unsupported Windows arch $osArch" }
 }
 $Target = "$Arch-pc-windows-msvc"
@@ -39,6 +38,18 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "localtex: cargo build failed" }
 }
 if (-not (Test-Path $Bin)) { throw "localtex: missing $Bin" }
+$pe = [IO.File]::OpenRead($Bin)
+try {
+    $reader = [IO.BinaryReader]::new($pe)
+    $pe.Position = 0x3c
+    $header = $reader.ReadInt32()
+    $pe.Position = $header
+    if ($reader.ReadUInt32() -ne 0x00004550 -or $reader.ReadUInt16() -ne 0x8664) {
+        throw "localtex: bundle requires an x64 PE executable"
+    }
+} finally {
+    $pe.Dispose()
+}
 
 $Stage = Join-Path ([System.IO.Path]::GetTempPath()) ("localtex-win-" + [guid]::NewGuid().ToString("N"))
 $Payload = Join-Path $Stage "payload"

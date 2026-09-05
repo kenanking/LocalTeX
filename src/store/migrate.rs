@@ -1,21 +1,27 @@
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 
-pub(super) const SCHEMA_VERSION: i32 = 2;
+pub(super) const SCHEMA_VERSION: i32 = 3;
 
 pub(super) fn migrate(conn: &Connection) -> Result<()> {
-    if !snips_table_exists(conn)? {
-        conn.execute_batch(SNIPS_TABLE)?;
-        ensure_aux(conn)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        return Ok(());
-    }
+    let tx = conn.unchecked_transaction()?;
+    migrate_inner(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
 
+fn migrate_inner(conn: &Connection) -> Result<()> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         return Err(anyhow!(
             "snips.db schema version {version} is newer than this app ({SCHEMA_VERSION})"
         ));
+    }
+    if !snips_table_exists(conn)? {
+        conn.execute_batch(SNIPS_TABLE)?;
+        ensure_aux(conn)?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        return Ok(());
     }
 
     let names = snips_column_names(conn)?;
@@ -29,6 +35,25 @@ pub(super) fn migrate(conn: &Connection) -> Result<()> {
             "snips schema is missing required columns: {}",
             missing.join(", ")
         ));
+    }
+    if version < 3 {
+        for (column, definition) in [
+            ("raw_text", "TEXT"),
+            ("processing_status", "TEXT NOT NULL DEFAULT 'ready'"),
+            ("processing_error", "TEXT"),
+        ] {
+            if !names.iter().any(|name| name == column) {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE snips ADD COLUMN {column} {definition}"
+                ))?;
+            }
+        }
+    }
+    let names = snips_column_names(conn)?;
+    for column in ["raw_text", "processing_status", "processing_error"] {
+        if !names.iter().any(|name| name == column) {
+            return Err(anyhow!("snips schema is missing required column {column}"));
+        }
     }
     ensure_aux(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -57,7 +82,10 @@ const SNIPS_TABLE: &str = "
           thumb_jpeg BLOB NOT NULL,
           ocr_s REAL,
           confidence REAL,
-          ocr_blocks_json TEXT NOT NULL
+          ocr_blocks_json TEXT NOT NULL,
+          raw_text TEXT,
+          processing_status TEXT NOT NULL DEFAULT 'ready',
+          processing_error TEXT
         );
         ";
 
@@ -96,7 +124,7 @@ fn ensure_aux(conn: &Connection) -> Result<()> {
         .all(|exists| exists);
     let needs_rebuild = !fts_exists || !triggers_complete;
 
-    conn.execute_batch("BEGIN IMMEDIATE")?;
+    conn.execute_batch("SAVEPOINT auxiliary")?;
     let result = (|| -> Result<()> {
         conn.execute(
             "CREATE INDEX IF NOT EXISTS snips_created_at ON snips (created_at DESC)",
@@ -130,9 +158,9 @@ fn ensure_aux(conn: &Connection) -> Result<()> {
         Ok(())
     })();
     match result {
-        Ok(()) => conn.execute_batch("COMMIT").map_err(Into::into),
+        Ok(()) => conn.execute_batch("RELEASE auxiliary").map_err(Into::into),
         Err(err) => {
-            let _ = conn.execute_batch("ROLLBACK");
+            let _ = conn.execute_batch("ROLLBACK TO auxiliary; RELEASE auxiliary");
             Err(err)
         }
     }
@@ -149,6 +177,33 @@ mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
     use uuid::Uuid;
+
+    #[test]
+    fn v2_upgrade_is_atomic_and_preserves_ocr_snapshot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE snips(id TEXT PRIMARY KEY NOT NULL, created_at INTEGER NOT NULL, first_line TEXT NOT NULL, blocks_json TEXT NOT NULL, search_text TEXT NOT NULL, thumb_jpeg BLOB NOT NULL, ocr_s REAL, confidence REAL, ocr_blocks_json TEXT NOT NULL); PRAGMA user_version = 2; INSERT INTO snips VALUES ('id', 1, 'edited', '[]', 'edited', X'', NULL, NULL, '[original]'); CREATE TABLE snips_created_at(conflict TEXT);").unwrap();
+        assert!(super::migrate(&conn).is_err());
+        assert!(!super::snips_column_names(&conn)
+            .unwrap()
+            .iter()
+            .any(|name| name == "raw_text"));
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        conn.execute_batch("DROP TABLE snips_created_at").unwrap();
+        super::migrate(&conn).unwrap();
+        let (raw, status, ocr): (Option<String>, String, String) = conn
+            .query_row(
+                "SELECT raw_text, processing_status, ocr_blocks_json FROM snips",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(raw, None);
+        assert_eq!(status, "ready");
+        assert_eq!(ocr, "[original]");
+    }
 
     fn sample_doc(text: &str, created: SystemTime) -> crate::doc::Document {
         let mut img = RgbaImage::from_pixel(8, 8, Rgba([10, 20, 30, 255]));
@@ -177,6 +232,8 @@ mod tests {
             ink: None,
             revision: 0,
             ocr_blocks: blocks,
+            raw_text: None,
+            source_error: None,
         }
     }
 

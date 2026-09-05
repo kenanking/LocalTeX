@@ -21,6 +21,8 @@ mod other;
 #[cfg(target_os = "windows")]
 mod win;
 #[cfg(target_os = "windows")]
+pub(crate) use win::{attach_main_window, main_is_visible, session_pending, set_session_writers};
+#[cfg(target_os = "windows")]
 mod win_clipboard;
 #[cfg(target_os = "windows")]
 mod win_cursor;
@@ -37,6 +39,7 @@ pub enum DesktopCmd {
     Show,
     Reveal,
     Quit,
+    ServiceFailed(&'static str),
 }
 
 impl From<crate::keymap::GlobalCmd> for DesktopCmd {
@@ -83,13 +86,20 @@ pub fn spawn() -> (Sender<DesktopCmd>, Receiver<DesktopCmd>) {
     #[cfg(not(target_os = "windows"))]
     let hotkey = start_hotkey_manager(tx.clone());
     #[cfg(target_os = "windows")]
-    win_hotkey::install_chord_hook(tx.clone());
+    if let Err(err) = win_hotkey::install_chord_hook(tx.clone()) {
+        eprintln!("{APP_SLUG}: global hotkeys: {err}");
+        let _ = tx.send(DesktopCmd::ServiceFailed("Global hotkeys are unavailable"));
+    }
     #[cfg(target_os = "windows")]
     win::install_session_end_hook(tx.clone());
     #[cfg(target_os = "linux")]
     linux::start_tray(tx.clone());
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let tray = other::start_tray(tx.clone());
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if tray.is_none() {
+        let _ = tx.send(DesktopCmd::ServiceFailed("System tray is unavailable"));
+    }
     SERVICES.with(|slot| {
         *slot.borrow_mut() = Some(Services {
             #[cfg(not(target_os = "windows"))]
@@ -232,7 +242,7 @@ fn start_hotkey_manager(tx: Sender<DesktopCmd>) -> Option<GlobalHotKeyManager> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn read_clipboard_image() -> Vec<Vec<u8>> {
+pub fn read_clipboard_image() -> Option<image::RgbaImage> {
     win_clipboard::read()
 }
 

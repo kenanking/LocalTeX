@@ -38,6 +38,7 @@ pub use crate::library::DatePreset;
 const OCR_IDLE_RELEASE: Duration = Duration::from_secs(15 * 60);
 const HIDDEN_MEDIA_RELEASE: Duration = Duration::from_secs(5 * 60);
 
+#[derive(Clone)]
 enum PersistenceState {
     Loading,
     Ready {
@@ -105,7 +106,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(prefs: Prefs) -> Self {
+    pub fn new(prefs: Prefs, engine: Arc<Engine>) -> Self {
         let prefs_writer = PrefsWriter::start()
             .map_err(|err| eprintln!("{APP_SLUG}: {err:#}"))
             .ok();
@@ -116,7 +117,7 @@ impl AppState {
             prefs_writer,
             autostart_pending: false,
             capture_after_bootstrap: false,
-            engine: Engine::load(),
+            engine,
             engine_release_task: None,
             hidden_media_release_task: None,
             persistence: PersistenceState::Loading,
@@ -151,6 +152,11 @@ impl AppState {
                 match opened {
                     Ok((store, writer, events, items)) => {
                         this.library = Library::from_list(items);
+                        #[cfg(target_os = "windows")]
+                        crate::desktop::set_session_writers(
+                            writer.clone(),
+                            this.prefs_writer.clone(),
+                        );
                         this.persistence = PersistenceState::Ready { store, writer };
                         this.pump_store_events(events, cx);
                         if hydrate_selected || this.main_window.is_visible() {
@@ -200,6 +206,9 @@ impl AppState {
     }
 
     pub fn persist_prefs(&mut self) {
+        if self.is_shutting_down() {
+            return;
+        }
         if let Some(writer) = &self.prefs_writer {
             if let Err(err) = writer.save(self.prefs.clone()) {
                 eprintln!("{APP_SLUG}: queue prefs: {err:#}");
@@ -210,6 +219,9 @@ impl AppState {
     }
 
     pub fn update_prefs(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Prefs)) {
+        if self.is_shutting_down() {
+            return;
+        }
         f(&mut self.prefs);
         self.persist_prefs();
         cx.notify();
@@ -310,29 +322,47 @@ impl AppState {
         if matches!(self.persistence, PersistenceState::ShuttingDown) {
             return;
         }
+        for id in self.documents.persist_retry_ids() {
+            self.persist_ready(id, cx);
+        }
         let writer = self.store_writer();
-        let prefs_writer = self.prefs_writer.take();
+        let previous = self.persistence.clone();
+        let prefs_writer = self.prefs_writer.clone();
         self.persistence = PersistenceState::ShuttingDown;
-        cx.spawn(async move |_, cx| {
-            let result = match writer {
-                Some(writer) => cx.background_spawn(async move { writer.shutdown() }).await,
-                None => {
-                    // Leave the current window callback before stopping GPUI.
-                    cx.background_spawn(async {}).await;
-                    Ok(())
-                }
-            };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if let Some(writer) = &writer {
+                        writer.flush()?;
+                    }
+                    if let Some(prefs) = &prefs_writer {
+                        prefs.flush_timeout(Duration::from_secs(30))?;
+                    }
+                    if let Some(writer) = writer {
+                        writer.shutdown()?;
+                    }
+                    if let Some(prefs) = prefs_writer {
+                        prefs.shutdown()?;
+                    }
+                    anyhow::Ok(())
+                })
+                .await;
             if let Err(err) = result {
                 eprintln!("{APP_SLUG}: store shutdown: {err:#}");
-            }
-            if let Some(writer) = prefs_writer {
-                if let Err(err) = cx.background_spawn(async move { writer.shutdown() }).await {
-                    eprintln!("{APP_SLUG}: prefs shutdown: {err:#}");
-                }
+                let _ = this.update(cx, |this, cx| {
+                    this.persistence = previous;
+                    this.resume_pending_work(cx);
+                    this.flash_error("Couldn't save changes. Please retry before quitting.", cx);
+                });
+                return;
             }
             cx.update(|cx| cx.quit());
         })
         .detach();
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        matches!(self.persistence, PersistenceState::ShuttingDown)
     }
 
     pub fn engine_status(&self) -> crate::ocr::EngineStatus {
@@ -477,7 +507,11 @@ impl AppState {
         match cmd {
             DesktopCmd::Capture => self.request_capture(cx),
             DesktopCmd::Show => {
-                if self.main_window.is_visible() {
+                #[cfg(target_os = "windows")]
+                let visible = crate::desktop::main_is_visible();
+                #[cfg(not(target_os = "windows"))]
+                let visible = self.main_window.is_visible();
+                if visible {
                     self.hide_to_tray(cx);
                 } else {
                     self.restore_main(cx);
@@ -485,6 +519,7 @@ impl AppState {
             }
             DesktopCmd::Reveal => self.restore_main(cx),
             DesktopCmd::Quit => self.request_quit(cx),
+            DesktopCmd::ServiceFailed(message) => self.flash_error(message, cx),
         }
     }
 }

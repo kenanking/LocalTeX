@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::super::main_window::MainWindow;
 use super::super::theme;
-use super::super::widgets::{IconKind, Tooltip};
+use super::super::widgets::{ButtonElement, IconKind, Tooltip};
 
 pub(crate) fn hud_pill() -> gpui::Div {
     div()
@@ -26,8 +26,14 @@ pub(crate) fn orig_hud_disc(
     tooltip: &'static str,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
+    let id = id.into();
     div()
-        .id(id.into())
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(tooltip)
+        .focusable()
+        .tab_stop(true)
         .size(px(28.))
         .rounded_full()
         .flex()
@@ -54,10 +60,16 @@ pub(crate) fn source_hud_disc(
     id: impl Into<SharedString>,
     icon: IconKind,
     tooltip: &'static str,
+    enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
-    div()
-        .id(id.into())
+    let id = id.into();
+    let element = div()
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(tooltip)
+        .when(enabled, |d| d.focusable().tab_stop(true))
         .size(px(20.))
         .rounded_full()
         .flex()
@@ -66,14 +78,15 @@ pub(crate) fn source_hud_disc(
         .cursor_pointer()
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .tooltip(Tooltip::text(tooltip))
-        .on_click(on_click)
+        .when(enabled, |d| d.on_click(on_click))
         .hover(|d| d.bg(rgb(theme::ACCENT_SOFT_FILL)))
         .child(
             svg()
                 .path(icon.asset_path())
                 .size(px(12.))
                 .text_color(rgb(theme::TEXT)),
-        )
+        );
+    ButtonElement { element, enabled }
 }
 
 /// Outlined 24px disc, sits outside the source HUD pill (Done).
@@ -83,8 +96,14 @@ pub(crate) fn source_done_disc(
     tooltip: &'static str,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
+    let id = id.into();
     div()
-        .id(id.into())
+        .id(id.clone())
+        .accessibility_id(id)
+        .role(gpui::Role::Button)
+        .aria_label(tooltip)
+        .focusable()
+        .tab_stop(true)
         .size(px(24.))
         .rounded_full()
         .flex()

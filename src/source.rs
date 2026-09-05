@@ -149,7 +149,7 @@ enum Island {
 }
 
 fn split_islands(src: &str) -> Result<Vec<Island>, ParseError> {
-    let tab = find_tabulars(src);
+    let tab = find_tabulars(src)?;
     let mut with_disp = Vec::new();
     for piece in tab {
         match piece {
@@ -168,7 +168,7 @@ enum Piece {
     Tabular(String),
 }
 
-fn find_tabulars(src: &str) -> Vec<Piece> {
+fn find_tabulars(src: &str) -> Result<Vec<Piece>, ParseError> {
     let mut out = Vec::new();
     let mut rest = src;
     loop {
@@ -183,14 +183,15 @@ fn find_tabulars(src: &str) -> Vec<Piece> {
         }
         let from = &rest[start..];
         let Some(end_rel) = from.find("\\end{tabular}") else {
-            out.push(Piece::Text(from.to_string()));
-            break;
+            return Err(ParseError {
+                message: "Tabular is missing its closing command.".into(),
+            });
         };
         let end = end_rel + "\\end{tabular}".len();
         out.push(Piece::Tabular(from[..end].to_string()));
         rest = &from[end..];
     }
-    out
+    Ok(out)
 }
 
 fn split_display_islands(src: &str) -> Vec<Island> {
@@ -334,6 +335,14 @@ fn parse_markdown_chunk(md: &str) -> Vec<Block> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn incomplete_tabular_is_not_exported_as_a_formula() {
+        assert!(super::parse_source(
+            r"\begin{tabular}{cc} unfinished",
+            &crate::prefs::Prefs::default()
+        )
+        .is_err());
+    }
     use super::*;
     use crate::doc::snip_kind;
 

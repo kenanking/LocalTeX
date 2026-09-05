@@ -14,13 +14,15 @@ use super::AppState;
 
 impl AppState {
     pub fn ingest_strokes(&mut self, pts: Vec<Vec<[f32; 3]>>, cx: &mut Context<Self>) {
-        if self.is_bootstrapping() {
+        if self.is_bootstrapping() || self.is_shutting_down() {
             return;
         }
         let xy = crate::imgutil::traces_xy(&pts);
         cx.spawn(async move |this, cx| {
             let img = cx
-                .background_spawn(async move { crate::imgutil::rasterize_strokes(&xy, 3) })
+                .background_spawn(async move {
+                    crate::imgutil::rasterize_strokes(&xy, 3).map(crate::imgutil::cap_megapixels)
+                })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 if let Some(img) = img {
@@ -36,7 +38,11 @@ impl AppState {
     }
 
     pub fn offer_files(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if self.is_bootstrapping() || self.is_capturing() {
+        #[cfg(target_os = "windows")]
+        if crate::desktop::session_pending() {
+            return;
+        }
+        if self.is_bootstrapping() || self.is_capturing() || self.is_shutting_down() {
             return;
         }
         let classified = classify_image_paths(paths);
@@ -90,24 +96,17 @@ impl AppState {
         }
     }
 
-    pub(super) fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) -> Uuid {
+    pub(super) fn ingest_pixels(&mut self, image: RgbaImage, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         let id = self.insert_pixels(image);
-        self.enqueue_ocr(id, cx);
+        self.persist_ready(id, cx);
         cx.notify();
-        id
     }
 
     fn insert_pixels(&mut self, image: RgbaImage) -> Uuid {
         self.capture.set(Capture::Idle);
-        let (w0, h0) = image.dimensions();
-        let image = crate::imgutil::cap_megapixels(image);
-        if image.dimensions() != (w0, h0) {
-            eprintln!(
-                "{APP_SLUG}: snip {w0}×{h0} downscaled to {}×{} (24 MP cap)",
-                image.width(),
-                image.height()
-            );
-        }
         let doc = Document::pending(Arc::new(image));
         let id = doc.id;
         self.library.insert_newest(doc);
@@ -121,17 +120,26 @@ impl AppState {
         cx: &mut Context<Self>,
     ) {
         self.capture.set(Capture::Idle);
-        let image = crate::imgutil::cap_megapixels(image);
+        if self.is_shutting_down() {
+            return;
+        }
         let mut doc = Document::pending(Arc::new(image));
         doc.ink = Some(Arc::new(traces));
         let id = doc.id;
         self.library.insert_newest(doc);
-        self.enqueue_ocr(id, cx);
+        self.persist_ready(id, cx);
         cx.notify();
     }
 
     fn pump_file_ingest(&mut self, cx: &mut Context<Self>) {
-        if self.file_intake.loading {
+        if self.file_intake.loading
+            || self.is_shutting_down()
+            || self.intake.as_ref().is_some_and(|batch| {
+                batch.items.iter().any(|item| {
+                    item.id.is_some() && item.id != self.ocr.running() && !item.work.is_terminal()
+                })
+            })
+        {
             return;
         }
         let Some((gen, key, path)) = self.intake.as_ref().and_then(|batch| {
@@ -144,10 +152,15 @@ impl AppState {
         self.file_intake.loading = true;
         cx.spawn(async move |this, cx| {
             let decoded = cx
-                .background_spawn(async move { image::open(&path).map(|d| d.to_rgba8()) })
+                .background_spawn(async move {
+                    image::open(&path).map(|d| crate::imgutil::cap_megapixels(d.to_rgba8()))
+                })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 this.file_intake.loading = false;
+                if this.is_shutting_down() {
+                    return;
+                }
                 let current = this.intake.as_ref().is_some_and(|batch| {
                     batch.gen == gen && batch.items.iter().any(|item| item.key == key)
                 });
@@ -161,7 +174,7 @@ impl AppState {
                         if let Some(batch) = &mut this.intake {
                             batch.bind_item(key, id);
                         }
-                        this.enqueue_ocr(id, cx);
+                        this.persist_ready(id, cx);
                         cx.notify();
                     }
                     Err(err) => {
@@ -181,11 +194,18 @@ impl AppState {
     }
 
     pub(super) fn enqueue_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.is_shutting_down() || self.library.get(id).is_none() {
+            return;
+        }
         self.ocr.enqueue(id);
         self.pump_ocr(cx);
+        self.pump_file_ingest(cx);
     }
 
     pub(super) fn pump_ocr(&mut self, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         let Some(id) = self.ocr.take_next() else {
             self.pump_file_ingest(cx);
             return;
@@ -245,11 +265,17 @@ impl AppState {
                 })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
+                if this.is_shutting_down() {
+                    this.ocr.finish(id);
+                    return;
+                }
                 if let Some(doc) = this.library.get_mut(id) {
                     match result {
                         Ok(out) => {
-                            doc.blocks = out.blocks;
-                            doc.ocr_blocks = doc.blocks.clone();
+                            doc.ocr_blocks = out.blocks;
+                            if doc.raw_text.is_none() {
+                                doc.blocks = doc.ocr_blocks.clone();
+                            }
                             doc.blocks_loaded = true;
                             doc.ocr = out.meta;
                             doc.status = DocStatus::Ready;
@@ -269,21 +295,19 @@ impl AppState {
                     .get(id)
                     .is_some_and(|d| matches!(d.status, DocStatus::Ready));
                 this.finish_intake_id(id, ready, cx);
-                if ready {
-                    this.persist_ready(id, cx);
-                    if this.prefs.autocopy && this.library.selected() == Some(id) {
-                        if let Some((id, kind)) = this.copy_selected(cx) {
-                            let handle = this.main_window.handle();
-                            cx.defer(move |cx| {
-                                if let Some(handle) = handle {
-                                    if let Err(err) = handle.update(cx, |view, _, cx| {
-                                        view.flash_copied(id, kind, cx);
-                                    }) {
-                                        eprintln!("{APP_SLUG}: autocopy flash: {err}");
-                                    }
+                this.persist_ready(id, cx);
+                if ready && this.prefs.autocopy && this.library.selected() == Some(id) {
+                    if let Some((id, kind)) = this.copy_selected(cx) {
+                        let handle = this.main_window.handle();
+                        cx.defer(move |cx| {
+                            if let Some(handle) = handle {
+                                if let Err(err) = handle.update(cx, |view, _, cx| {
+                                    view.flash_copied(id, kind, cx);
+                                }) {
+                                    eprintln!("{APP_SLUG}: autocopy flash: {err}");
                                 }
-                            });
-                        }
+                            }
+                        });
                     }
                 }
                 this.pump_ocr(cx);
@@ -306,9 +330,16 @@ impl AppState {
     }
 
     pub fn retry_selected(&mut self, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         let Some(id) = self.library.selected() else {
             return;
         };
+        if self.library.get(id).is_some_and(|doc| !doc.blocks_loaded) {
+            self.ensure_detail(id, cx);
+            return;
+        }
         if self.library.get(id).is_some_and(|d| d.is_edited()) {
             return;
         }

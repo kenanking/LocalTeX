@@ -53,9 +53,6 @@ impl OcrQueue {
     }
 
     pub fn remove(&mut self, id: Uuid) {
-        if self.running == Some(id) {
-            self.running = None;
-        }
         self.pending.retain(|x| *x != id);
     }
 }
@@ -63,6 +60,20 @@ impl OcrQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_running_job_keeps_slot_until_completion() {
+        let mut q = OcrQueue::new();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        q.enqueue(a);
+        q.enqueue(b);
+        assert_eq!(q.take_next(), Some(a));
+        q.remove(a);
+        assert_eq!(q.take_next(), None);
+        q.finish(a);
+        assert_eq!(q.take_next(), Some(b));
+    }
 
     #[test]
     fn serializes_jobs() {

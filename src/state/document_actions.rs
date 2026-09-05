@@ -12,7 +12,11 @@ impl AppState {
         let doc = self.selected_doc()?;
         let id = doc.id;
         let snip = doc.snip_kind();
-        let kind = self.prefs.copy_habit.resolve(snip, self.export_fmt);
+        let kind = if doc.source_error.is_some() {
+            CopyKind::Markdown
+        } else {
+            self.prefs.copy_habit.resolve(snip, self.export_fmt)
+        };
         let text = doc.text_for(kind, &self.prefs);
         if text.is_empty() {
             return None;
@@ -44,7 +48,7 @@ impl AppState {
         let Some(doc) = self.selected_doc() else {
             return;
         };
-        if !doc.has_ready_blocks() {
+        if !doc.has_ready_blocks() || doc.source_error.is_some() {
             return;
         }
         let blocks = doc.blocks.clone();
@@ -82,6 +86,9 @@ impl AppState {
     }
 
     pub fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         let Some(id) = self.library.selected() else {
             return;
         };
@@ -106,6 +113,9 @@ impl AppState {
     }
 
     pub fn wipe_library(&mut self, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         self.ocr.cancel_remaining();
         if let Some(id) = self.ocr.running() {
             self.ocr.remove(id);

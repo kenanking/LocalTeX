@@ -7,7 +7,9 @@ use image::RgbaImage;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 
-use crate::identity::{models_dir, APP_SLUG};
+#[cfg(test)]
+use crate::identity::models_dir;
+use crate::identity::APP_SLUG;
 
 mod imgops;
 pub(crate) mod inktex;
@@ -63,8 +65,15 @@ pub struct Engine {
 
 impl Engine {
     pub fn load() -> Arc<Self> {
-        let dir = models_dir();
-        let model_info = ModelInfo::read(dir.clone());
+        let location = crate::identity::models_location();
+        let dir = location.path;
+        let mut model_info = ModelInfo::read(dir.clone());
+        model_info.source = location.source;
+        eprintln!(
+            "{APP_SLUG}: models from {}: {}",
+            location.source,
+            dir.display()
+        );
         let opendoc_ok = model_info.opendoc_available();
         let ink_ok = model_info.handwriting_available();
         if opendoc_ok {
@@ -661,9 +670,11 @@ mod tests {
     #[ignore]
     fn opendoc_smoke_if_weights_exist() {
         let dir = models_dir();
-        if !pack_present(&opendoc_dir(&dir), &OPENDOC_FILES) {
-            return;
-        }
+        assert!(
+            pack_present(&opendoc_dir(&dir), &OPENDOC_FILES),
+            "OpenDoc models missing in {}",
+            dir.display()
+        );
         let engine = Engine::load();
         let img = RgbaImage::from_pixel(64, 32, image::Rgba([255, 255, 255, 255]));
         let _ = engine.recognize(&img).expect("OpenDoc recognize");
@@ -677,9 +688,11 @@ mod tests {
     #[ignore]
     fn inktex_smoke_if_weights_exist() {
         let dir = models_dir();
-        if !pack_present(&handwriting_dir(&dir), &INK_FILES) {
-            return;
-        }
+        assert!(
+            pack_present(&handwriting_dir(&dir), &INK_FILES),
+            "Handwriting models missing in {}",
+            dir.display()
+        );
         let engine = Engine::load();
         let traces = vec![vec![
             [10.0, 10.0, 0.0],

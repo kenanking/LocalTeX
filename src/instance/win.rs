@@ -2,7 +2,7 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -15,17 +15,17 @@ use windows::Win32::Security::{
     GetLengthSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED,
-    FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_FIRST_PIPE_INSTANCE,
+    FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
     WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 use windows::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcess, OpenProcessToken, ResetEvent, SetEvent, WaitForSingleObject,
+    CreateEventW, GetCurrentProcess, OpenProcessToken, ResetEvent, SetEvent, WaitForMultipleObjects,
 };
-use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
+use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
 
 use crate::desktop::DesktopCmd;
@@ -40,12 +40,9 @@ pub(super) struct Inner {
 }
 
 struct Server {
-    stop: Arc<AtomicBool>,
-    handle: isize,
     event: isize,
     accept: Option<JoinHandle<()>>,
 }
-
 impl Inner {
     pub(super) fn serve(&mut self, tx: Sender<DesktopCmd>) {
         if self.serving.swap(true, Ordering::SeqCst) {
@@ -70,10 +67,8 @@ impl Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         if let Some(mut server) = self.server.take() {
-            server.stop.store(true, Ordering::SeqCst);
             unsafe {
                 let _ = SetEvent(HANDLE(server.event as *mut core::ffi::c_void));
-                let _ = CloseHandle(HANDLE(server.handle as *mut core::ffi::c_void));
             }
             if let Some(accept) = server.accept.take() {
                 let _ = accept.join();
@@ -112,61 +107,74 @@ pub(super) fn try_bind(endpoint: &Endpoint) -> io::Result<Inner> {
             return Err(io::Error::from_raw_os_error(win32_code(&err) as i32));
         }
     };
+    let stop = match unsafe { CreateEventW(None, true, false, PCWSTR::null()) } {
+        Ok(stop) => stop,
+        Err(err) => {
+            unsafe {
+                let _ = CloseHandle(handle);
+                let _ = CloseHandle(event);
+            }
+            return Err(io::Error::from_raw_os_error(win32_code(&err) as i32));
+        }
+    };
     let (pending_tx, pending_rx) = mpsc::channel();
-    let stop = Arc::new(AtomicBool::new(false));
-    let accept_stop = stop.clone();
     let accept_raw = handle.0 as isize;
     let event_raw = event.0 as isize;
+    let stop_raw = stop.0 as isize;
     let accept = thread::spawn(move || {
-        let accept_handle = HANDLE(accept_raw as *mut core::ffi::c_void);
+        let pipe = HANDLE(accept_raw as *mut core::ffi::c_void);
         let event = HANDLE(event_raw as *mut core::ffi::c_void);
+        let stop = HANDLE(stop_raw as *mut core::ffi::c_void);
         loop {
-            if accept_stop.load(Ordering::SeqCst) {
-                break;
-            }
             let _ = unsafe { ResetEvent(event) };
             let mut overlapped = OVERLAPPED {
                 hEvent: event,
                 ..Default::default()
             };
-            // Overlapped listen: same-process blocking ConnectNamedPipe + CreateFile can hang.
-            let connected = match unsafe {
-                ConnectNamedPipe(accept_handle, Some(&mut overlapped as *mut _))
-            } {
+            let connected = match unsafe { ConnectNamedPipe(pipe, Some(&mut overlapped)) } {
                 Ok(()) => true,
                 Err(err) if win32_code(&err) == ERROR_PIPE_CONNECTED.0 => true,
-                Err(err) if win32_code(&err) == ERROR_IO_PENDING.0 => loop {
-                    if accept_stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    if unsafe { WaitForSingleObject(event, 50) }.0 == 0 {
-                        let mut transferred = 0;
-                        break unsafe {
-                            GetOverlappedResult(accept_handle, &overlapped, &mut transferred, false)
-                        }
-                        .is_ok();
-                    }
-                },
+                Err(err) if win32_code(&err) == ERROR_IO_PENDING.0 => {
+                    wait_io(pipe, event, stop, &overlapped).is_some()
+                }
                 Err(_) => false,
             };
             if !connected {
-                thread::sleep(Duration::from_millis(10));
-                continue;
-            }
-            if accept_stop.load(Ordering::SeqCst) {
                 break;
             }
-            if pending_tx.send(Reveal).is_err() {
+            let _ = unsafe { ResetEvent(event) };
+            let mut byte = [0u8];
+            let mut transferred = 0;
+            let read = match unsafe {
+                ReadFile(
+                    pipe,
+                    Some(&mut byte),
+                    Some(&mut transferred),
+                    Some(&mut overlapped),
+                )
+            } {
+                Ok(()) => transferred == 1,
+                Err(err) if win32_code(&err) == ERROR_IO_PENDING.0 => {
+                    wait_io(pipe, event, stop, &overlapped) == Some(1)
+                }
+                Err(_) => false,
+            };
+            if read && byte[0] == 1 && pending_tx.send(Reveal).is_err() {
                 break;
             }
-            let _ = unsafe { DisconnectNamedPipe(accept_handle) };
+            let _ = unsafe { DisconnectNamedPipe(pipe) };
+            if unsafe { windows::Win32::System::Threading::WaitForSingleObject(stop, 0) }.0 == 0 {
+                break;
+            }
+        }
+        unsafe {
+            let _ = CloseHandle(pipe);
+            let _ = CloseHandle(event);
         }
     });
     Ok(Inner {
         server: Some(Server {
-            stop,
-            handle: handle.0 as isize,
-            event: event.0 as isize,
+            event: stop_raw,
             accept: Some(accept),
         }),
         pending: Some(pending_rx),
@@ -174,6 +182,19 @@ pub(super) fn try_bind(endpoint: &Endpoint) -> io::Result<Inner> {
     })
 }
 
+fn wait_io(pipe: HANDLE, event: HANDLE, stop: HANDLE, overlapped: &OVERLAPPED) -> Option<u32> {
+    let ready = unsafe { WaitForMultipleObjects(&[stop, event], false, u32::MAX) }.0;
+    let mut transferred = 0;
+    if ready != 1 {
+        unsafe {
+            let _ = CancelIoEx(pipe, Some(overlapped));
+            let _ = GetOverlappedResult(pipe, overlapped, &mut transferred, true);
+        }
+        return None;
+    }
+    unsafe { GetOverlappedResult(pipe, overlapped, &mut transferred, false) }.ok()?;
+    Some(transferred)
+}
 pub(super) fn connect(endpoint: &Endpoint) -> io::Result<()> {
     let name = pipe_name(endpoint)?;
     let client = open_pipe_retry(&name)?;
@@ -182,15 +203,20 @@ pub(super) fn connect(endpoint: &Endpoint) -> io::Result<()> {
         // The activating click belongs to this loser; restore_main needs the grant.
         let _ = unsafe { AllowSetForegroundWindow(pid) };
     }
-    // This connection is the reveal signal, so keep it alive until the accept
-    // thread has observed it. There is no request/ack payload to wait on.
-    thread::sleep(Duration::from_millis(50));
+    let mut written = 0;
+    let result = unsafe { WriteFile(client, Some(&[1]), Some(&mut written), None) };
     unsafe {
         let _ = CloseHandle(client);
     }
+    result.map_err(|err| io::Error::from_raw_os_error(win32_code(&err) as i32))?;
+    if written != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "reveal signal was not written",
+        ));
+    }
     Ok(())
 }
-
 pub(super) fn is_occupied(err: &io::Error) -> bool {
     matches!(
         err.raw_os_error(),

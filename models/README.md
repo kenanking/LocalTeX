@@ -20,6 +20,19 @@ SHA-256 matches this release. Stale or partial caches are skipped.
 
 ## Directory layout
 
+Runtime discovery is shared by development builds and test executables. A nonempty
+`LOCALTEX_MODELS` is authoritative, including an invalid path. Otherwise discovery
+checks executable-adjacent `models` (also above a test `deps` directory), the Linux
+prefix, user data, the fixed Windows installer AppId's `InstallLocation`, and
+`%LOCALAPPDATA%\Programs\LocalTeX\models`. It prefers a complete pair; if none exists,
+it uses the first complete single pack without combining different roots.
+Settings → System displays the selected directory and source. No automatic
+download or permanent environment changes occur.
+
+Run installed-model checks explicitly with
+`cargo test smoke_if_weights_exist -- --ignored --nocapture --test-threads=1`.
+These tests fail when required models are absent; normal unit tests skip inference.
+
 ```
 models/
   opendoc/

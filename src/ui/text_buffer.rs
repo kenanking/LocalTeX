@@ -130,9 +130,23 @@ impl TextBuffer {
         }
         self.selected_range = new_selected_range_utf16
             .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|selection| {
+                let offset = |units| {
+                    let mut count = 0;
+                    let mut bytes = 0;
+                    for ch in new_text.chars() {
+                        if count >= units {
+                            break;
+                        }
+                        count += ch.len_utf16();
+                        bytes += ch.len_utf8();
+                    }
+                    range.start + bytes
+                };
+                offset(selection.start)..offset(selection.end)
+            })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.selection_reversed = false;
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -164,5 +178,28 @@ impl TextBuffer {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
         Some(self.content[range].to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composition_selection_is_relative_to_inserted_text() {
+        for (selection, text, caret, expected) in
+            [(1..2, "X", 1, 2), (3..3, "中", 1, 6), (1..2, "😀中", 2, 5)]
+        {
+            let mut buffer = TextBuffer::new();
+            buffer.content = "abc".into();
+            buffer.selected_range = selection;
+            buffer.replace_and_mark(None, text, Some(caret..caret));
+            assert_eq!(buffer.selected_range, expected..expected);
+            assert!(buffer.content.is_char_boundary(expected));
+            buffer.replace_and_mark(None, "中文", Some(2..2));
+            assert!(buffer.content.is_char_boundary(buffer.cursor_offset()));
+            buffer.replace_text(None, "完成");
+            assert!(buffer.marked_range.is_none());
+        }
     }
 }

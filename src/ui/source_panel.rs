@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gpui::{Context, Entity, Focusable, Window};
+use gpui::{AppContext, Context, Entity, Focusable, Window};
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
@@ -64,7 +64,9 @@ impl MainWindow {
     }
 
     pub(crate) fn close_source(&mut self, cx: &mut Context<Self>) {
-        self.source_panel.flush_task.take();
+        if let Some(task) = self.source_panel.flush_task.take() {
+            task.detach();
+        }
         if self.source_panel.open {
             self.flush_source(cx);
         }
@@ -86,14 +88,18 @@ impl MainWindow {
         if self.source_panel.bound.is_some() {
             self.flush_source(cx);
         }
-        let (prefs, blocks) = {
+        let (prefs, blocks, raw) = {
             let state = self.state.read(cx);
             let Some(doc) = state.selected_doc() else {
                 return;
             };
-            (state.prefs.clone(), doc.blocks.clone())
+            (
+                state.prefs.clone(),
+                doc.blocks.clone(),
+                doc.raw_text.clone(),
+            )
         };
-        let text = crate::source::blocks_to_source(&blocks, &prefs);
+        let text = raw.unwrap_or_else(|| crate::source::blocks_to_source(&blocks, &prefs));
         self.source_panel.lang =
             crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
         self.source_panel.last = text.clone();
@@ -124,15 +130,7 @@ impl MainWindow {
         if !self.source_panel.open {
             return;
         }
-        self.source_panel.flush_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(280))
-                .await;
-            this.update(cx, |this, cx| {
-                this.flush_source(cx);
-            })
-            .ok();
-        }));
+        self.flush_source(cx);
     }
 
     fn flush_source(&mut self, cx: &mut Context<Self>) {
@@ -143,18 +141,37 @@ impl MainWindow {
         if text == self.source_panel.last {
             return;
         }
-        let prefs = self.state.read(cx).prefs.clone();
-        let Ok(blocks) = crate::source::parse_source(&text, &prefs) else {
-            return;
-        };
         let Some(id) = self.source_panel.bound else {
             return;
         };
-        self.source_panel.lang =
-            crate::source::editor_lang_label(crate::doc::snip_kind(&blocks), &text);
-        self.source_panel.last = text;
-        self.state
-            .update(cx, |state, cx| state.apply_parsed_source(id, blocks, cx));
+        self.source_panel.last = text.clone();
+        let revision = self
+            .state
+            .update(cx, |state, cx| state.save_source(id, text.clone(), cx));
+        let Some(revision) = revision else {
+            return;
+        };
+        let prefs = self.state.read(cx).prefs.clone();
+        let state = self.state.clone();
+        if let Some(task) = self.source_panel.flush_task.take() {
+            task.detach();
+        }
+        self.source_panel.flush_task = Some(cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(280))
+                .await;
+            if !state.update(cx, |state, _| {
+                state.doc(id).is_some_and(|doc| doc.revision == revision)
+            }) {
+                return;
+            }
+            let parsed = cx
+                .background_spawn(async move { crate::source::parse_source(&text, &prefs) })
+                .await;
+            state.update(cx, |state, cx| {
+                state.apply_parsed_source(id, revision, parsed, cx)
+            });
+        }));
     }
 
     pub(crate) fn revert_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -124,9 +124,14 @@ fn autostart_row(state: &Entity<AppState>, value: bool) -> AnyElement {
     setting_row(
         "Launch at startup",
         "Keeps LocalTeX ready in the tray when you sign in.",
-        switch("pref-autostart", value, move |_, cx| {
-            state.update(cx, |state, cx| state.set_launch_at_startup(!value, cx));
-        }),
+        switch(
+            "pref-autostart",
+            "Launch at startup",
+            value,
+            move |_, cx| {
+                state.update(cx, |state, cx| state.set_launch_at_startup(!value, cx));
+            },
+        ),
     )
     .into_any_element()
 }

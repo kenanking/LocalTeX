@@ -297,7 +297,7 @@ impl MainWindow {
                 (
                     doc.id,
                     doc.revision,
-                    doc.has_ready_blocks(),
+                    doc.has_ready_blocks() && doc.source_error.is_none(),
                     state.prefs.clone(),
                 )
             })

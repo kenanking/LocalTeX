@@ -45,7 +45,6 @@ pub struct SourceEditor {
     last_line_height: Pixels,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
-    skip_undo: bool,
     font_px: f32,
     line_px: f32,
 }
@@ -54,14 +53,13 @@ impl SourceEditor {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let m = ContentFontSize::Medium.metrics();
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle: cx.focus_handle().tab_stop(true),
             buf: TextBuffer::new(),
             last_lines: Vec::new(),
             last_bounds: None,
             last_line_height: px(m.body_line),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            skip_undo: false,
             font_px: m.body,
             line_px: m.body_line,
         }
@@ -96,7 +94,6 @@ impl SourceEditor {
         self.buf.marked_range = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
-        self.skip_undo = true;
         cx.notify();
     }
 
@@ -106,9 +103,10 @@ impl SourceEditor {
         };
         self.redo_stack.push(self.buf.content.to_string());
         self.buf.content = prev.into();
+        self.buf.marked_range = None;
+        self.buf.selection_reversed = false;
         let len = self.buf.content.len();
         self.buf.selected_range = len..len;
-        self.skip_undo = true;
         cx.notify();
     }
 
@@ -118,9 +116,10 @@ impl SourceEditor {
         };
         self.undo_stack.push(self.buf.content.to_string());
         self.buf.content = next.into();
+        self.buf.marked_range = None;
+        self.buf.selection_reversed = false;
         let len = self.buf.content.len();
         self.buf.selected_range = len..len;
-        self.skip_undo = true;
         cx.notify();
     }
 
@@ -133,10 +132,6 @@ impl SourceEditor {
     }
 
     fn push_undo(&mut self) {
-        if self.skip_undo {
-            self.skip_undo = false;
-            return;
-        }
         self.undo_stack.push(self.buf.content.to_string());
         if self.undo_stack.len() > UNDO_CAP {
             self.undo_stack.remove(0);
@@ -702,7 +697,24 @@ impl Element for FieldElement {
 
 impl Render for SourceEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = cx.entity();
         div()
+            .id("source-editor")
+            .accessibility_id("source-editor")
+            .role(gpui::Role::MultilineTextInput)
+            .aria_label("Source content")
+            .aria_value(self.buf.content.clone())
+            .on_a11y_action(gpui::AccessibleAction::SetValue, move |data, _, cx| {
+                if let Some(gpui::accesskit::ActionData::Value(text)) = data {
+                    input.update(cx, |input, cx| {
+                        input.push_undo();
+                        input.buf.marked_range = None;
+                        input.buf.selected_range = 0..input.buf.content.len();
+                        input.buf.replace_text(None, text);
+                        cx.notify();
+                    });
+                }
+            })
             .flex()
             .flex_col()
             .key_context("SourceEditor")

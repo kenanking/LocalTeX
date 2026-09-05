@@ -100,6 +100,7 @@ impl ModelManifestState {
 
 #[derive(Debug, Clone)]
 pub struct ModelInfo {
+    pub source: &'static str,
     dir: PathBuf,
     opendoc_pack: Option<String>,
     handwriting_pack: Option<String>,
@@ -149,6 +150,7 @@ impl ModelInfo {
         let handwriting_runtime =
             startup_runtime(handwriting_available, handwriting_pack.is_some());
         Self {
+            source: "Specified directory",
             dir,
             opendoc_pack,
             handwriting_pack,

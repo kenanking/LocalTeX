@@ -10,6 +10,40 @@ use crate::store::{WriteEvent, WriteKind, WriteResult};
 use super::AppState;
 
 impl AppState {
+    pub(super) fn resume_pending_work(&mut self, cx: &mut Context<Self>) {
+        let pending: Vec<_> = self
+            .library
+            .iter_all()
+            .filter_map(|doc| {
+                (doc.source_error.as_deref() == Some("Updating preview…"))
+                    .then(|| {
+                        doc.raw_text
+                            .clone()
+                            .map(|text| (doc.id, doc.revision, text))
+                    })
+                    .flatten()
+            })
+            .collect();
+        for (id, revision, text) in pending {
+            let prefs = self.prefs.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move { crate::source::parse_source(&text, &prefs) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.apply_parsed_source(id, revision, result, cx);
+                });
+            })
+            .detach();
+        }
+        for doc in self.library.iter_all() {
+            if doc.is_persisted() && matches!(doc.status, DocStatus::Recognizing) {
+                self.ocr.enqueue(doc.id);
+            }
+        }
+        self.pump_ocr(cx);
+    }
+
     pub fn request_thumb(&mut self, id: Uuid, cx: &mut Context<Self>) {
         if self.documents.thumb_blocked(id) {
             return;
@@ -67,9 +101,6 @@ impl AppState {
         let Some(doc) = self.library.get(id) else {
             return;
         };
-        if !matches!(doc.status, DocStatus::Ready) {
-            return;
-        }
         let revision = doc.revision;
         let stored = match doc.persist {
             PersistState::New => false,
@@ -104,12 +135,46 @@ impl AppState {
         }
     }
 
-    pub fn apply_parsed_source(&mut self, id: Uuid, blocks: Vec<Block>, cx: &mut Context<Self>) {
+    pub fn save_source(&mut self, id: Uuid, text: String, cx: &mut Context<Self>) -> Option<u64> {
+        if self.is_shutting_down() {
+            return None;
+        }
+        let doc = self.library.get_mut(id)?;
+        doc.raw_text = Some(text);
+        doc.source_error = Some("Updating preview…".into());
+        doc.refresh_first_line();
+        doc.bump_revision();
+        let revision = doc.revision;
+        self.persist_edits(id, cx);
+        self.schedule_filter(cx);
+        cx.notify();
+        Some(revision)
+    }
+
+    pub fn apply_parsed_source(
+        &mut self,
+        id: Uuid,
+        revision: u64,
+        result: Result<Vec<Block>, crate::source::ParseError>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_shutting_down() {
+            return;
+        }
         if let Some(doc) = self.library.get_mut(id) {
-            if !matches!(doc.status, DocStatus::Ready) {
+            if doc.revision != revision {
                 return;
             }
-            doc.blocks = blocks;
+            match result {
+                Ok(blocks) => {
+                    doc.blocks = blocks;
+                    doc.source_error = None;
+                }
+                Err(error) => {
+                    doc.blocks.clear();
+                    doc.source_error = Some(format!("Unable to preview: {error}"));
+                }
+            }
             doc.refresh_first_line();
             doc.bump_revision();
         }
@@ -119,6 +184,9 @@ impl AppState {
     }
 
     pub fn revert_ocr(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.is_shutting_down() {
+            return;
+        }
         let Some(doc) = self.library.get_mut(id) else {
             return;
         };
@@ -126,6 +194,8 @@ impl AppState {
             return;
         }
         doc.blocks = doc.ocr_blocks.clone();
+        doc.raw_text = None;
+        doc.source_error = None;
         doc.refresh_first_line();
         doc.bump_revision();
         self.persist_edits(id, cx);
@@ -137,10 +207,11 @@ impl AppState {
         let Some(writer) = self.store_writer() else {
             return;
         };
-        let Some(doc) = self.library.get(id).cloned() else {
+        let Some(doc) = self.library.get(id) else {
             return;
         };
-        if !doc.is_persisted() || !matches!(doc.status, DocStatus::Ready) {
+        if matches!(doc.persist, PersistState::New) {
+            self.persist_ready(id, cx);
             return;
         }
         if let Err(err) = writer.update_blocks(doc) {
@@ -211,17 +282,34 @@ impl AppState {
             self.documents.finish_blocks(id);
             return;
         };
+        let prefs = self.prefs.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { store.load_block_pair(id) })
+                .background_spawn(async move {
+                    let (mut blocks, ocr_blocks) = store.load_block_pair(id)?;
+                    let raw = store.load_source(id)?;
+                    let mut error = None;
+                    if let Some(text) = &raw {
+                        match crate::source::parse_source(text, &prefs) {
+                            Ok(parsed) => blocks = parsed,
+                            Err(err) => {
+                                blocks.clear();
+                                error = Some(format!("Unable to preview: {err}"));
+                            }
+                        }
+                    }
+                    anyhow::Ok((blocks, ocr_blocks, raw, error))
+                })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 this.documents.finish_blocks(id);
                 match result {
-                    Ok((blocks, ocr_blocks)) => {
+                    Ok((blocks, ocr_blocks, raw, error)) => {
                         if let Some(doc) = this.library.get_mut(id) {
                             doc.blocks = blocks;
                             doc.ocr_blocks = ocr_blocks;
+                            doc.raw_text = raw;
+                            doc.source_error = error;
                             doc.blocks_loaded = true;
                             doc.refresh_first_line();
                             doc.bump_revision();
@@ -322,6 +410,13 @@ impl AppState {
                 if changed_during_insert {
                     self.persist_edits(id, cx);
                 }
+                if self
+                    .library
+                    .get(id)
+                    .is_some_and(|doc| matches!(doc.status, DocStatus::Recognizing))
+                {
+                    self.enqueue_ocr(id, cx);
+                }
                 self.schedule_filter(cx);
             }
             (WriteKind::Insert { id, revision }, Err(err)) => {
@@ -352,10 +447,7 @@ impl AppState {
                 eprintln!("{APP_SLUG}: wipe library: {err:#}");
                 self.flash_error("Couldn't clear the snip library", cx);
             }
-            (
-                WriteKind::UpdateOcr { id } | WriteKind::UpdateBlocks { id },
-                Ok(WriteResult::Done),
-            ) => {
+            (WriteKind::UpdateOcr { id }, Ok(WriteResult::Done)) => {
                 self.documents.clear_persist_retry(id);
             }
             (_, Ok(WriteResult::Done)) => {}

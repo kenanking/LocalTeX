@@ -67,25 +67,53 @@ fn main() {
     }
 }
 
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+#[ignore = "interactive Windows UI; requires LOCALTEX_TEST_ROOT"]
+fn interactive_windows_ui() {
+    let root = std::env::var_os("LOCALTEX_TEST_ROOT").expect("set an isolated LOCALTEX_TEST_ROOT");
+    assert!(std::path::Path::new(&root).is_absolute());
+    let store = crate::store::Store::open(crate::identity::data_dir()).unwrap();
+    if store.list().unwrap().is_empty() {
+        let mut doc = crate::doc::Document::pending(std::sync::Arc::new(
+            image::RgbaImage::from_pixel(64, 32, image::Rgba([255; 4])),
+        ));
+        doc.blocks = vec![crate::doc::Block::new(
+            crate::doc::BlockKind::Text,
+            crate::doc::Rect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 32,
+            },
+            "Isolated UI test content",
+        )];
+        doc.ocr_blocks = doc.blocks.clone();
+        doc.status = crate::doc::DocStatus::Ready;
+        store.insert_ready(&doc).unwrap();
+    }
+    drop(store);
+    main();
+}
+
 fn run(mut seat: instance::Seat) {
     let startup_mode = StartupMode::from_args();
     pin_display_vulkan();
     crate::icon::install_desktop_identity();
+    let engine = std::thread::spawn(crate::ocr::Engine::load);
     gpui_platform::application()
         .with_assets(crate::icon::Assets)
         .run(move |cx: &mut App| {
             let prefs = crate::prefs::Prefs::load();
-            let launch_at_startup = prefs.launch_at_startup;
-            cx.background_spawn(async move {
-                if let Err(err) = crate::autostart::apply(launch_at_startup) {
-                    eprintln!("{}: autostart: {err:#}", crate::identity::APP_SLUG);
-                }
-            })
-            .detach();
             crate::keymap::apply(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
-            let state = cx.new(|_| AppState::new(prefs));
+            let engine = engine.join().expect("model discovery thread");
+            let state = cx.new(|_| AppState::new(prefs, engine));
+            let quit_state = state.clone();
+            cx.on_action(move |_: &QuitApp, cx| {
+                quit_state.update(cx, |state, cx| state.request_quit(cx));
+            });
             if startup_mode == StartupMode::Interactive {
                 open_main_window(state.clone(), cfg!(target_os = "windows"), cx)
                     .expect("open main window");
@@ -141,6 +169,8 @@ pub(crate) fn open_main_window(
             move |window, cx| cx.new(|cx| MainWindow::new(state, window, cx))
         },
     )?;
+    #[cfg(target_os = "windows")]
+    crate::desktop::attach_main_window();
     state.update(cx, |state, cx| {
         state.open_main(handle);
         state.boot_selected(cx);

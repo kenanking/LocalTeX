@@ -25,40 +25,32 @@ const CF_BITMAP: u32 = 2;
 const CF_DIB: u32 = 8;
 const CF_DIBV5: u32 = 17;
 
-pub fn read() -> Vec<Vec<u8>> {
+pub fn read() -> Option<image::RgbaImage> {
     with_clipboard(|| {
-        let mut out = Vec::new();
-        out.extend(registered_image_bytes());
-        for format in [CF_DIB, CF_DIBV5] {
+        for name in [w!("PNG"), w!("image/png"), w!("JFIF"), w!("GIF")] {
+            let format = unsafe { RegisterClipboardFormatW(name) };
+            if format == 0 {
+                continue;
+            }
             if let Some(bytes) = clipboard_bytes(format) {
-                out.push(bytes);
+                if is_png(&bytes) || is_jpeg(&bytes) || is_gif(&bytes) {
+                    if let Ok(image) = super::decode_clipboard_image(bytes) {
+                        return Some(image);
+                    }
+                }
             }
         }
-        if let Some(bytes) = dib_from_cf_bitmap() {
-            out.push(bytes);
+        for format in [CF_DIB, CF_DIBV5] {
+            if let Some(bytes) = clipboard_bytes(format) {
+                if let Ok(image) = super::decode_clipboard_image(bytes) {
+                    return Some(image);
+                }
+            }
         }
-        out
+        dib_from_cf_bitmap().and_then(|bytes| super::decode_clipboard_image(bytes).ok())
     })
-    .unwrap_or_default()
+    .flatten()
 }
-
-fn registered_image_bytes() -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    for name in [w!("PNG"), w!("image/png"), w!("JFIF"), w!("GIF")] {
-        let format = unsafe { RegisterClipboardFormatW(name) };
-        if format == 0 {
-            continue;
-        }
-        let Some(bytes) = clipboard_bytes(format) else {
-            continue;
-        };
-        if is_png(&bytes) || is_jpeg(&bytes) || is_gif(&bytes) {
-            out.push(bytes);
-        }
-    }
-    out
-}
-
 fn clipboard_bytes(format: u32) -> Option<Vec<u8>> {
     if unsafe { IsClipboardFormatAvailable(format) }.is_err() {
         return None;
@@ -136,7 +128,7 @@ unsafe fn hbitmap_to_dib32(hbmp: HBITMAP) -> Option<Vec<u8>> {
     );
     let _ = DeleteDC(hdc);
     ReleaseDC(None, screen);
-    if rows == 0 {
+    if rows != height as i32 {
         return None;
     }
     let mut out = vec![0u8; 40];

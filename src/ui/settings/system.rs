@@ -85,7 +85,7 @@ pub(super) fn system_page(
         ))
         .child(settings_group("OCR models", vec![model_pack_list(models)]))
         .child({
-            let path = models.dir().display().to_string();
+            let path = format!("{} · {}", models.source, models.dir().display());
             div()
                 .id("model-dir")
                 .px_1()

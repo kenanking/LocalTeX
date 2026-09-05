@@ -49,7 +49,7 @@ cargo build --profile dev-opt   # daily iteration (skips LTO)
 cargo build --release           # smaller/slower link for a ship binary
 ```
 
-Windows: the same `cargo build --release`, then run `target/release/localtex.exe` on that machine.
+Windows: use `cargo build --profile dev-opt`, then run `target/dev-opt/localtex.exe` for development. Existing installed models are discovered automatically, including custom Inno installation locations. Set `LOCALTEX_MODELS` for an explicit override; an invalid override reports missing models. See [model discovery](models/README.md).
 
 If linking fails on `-lgbm` (Linux), see `.cargo/config.toml.example` (unversioned `libgbm.so` often lives only in `-dev`; a local symlink is enough).
 

@@ -40,7 +40,7 @@ pub struct SearchField {
 impl SearchField {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle: cx.focus_handle().tab_stop(true),
             buf: TextBuffer::new(),
             placeholder: placeholder.into(),
             last_layout: None,
@@ -457,7 +457,23 @@ impl Element for FieldElement {
 
 impl Render for SearchField {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = cx.entity();
         div()
+            .id("search-field")
+            .accessibility_id("search-field")
+            .role(gpui::Role::TextInput)
+            .aria_label("Search history")
+            .aria_value(self.buf.content.clone())
+            .on_a11y_action(gpui::AccessibleAction::SetValue, move |data, _, cx| {
+                if let Some(gpui::accesskit::ActionData::Value(text)) = data {
+                    input.update(cx, |input, cx| {
+                        input.buf.marked_range = None;
+                        input.buf.selected_range = 0..input.buf.content.len();
+                        input.buf.replace_text(None, text);
+                        cx.notify();
+                    });
+                }
+            })
             .flex()
             .items_center()
             .key_context("SearchField")

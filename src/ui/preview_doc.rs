@@ -41,6 +41,36 @@ impl MainWindow {
         pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        if let Some(doc) = self.state.read(cx).doc(doc_id) {
+            if let Some(error) = &doc.source_error {
+                let state = self.state.clone();
+                return div()
+                    .id("preview-source-error")
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(theme::MUTED))
+                            .child(error.clone()),
+                    )
+                    .child(doc.raw_text.clone().unwrap_or_default())
+                    .child(super::widgets::btn(
+                        "copy-source",
+                        "Copy original text",
+                        false,
+                        true,
+                        move |_, cx| {
+                            state.update(cx, |state, cx| {
+                                state.copy_selected(cx);
+                            });
+                        },
+                    ))
+                    .into_any_element();
+            }
+        }
         let view = cx.entity_id();
         let has_derived = self.media.derived.as_ref().is_some_and(|d| d.id == doc_id);
         let blocks = self

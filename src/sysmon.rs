@@ -349,6 +349,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    #[ignore = "real Windows resource API smoke"]
     fn windows_samples_are_populated() {
         let mut mon = SysMon::new();
         let first = mon.sample();
@@ -361,12 +362,6 @@ mod tests {
         assert!(second.app_rss.unwrap_or(0) > 0);
         let disk = super::disk_sample();
         assert!(disk.drive_total.unwrap_or(0) > 0);
-    }
-
-    #[test]
-    fn disk_sample_runs() {
-        let d = super::disk_sample();
-        assert_eq!(d.app_footprint(), d.models + d.snips + d.binary);
     }
 
     #[test]

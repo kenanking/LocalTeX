@@ -54,7 +54,7 @@ struct PhysicalMods {
 
 struct HookState {
     mods: PhysicalMods,
-    eating: Option<u16>,
+    eating: Vec<u16>,
 }
 
 struct Consider {
@@ -77,7 +77,7 @@ static HOOK_STATE: Mutex<HookState> = Mutex::new(HookState {
         left_win: false,
         right_win: false,
     },
-    eating: None,
+    eating: Vec::new(),
 });
 
 fn gpui_key_to_vk(key: &str) -> Option<u16> {
@@ -165,9 +165,7 @@ fn consider_event(
     }
     state.mods.update(vk, !is_up);
     if is_up {
-        if state.eating == Some(vk) {
-            state.eating = None;
-        }
+        state.eating.retain(|key| *key != vk);
         return Consider {
             eat: false,
             cmd: None,
@@ -179,7 +177,7 @@ fn consider_event(
             cmd: None,
         };
     }
-    if state.eating == Some(vk) {
+    if state.eating.contains(&vk) {
         return Consider {
             eat: true,
             cmd: None,
@@ -196,7 +194,7 @@ fn consider_event(
             cmd: None,
         };
     };
-    state.eating = Some(vk);
+    state.eating.push(vk);
     Consider {
         eat: true,
         cmd: Some(grab.cmd),
@@ -229,7 +227,7 @@ pub(crate) fn set_suspended(suspended: bool) {
     SUSPENDED.store(suspended, Ordering::SeqCst);
 }
 
-pub(crate) fn install_chord_hook(tx: Sender<DesktopCmd>) {
+pub(crate) fn install_chord_hook(tx: Sender<DesktopCmd>) -> Result<(), String> {
     match HOOK_TX.lock() {
         Ok(mut slot) => *slot = Some(tx),
         Err(poisoned) => *poisoned.into_inner() = Some(tx),
@@ -240,7 +238,7 @@ pub(crate) fn install_chord_hook(tx: Sender<DesktopCmd>) {
             Err(poisoned) => poisoned.into_inner(),
         };
         if hook.is_some() {
-            return;
+            return Ok(());
         }
     }
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -248,13 +246,11 @@ pub(crate) fn install_chord_hook(tx: Sender<DesktopCmd>) {
         .name("localtex-hotkey".into())
         .spawn(move || hook_thread_main(ready_tx))
     {
-        eprintln!("{APP_SLUG}: windows chord hook thread: {err}");
-        return;
+        return Err(format!("spawn chord hook thread: {err}"));
     }
     match ready_rx.recv() {
-        Ok(Ok(())) => eprintln!("{APP_SLUG}: windows chord hook installed"),
-        Ok(Err(err)) => eprintln!("{APP_SLUG}: windows chord hook: {err}"),
-        Err(err) => eprintln!("{APP_SLUG}: windows chord hook thread: {err}"),
+        Ok(result) => result,
+        Err(err) => Err(format!("chord hook thread: {err}")),
     }
 }
 
@@ -384,8 +380,31 @@ mod tests {
     fn state() -> HookState {
         HookState {
             mods: PhysicalMods::default(),
-            eating: None,
+            eating: Vec::new(),
         }
+    }
+
+    #[test]
+    fn overlapping_chords_each_fire_once_until_their_own_keyup() {
+        let mut state = state();
+        send(&mut state, LCTRL, false, false);
+        send(&mut state, LALT, false, false);
+        assert_eq!(
+            send(&mut state, VK_L, false, false).cmd,
+            Some(DesktopCmd::Show)
+        );
+        assert_eq!(
+            send(&mut state, VK_M, false, false).cmd,
+            Some(DesktopCmd::Capture)
+        );
+        assert_eq!(send(&mut state, VK_L, false, false).cmd, None);
+        send(&mut state, VK_M, true, false);
+        assert_eq!(send(&mut state, VK_L, false, false).cmd, None);
+        send(&mut state, VK_L, true, false);
+        assert_eq!(
+            send(&mut state, VK_L, false, false).cmd,
+            Some(DesktopCmd::Show)
+        );
     }
 
     fn send(state: &mut HookState, vk: u16, is_up: bool, injected: bool) -> super::Consider {

@@ -25,11 +25,30 @@ pub struct SnipListItem {
     pub created_at: SystemTime,
     pub first_line: String,
     pub ocr: Option<OcrMeta>,
+    pub status: crate::doc::DocStatus,
 }
 
 pub struct Store {
     conn: Mutex<Connection>,
     root: PathBuf,
+}
+
+pub(super) struct ContentUpdate {
+    id: Uuid,
+    blocks: Vec<Block>,
+    raw_text: Option<String>,
+    first_line: String,
+}
+
+impl From<&Document> for ContentUpdate {
+    fn from(doc: &Document) -> Self {
+        Self {
+            id: doc.id,
+            blocks: doc.blocks.clone(),
+            raw_text: doc.raw_text.clone(),
+            first_line: doc.first_line(),
+        }
+    }
 }
 
 impl Store {
@@ -55,7 +74,7 @@ impl Store {
     pub fn list(&self) -> Result<Vec<SnipListItem>> {
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let mut stmt = conn.prepare(
-            "SELECT id, created_at, first_line, ocr_s, confidence
+            "SELECT id, created_at, first_line, ocr_s, confidence, processing_status, processing_error
              FROM snips ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -65,11 +84,13 @@ impl Store {
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<f64>>(3)?,
                 row.get::<_, Option<f64>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id_s, ms, first_line, ocr_s, confidence) = row?;
+            let (id_s, ms, first_line, ocr_s, confidence, status, error) = row?;
             let id = match Uuid::parse_str(&id_s) {
                 Ok(id) => id,
                 Err(err) => {
@@ -89,6 +110,15 @@ impl Store {
                 created_at: system_time_from_ms(ms),
                 first_line,
                 ocr,
+                status: match status.as_str() {
+                    "ready" => crate::doc::DocStatus::Ready,
+                    "pending" => crate::doc::DocStatus::Failed(
+                        "Recognition interrupted; retry available".into(),
+                    ),
+                    _ => crate::doc::DocStatus::Failed(
+                        error.unwrap_or_else(|| "Recognition failed".into()),
+                    ),
+                },
             });
         }
         Ok(out)
@@ -142,6 +172,15 @@ impl Store {
         imgutil::decode_png_file(&self.png_path(id)?)
     }
 
+    pub fn load_source(&self, id: Uuid) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
+        Ok(conn.query_row(
+            "SELECT raw_text FROM snips WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn insert_ready(&self, doc: &Document) -> Result<Vec<u8>> {
         let pixels = doc
             .image
@@ -167,12 +206,15 @@ impl Store {
         } else {
             &doc.ocr_blocks
         })?;
-        let search_text = Document::search_text_for_blocks(&doc.blocks);
+        let search_text = doc
+            .raw_text
+            .clone()
+            .unwrap_or_else(|| Document::search_text_for_blocks(&doc.blocks));
         let first_line = doc.first_line();
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
         let sql = conn.execute(
-            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, ocr_s, confidence, ocr_blocks_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO snips (id, created_at, first_line, blocks_json, search_text, thumb_jpeg, ocr_s, confidence, ocr_blocks_json, raw_text, processing_status, processing_error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 doc.id.to_string(),
                 unix_ms(doc.created_at),
@@ -183,6 +225,9 @@ impl Store {
                 doc.ocr.map(|m| m.elapsed_s as f64),
                 doc.ocr.map(|m| m.confidence as f64),
                 ocr_json,
+                doc.raw_text,
+                status_fields(&doc.status).0,
+                status_fields(&doc.status).1,
             ],
         );
         if let Err(err) = sql {
@@ -200,10 +245,13 @@ impl Store {
         } else {
             &doc.ocr_blocks
         })?;
-        let search_text = Document::search_text_for_blocks(&doc.blocks);
+        let search_text = doc
+            .raw_text
+            .clone()
+            .unwrap_or_else(|| Document::search_text_for_blocks(&doc.blocks));
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-        conn.execute(
-            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, ocr_s = ?4, confidence = ?5, ocr_blocks_json = ?6 WHERE id = ?7",
+        let updated = conn.execute(
+            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, ocr_s = ?4, confidence = ?5, ocr_blocks_json = ?6, raw_text = ?8, processing_status = ?9, processing_error = ?10 WHERE id = ?7",
             params![
                 doc.first_line(),
                 blocks_json,
@@ -211,25 +259,38 @@ impl Store {
                 doc.ocr.map(|m| m.elapsed_s as f64),
                 doc.ocr.map(|m| m.confidence as f64),
                 ocr_json,
-                doc.id.to_string()
+                doc.id.to_string(),
+                doc.raw_text,
+                status_fields(&doc.status).0,
+                status_fields(&doc.status).1,
             ],
         )?;
+        anyhow::ensure!(updated == 1, "snip {} is missing during OCR update", doc.id);
         Ok(())
     }
 
-    pub fn update_blocks(&self, doc: &Document) -> Result<()> {
+    fn update_blocks(&self, doc: &ContentUpdate) -> Result<()> {
         let blocks_json = encode_blocks_json(&doc.blocks)?;
-        let search_text = Document::search_text_for_blocks(&doc.blocks);
+        let search_text = doc
+            .raw_text
+            .clone()
+            .unwrap_or_else(|| Document::search_text_for_blocks(&doc.blocks));
         let conn = self.conn.lock().map_err(|_| anyhow!("store lock"))?;
-        conn.execute(
-            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3 WHERE id = ?4",
+        let updated = conn.execute(
+            "UPDATE snips SET first_line = ?1, blocks_json = ?2, search_text = ?3, raw_text = ?5 WHERE id = ?4",
             params![
-                doc.first_line(),
+                doc.first_line,
                 blocks_json,
                 search_text,
-                doc.id.to_string()
+                doc.id.to_string(),
+                doc.raw_text,
             ],
         )?;
+        anyhow::ensure!(
+            updated == 1,
+            "snip {} is missing during content update",
+            doc.id
+        );
         Ok(())
     }
 
@@ -326,6 +387,14 @@ impl Store {
                 collect_ids(&mut fallback, params![start_ms, end_ms, like])
             }
         }
+    }
+}
+
+fn status_fields(status: &crate::doc::DocStatus) -> (&str, Option<&str>) {
+    match status {
+        crate::doc::DocStatus::Ready => ("ready", None),
+        crate::doc::DocStatus::Recognizing => ("pending", None),
+        crate::doc::DocStatus::Failed(error) => ("failed", Some(error)),
     }
 }
 
@@ -438,6 +507,8 @@ mod tests {
             ink: None,
             revision: 0,
             ocr_blocks: blocks,
+            raw_text: None,
+            source_error: None,
         }
     }
 
@@ -445,6 +516,38 @@ mod tests {
         let root = std::env::temp_dir().join(format!("localtex-store-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         (Store::open(root.clone()).unwrap(), root)
+    }
+
+    #[test]
+    fn raw_content_and_pending_failures_survive_reopen() {
+        let (store, root) = tmp_store();
+        let mut doc = sample_doc("original", SystemTime::now());
+        doc.status = DocStatus::Recognizing;
+        store.insert_ready(&doc).unwrap();
+        assert!(matches!(
+            store.list().unwrap()[0].status,
+            DocStatus::Failed(_)
+        ));
+        doc.status = DocStatus::Failed("inference failed".into());
+        store.update_ocr(&doc).unwrap();
+        for text in ["<table>broken", "", " 中文\n  exact formatting\n"] {
+            doc.raw_text = Some(text.into());
+            store.update_blocks(&ContentUpdate::from(&doc)).unwrap();
+            assert_eq!(store.load_source(doc.id).unwrap().as_deref(), Some(text));
+        }
+        drop(store);
+        let store = Store::open(root.clone()).unwrap();
+        assert_eq!(store.load_source(doc.id).unwrap(), doc.raw_text);
+        assert_eq!(store.load_block_pair(doc.id).unwrap().1[0].text, "original");
+        assert_eq!(
+            store.query_ids("exact", DateRange::default()).unwrap(),
+            vec![doc.id]
+        );
+        assert!(
+            matches!(&store.list().unwrap()[0].status, DocStatus::Failed(error) if error == "inference failed")
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -461,7 +564,7 @@ mod tests {
         assert_eq!(ocr[0].text, "hello");
         let mut edited = doc;
         edited.blocks[0].text = "edited".into();
-        store.update_blocks(&edited).unwrap();
+        store.update_blocks(&ContentUpdate::from(&edited)).unwrap();
         let (blocks, ocr) = store.load_block_pair(id).unwrap();
         assert_eq!(blocks[0].text, "edited");
         assert_eq!(ocr[0].text, "hello");

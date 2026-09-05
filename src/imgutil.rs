@@ -45,60 +45,6 @@ pub fn thumbnail(img: &RgbaImage, max_w: u32, max_h: u32) -> RgbaImage {
     imageops::thumbnail(img, tw, th)
 }
 
-#[cfg(test)]
-pub fn rotate_about_center(src: &RgbaImage, degrees: f32) -> RgbaImage {
-    if degrees.abs() < 0.05 {
-        return src.clone();
-    }
-    let rad = degrees.to_radians();
-    let (cos, sin) = (rad.cos(), rad.sin());
-    let (w, h) = src.dimensions();
-    let nw = ((w as f32 * cos.abs() + h as f32 * sin.abs()).ceil() as u32).max(1);
-    let nh = ((w as f32 * sin.abs() + h as f32 * cos.abs()).ceil() as u32).max(1);
-    let mut out = RgbaImage::from_pixel(nw, nh, Rgba([0, 0, 0, 0]));
-    let cx = w as f32 * 0.5;
-    let cy = h as f32 * 0.5;
-    let ncx = nw as f32 * 0.5;
-    let ncy = nh as f32 * 0.5;
-    for y in 0..nh {
-        for x in 0..nw {
-            let dx = x as f32 - ncx;
-            let dy = y as f32 - ncy;
-            let sx = cos * dx + sin * dy + cx;
-            let sy = -sin * dx + cos * dy + cy;
-            if let Some(px) = sample_bilinear(src, sx, sy) {
-                out.put_pixel(x, y, px);
-            }
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-fn sample_bilinear(src: &RgbaImage, x: f32, y: f32) -> Option<Rgba<u8>> {
-    let (w, h) = src.dimensions();
-    if x < -0.5 || y < -0.5 || x > w as f32 - 0.5 || y > h as f32 - 0.5 {
-        return None;
-    }
-    let x0 = x.floor().clamp(0.0, (w - 1) as f32);
-    let y0 = y.floor().clamp(0.0, (h - 1) as f32);
-    let x1 = (x0 + 1.0).min((w - 1) as f32);
-    let y1 = (y0 + 1.0).min((h - 1) as f32);
-    let tx = (x - x0).clamp(0.0, 1.0);
-    let ty = (y - y0).clamp(0.0, 1.0);
-    let p00 = src.get_pixel(x0 as u32, y0 as u32).0;
-    let p10 = src.get_pixel(x1 as u32, y0 as u32).0;
-    let p01 = src.get_pixel(x0 as u32, y1 as u32).0;
-    let p11 = src.get_pixel(x1 as u32, y1 as u32).0;
-    let mut out = [0u8; 4];
-    for i in 0..4 {
-        let a = p00[i] as f32 * (1.0 - tx) + p10[i] as f32 * tx;
-        let b = p01[i] as f32 * (1.0 - tx) + p11[i] as f32 * tx;
-        out[i] = (a * (1.0 - ty) + b * ty).round() as u8;
-    }
-    Some(Rgba(out))
-}
-
 /// Bound decoded snips before OCR so layout boxes stay in the stored-image
 /// coordinate system. 24 MP is the ocr-pipeline recommendation for LocalTeX.
 pub const OCR_MAX_PIXELS: u64 = 24_000_000;
@@ -148,6 +94,25 @@ pub fn decode_dib(data: &[u8]) -> Result<RgbaImage> {
     }
 
     let mut pix_off = bi_size as usize;
+    if compression == BI_BITFIELDS {
+        if bi_size != 40 && bi_size < 52 {
+            return Err(anyhow!("DIB bitfield header is incomplete"));
+        }
+        let masks = data
+            .get(40..52)
+            .ok_or_else(|| anyhow!("DIB masks are missing"))?;
+        for (bytes, expected) in
+            masks
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip([0x00ff0000u32, 0x0000ff00, 0x000000ff])
+        {
+            if u32::from_le_bytes(*bytes) != expected {
+                return Err(anyhow!("unsupported DIB bitfield masks"));
+            }
+        }
+    }
     // BITMAPINFO + BI_BITFIELDS stores three DWORD masks after a 40-byte header.
     if compression == BI_BITFIELDS && bi_size == 40 {
         pix_off = pix_off.saturating_add(12);
@@ -333,6 +298,26 @@ fn stamp(img: &mut RgbaImage, cx: i32, cy: i32, r: i32, color: Rgba<u8>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dib_bitfields_accept_standard_masks_and_reject_other_layouts() {
+        let mut dib = vec![0u8; 56];
+        dib[0..4].copy_from_slice(&40u32.to_le_bytes());
+        dib[4..8].copy_from_slice(&1i32.to_le_bytes());
+        dib[8..12].copy_from_slice(&1i32.to_le_bytes());
+        dib[12..14].copy_from_slice(&1u16.to_le_bytes());
+        dib[14..16].copy_from_slice(&32u16.to_le_bytes());
+        dib[16..20].copy_from_slice(&3u32.to_le_bytes());
+        for (offset, mask) in [(40, 0xff0000u32), (44, 0xff00), (48, 0xff)] {
+            dib[offset..offset + 4].copy_from_slice(&mask.to_le_bytes());
+        }
+        dib[52..56].copy_from_slice(&[10, 20, 30, 0]);
+        assert_eq!(
+            super::decode_dib(&dib).unwrap().get_pixel(0, 0).0,
+            [30, 20, 10, 255]
+        );
+        dib[40..44].copy_from_slice(&0xffu32.to_le_bytes());
+        assert!(super::decode_dib(&dib).is_err());
+    }
     use super::*;
 
     #[test]
@@ -354,15 +339,6 @@ mod tests {
         assert_eq!(xy, vec![vec![(1.0, 2.0), (3.0, 4.0)]]);
     }
 
-    #[test]
-    fn rotate_about_center_grows_canvas() {
-        let img = RgbaImage::from_pixel(20, 10, Rgba([200, 10, 10, 255]));
-        let out = rotate_about_center(&img, 35.0);
-        assert!(out.width() > 20);
-        assert!(out.height() > 10);
-        assert!(out.pixels().any(|p| p.0[0] > 180 && p.0[3] > 200));
-        assert!(out.pixels().any(|p| p.0[3] == 0));
-    }
     #[test]
     fn gpu_display_image_caps_long_edge() {
         let img = RgbaImage::from_pixel(1920, 1080, Rgba([10, 20, 30, 255]));

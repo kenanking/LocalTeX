@@ -115,6 +115,13 @@ impl DocumentRuntime {
             runtime.persist_retry_pending = false;
         }
     }
+
+    pub fn persist_retry_ids(&self) -> Vec<Uuid> {
+        self.runtime
+            .iter()
+            .filter_map(|(id, runtime)| (runtime.persist_retry_count > 0).then_some(*id))
+            .collect()
+    }
 }
 
 pub(crate) struct FileIntakeSession {
@@ -130,6 +137,20 @@ impl FileIntakeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exhausted_retries_remain_available_for_explicit_save() {
+        let mut runtime = DocumentRuntime::new();
+        let id = Uuid::new_v4();
+        for _ in 0..3 {
+            assert!(runtime.begin_persist_retry(id).is_some());
+            assert!(runtime.finish_persist_retry(id));
+        }
+        assert!(runtime.begin_persist_retry(id).is_none());
+        assert_eq!(runtime.persist_retry_ids(), vec![id]);
+        runtime.clear_persist_retry(id);
+        assert!(runtime.persist_retry_ids().is_empty());
+    }
 
     #[test]
     fn dropping_a_document_clears_all_runtime_flags() {
