@@ -23,7 +23,7 @@ CI also runs `cargo clippy --all-targets -- -D warnings`. Report checks and plat
 
 - Linux UI: if the shell lacks `DISPLAY`, discover the active X11 session and `XAUTHORITY`, then launch the built app with `systemd-run --user` using those values.
 - Windows UI: build `target/dev-opt/localtex.exe` and verify the running process path. For schema and destructive UI checks, use the ignored `interactive_windows_ui` test with an absolute, disposable `LOCALTEX_TEST_ROOT`; the normal executable ignores this override.
-- OCR inference tests are ignored by default and require installed weights. For model-related changes, see `models/README.md` for installation and smoke-test commands.
+- OCR inference tests are ignored by default and require installed weights. For model-related changes, see `docs/development.md` for installation and smoke-test commands.
 
 ## Rust and GPUI
 
@@ -54,8 +54,8 @@ CI also runs `cargo clippy --all-targets -- -D warnings`. Report checks and plat
 ## Packaging
 
 - Use `scripts/bundle-linux.sh` (tar.gz + deb) or `scripts/bundle-windows.ps1` (zip + Inno), with artifacts in `dist/` (gitignored). Do not add cargo-packager.
-- For model installation, cache validation, and discovery, see `models/README.md` and the matching `scripts/download-models.*`. Bundle scripts already invoke the downloader. Do not call bash from Windows packaging; WindowsApps `bash.exe` is often a WSL stub.
-- When publishing model packs: package ocr-pipeline's `current/opendoc` and `current/handwriting` outside this repo under the dated directory names in both download scripts. Keep those names, required files, and checksums aligned with `models/manifest.json` and `models/README.md`. The `v0.0.0` model release needs both tarballs, the manifest, and `SHA256SUMS` covering all three.
+- For model installation, cache validation, and discovery, see `docs/development.md` and the matching `scripts/download-models.*`. Bundle scripts already invoke the downloader. Do not call bash from Windows packaging; WindowsApps `bash.exe` is often a WSL stub.
+- When publishing model packs: package ocr-pipeline's `current/opendoc` and `current/handwriting` outside this repo under the dated directory names in both download scripts. Keep those names, required files, and checksums aligned with `models/manifest.json`. The `v0.0.0` model release needs both tarballs, the manifest, and `SHA256SUMS` covering all three.
 - Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
 - Windows packaging uses Inno Setup 7. User-scope installs may omit `ISCC.exe` from PATH; compiler discovery is in the bundle script, and CI installation is in `.github/workflows/release.yml`.
