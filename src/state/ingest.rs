@@ -78,8 +78,8 @@ impl AppState {
 
     fn begin_intake_reject(&mut self, skipped: usize, cx: &mut Context<Self>) {
         self.intake_gen = self.intake_gen.wrapping_add(1);
-        let gen = self.intake_gen;
-        self.intake = Some(IntakeBatch::reject(skipped, gen));
+        let generation = self.intake_gen;
+        self.intake = Some(IntakeBatch::reject(skipped, generation));
         cx.notify();
     }
 
@@ -87,9 +87,9 @@ impl AppState {
         self.intake.as_ref()
     }
 
-    pub fn acknowledge_intake(&mut self, gen: u64, cx: &mut Context<Self>) {
+    pub fn acknowledge_intake(&mut self, generation: u64, cx: &mut Context<Self>) {
         if self.intake.as_ref().is_some_and(|batch| {
-            batch.gen == gen && (batch.items.is_empty() || batch.all_terminal())
+            batch.generation == generation && (batch.items.is_empty() || batch.all_terminal())
         }) {
             self.intake = None;
             cx.notify();
@@ -142,10 +142,10 @@ impl AppState {
         {
             return;
         }
-        let Some((gen, key, path)) = self.intake.as_ref().and_then(|batch| {
+        let Some((generation, key, path)) = self.intake.as_ref().and_then(|batch| {
             batch
                 .next_pending()
-                .map(|(key, path)| (batch.gen, key, path))
+                .map(|(key, path)| (batch.generation, key, path))
         }) else {
             return;
         };
@@ -162,7 +162,7 @@ impl AppState {
                     return;
                 }
                 let current = this.intake.as_ref().is_some_and(|batch| {
-                    batch.gen == gen && batch.items.iter().any(|item| item.key == key)
+                    batch.generation == generation && batch.items.iter().any(|item| item.key == key)
                 });
                 if !current {
                     this.pump_file_ingest(cx);
@@ -296,19 +296,21 @@ impl AppState {
                     .is_some_and(|d| matches!(d.status, DocStatus::Ready));
                 this.finish_intake_id(id, ready, cx);
                 this.persist_ready(id, cx);
-                if ready && this.prefs.autocopy && this.library.selected() == Some(id) {
-                    if let Some((id, kind)) = this.copy_selected(cx) {
-                        let handle = this.main_window.handle();
-                        cx.defer(move |cx| {
-                            if let Some(handle) = handle {
-                                if let Err(err) = handle.update(cx, |view, _, cx| {
-                                    view.flash_copied(id, kind, cx);
-                                }) {
-                                    eprintln!("{APP_SLUG}: autocopy flash: {err}");
-                                }
-                            }
-                        });
-                    }
+                if ready
+                    && this.prefs.autocopy
+                    && this.library.selected() == Some(id)
+                    && let Some((id, kind)) = this.copy_selected(cx)
+                {
+                    let handle = this.main_window.handle();
+                    cx.defer(move |cx| {
+                        if let Some(handle) = handle
+                            && let Err(err) = handle.update(cx, |view, _, cx| {
+                                view.flash_copied(id, kind, cx);
+                            })
+                        {
+                            eprintln!("{APP_SLUG}: autocopy flash: {err}");
+                        }
+                    });
                 }
                 this.pump_ocr(cx);
                 cx.notify();

@@ -396,10 +396,10 @@ pub fn parse_tabular(tex: &str) -> Option<Table> {
 
 fn skip_optional_pos(s: &str) -> &str {
     let s = s.trim_start();
-    if let Some(rest) = s.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return rest[end + 1..].trim_start();
-        }
+    if let Some(rest) = s.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return rest[end + 1..].trim_start();
     }
     s
 }

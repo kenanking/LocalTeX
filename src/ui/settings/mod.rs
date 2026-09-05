@@ -170,7 +170,7 @@ impl SettingsPane {
         state: Entity<AppState>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let _ = window;
         self.visible = true;
         if self.tab == SettingsTab::System {

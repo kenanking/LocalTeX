@@ -174,12 +174,12 @@ impl UniRec {
         }
         // past_key's head-dim axis is symbolic ("key_head_dim"); read the
         // static head dim from cross_kt_0 [batch, heads, 128, enc_seq].
-        if let Some(inp) = decoder.inputs().iter().find(|i| i.name() == "cross_kt_0") {
-            if let ort::value::ValueType::Tensor { shape, .. } = inp.dtype() {
-                if shape.len() == 4 && shape[2] > 0 {
-                    head_dim = shape[2] as usize;
-                }
-            }
+        if let Some(inp) = decoder.inputs().iter().find(|i| i.name() == "cross_kt_0")
+            && let ort::value::ValueType::Tensor { shape, .. } = inp.dtype()
+            && shape.len() == 4
+            && shape[2] > 0
+        {
+            head_dim = shape[2] as usize;
         }
         if num_layers == 0 {
             return Err(anyhow!("decoder exposes no past_key_* inputs"));

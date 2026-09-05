@@ -7,7 +7,7 @@ use super::{bool_row, patch_prefs, picker};
 use crate::prefs::{ContentFontSize, Prefs, WindowCloseAction};
 use crate::state::AppState;
 
-pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
+pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()

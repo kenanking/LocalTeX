@@ -390,20 +390,18 @@ fn push_inline(
     dpr: f64,
     font: ContentFontSize,
 ) {
-    if matches!(style, MathStyle::Text) {
-        if let Some((kind, body)) = script_glyph_for(last_attach_char(segs), tex) {
-            if let Ok(svg) =
-                latex_to_math_sized(&body, style, dpr, font.metrics().script, FONT_PAD_SCRIPT)
-            {
-                let glyph = ScriptGlyph {
-                    svg,
-                    tex: tex.to_string(),
-                    kind,
-                };
-                if attach_script(segs, glyph) {
-                    return;
-                }
-            }
+    if matches!(style, MathStyle::Text)
+        && let Some((kind, body)) = script_glyph_for(last_attach_char(segs), tex)
+        && let Ok(svg) =
+            latex_to_math_sized(&body, style, dpr, font.metrics().script, FONT_PAD_SCRIPT)
+    {
+        let glyph = ScriptGlyph {
+            svg,
+            tex: tex.to_string(),
+            kind,
+        };
+        if attach_script(segs, glyph) {
+            return;
         }
     }
     segs.push(math_only(tex, style, dpr, font));
@@ -450,13 +448,13 @@ pub(crate) fn segs_lines(segs: &[InlineSeg]) -> Vec<Vec<InlineSeg>> {
         match seg {
             InlineSeg::Text(t) => {
                 let mut parts = t.split('\n');
-                if let Some(first) = parts.next() {
-                    if !first.is_empty() {
-                        lines
-                            .last_mut()
-                            .unwrap()
-                            .push(InlineSeg::Text(first.to_string()));
-                    }
+                if let Some(first) = parts.next()
+                    && !first.is_empty()
+                {
+                    lines
+                        .last_mut()
+                        .unwrap()
+                        .push(InlineSeg::Text(first.to_string()));
                 }
                 for part in parts {
                     lines.push(Vec::new());

@@ -99,11 +99,11 @@ impl AppState {
         if self.library.is_empty() {
             self.ocr.cancel_remaining();
         }
-        if let Some(writer) = self.store_writer() {
-            if let Err(err) = writer.delete(id) {
-                eprintln!("{APP_SLUG}: queue delete snip: {err:#}");
-                self.flash_error("Couldn't delete that snip", cx);
-            }
+        if let Some(writer) = self.store_writer()
+            && let Err(err) = writer.delete(id)
+        {
+            eprintln!("{APP_SLUG}: queue delete snip: {err:#}");
+            self.flash_error("Couldn't delete that snip", cx);
         }
         if let Some(id) = self.library.selected() {
             self.ensure_detail(id, cx);
@@ -124,11 +124,11 @@ impl AppState {
         self.documents.clear_docs();
         self.search.bump();
         self.library.clear();
-        if let Some(writer) = self.store_writer() {
-            if let Err(err) = writer.wipe() {
-                eprintln!("{APP_SLUG}: queue wipe library: {err:#}");
-                self.flash_error("Couldn't clear the snip library", cx);
-            }
+        if let Some(writer) = self.store_writer()
+            && let Err(err) = writer.wipe()
+        {
+            eprintln!("{APP_SLUG}: queue wipe library: {err:#}");
+            self.flash_error("Couldn't clear the snip library", cx);
         }
         cx.notify();
     }

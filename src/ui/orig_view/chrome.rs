@@ -151,7 +151,7 @@ pub(crate) fn orig_action_capsule(
     reveal_enabled: bool,
     id_prefix: &'static str,
     cx: &mut Context<MainWindow>,
-) -> impl gpui::IntoElement {
+) -> impl gpui::IntoElement + use<> {
     let entity = cx.entity();
     div()
         .id(SharedString::from(format!("{id_prefix}-capsule")))

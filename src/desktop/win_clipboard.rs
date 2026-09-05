@@ -32,19 +32,18 @@ pub fn read() -> Option<image::RgbaImage> {
             if format == 0 {
                 continue;
             }
-            if let Some(bytes) = clipboard_bytes(format) {
-                if is_png(&bytes) || is_jpeg(&bytes) || is_gif(&bytes) {
-                    if let Ok(image) = super::decode_clipboard_image(bytes) {
-                        return Some(image);
-                    }
-                }
+            if let Some(bytes) = clipboard_bytes(format)
+                && (is_png(&bytes) || is_jpeg(&bytes) || is_gif(&bytes))
+                && let Ok(image) = super::decode_clipboard_image(bytes)
+            {
+                return Some(image);
             }
         }
         for format in [CF_DIB, CF_DIBV5] {
-            if let Some(bytes) = clipboard_bytes(format) {
-                if let Ok(image) = super::decode_clipboard_image(bytes) {
-                    return Some(image);
-                }
+            if let Some(bytes) = clipboard_bytes(format)
+                && let Ok(image) = super::decode_clipboard_image(bytes)
+            {
+                return Some(image);
             }
         }
         dib_from_cf_bitmap().and_then(|bytes| super::decode_clipboard_image(bytes).ok())
@@ -88,27 +87,27 @@ fn dib_from_cf_bitmap() -> Option<Vec<u8>> {
 }
 
 unsafe fn hbitmap_to_dib32(hbmp: HBITMAP) -> Option<Vec<u8>> {
-    let screen = GetDC(None);
+    let screen = unsafe { GetDC(None) };
     if screen.is_invalid() {
         return None;
     }
-    let hdc = CreateCompatibleDC(Some(screen));
+    let hdc = unsafe { CreateCompatibleDC(Some(screen)) };
     if hdc.is_invalid() {
-        ReleaseDC(None, screen);
+        unsafe { ReleaseDC(None, screen) };
         return None;
     }
     let mut info = BITMAPINFO::default();
     info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-    let header_ok = GetDIBits(hdc, hbmp, 0, 0, None, &mut info, DIB_RGB_COLORS) != 0;
+    let header_ok = unsafe { GetDIBits(hdc, hbmp, 0, 0, None, &mut info, DIB_RGB_COLORS) } != 0;
     if !header_ok || info.bmiHeader.biWidth <= 0 || info.bmiHeader.biHeight == 0 {
-        let _ = DeleteDC(hdc);
-        ReleaseDC(None, screen);
+        let _ = unsafe { DeleteDC(hdc) };
+        unsafe { ReleaseDC(None, screen) };
         return None;
     }
     let width = info.bmiHeader.biWidth;
     let Some((height, bits_len)) = dib32_layout(width, info.bmiHeader.biHeight) else {
-        let _ = DeleteDC(hdc);
-        ReleaseDC(None, screen);
+        let _ = unsafe { DeleteDC(hdc) };
+        unsafe { ReleaseDC(None, screen) };
         return None;
     };
     info.bmiHeader.biHeight = -(height as i32);
@@ -117,17 +116,19 @@ unsafe fn hbitmap_to_dib32(hbmp: HBITMAP) -> Option<Vec<u8>> {
     info.bmiHeader.biCompression = BI_RGB.0;
     info.bmiHeader.biSizeImage = 0;
     let mut bits = vec![0u8; bits_len];
-    let rows = GetDIBits(
-        hdc,
-        hbmp,
-        0,
-        height,
-        Some(bits.as_mut_ptr().cast()),
-        &mut info,
-        DIB_RGB_COLORS,
-    );
-    let _ = DeleteDC(hdc);
-    ReleaseDC(None, screen);
+    let rows = unsafe {
+        GetDIBits(
+            hdc,
+            hbmp,
+            0,
+            height,
+            Some(bits.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        )
+    };
+    let _ = unsafe { DeleteDC(hdc) };
+    unsafe { ReleaseDC(None, screen) };
     if rows != height as i32 {
         return None;
     }

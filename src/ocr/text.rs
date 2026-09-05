@@ -443,21 +443,22 @@ pub(super) fn truncate_repetitive_content(content: &str) -> String {
     let sc = chars(stripped);
 
     // Priority 1: phrase-level suffix repetition in long single lines.
-    if !stripped.contains('\n') && sc.len() > 100 {
-        if let Some((prefix, unit, count)) = find_repeating_suffix(&sc, 8, 5) {
-            if unit.len() * count > (sc.len() as f64 * 0.5) as usize {
-                return prefix.into_iter().collect();
-            }
-        }
+    if !stripped.contains('\n')
+        && sc.len() > 100
+        && let Some((prefix, unit, count)) = find_repeating_suffix(&sc, 8, 5)
+        && unit.len() * count > (sc.len() as f64 * 0.5) as usize
+    {
+        return prefix.into_iter().collect();
     }
 
     // Priority 2: full-string character-level repetition.
-    if !stripped.contains('\n') && sc.len() > 10 {
-        if let Some(unit) = find_shortest_repeating_substring(&sc) {
-            let count = sc.len() / unit.len();
-            if count >= 10 {
-                return unit.into_iter().collect();
-            }
+    if !stripped.contains('\n')
+        && sc.len() > 10
+        && let Some(unit) = find_shortest_repeating_substring(&sc)
+    {
+        let count = sc.len() / unit.len();
+        if count >= 10 {
+            return unit.into_iter().collect();
         }
     }
 
@@ -725,10 +726,10 @@ fn otsl_parse_texts(texts: &[String], tokens: &[String]) -> (Vec<TableCell>, Vec
             }
             let next_right_cell = texts.get(i + right_offset).cloned().unwrap_or_default();
             let mut next_bottom_cell = String::new();
-            if r_idx + 1 < split_row_tokens.len() {
-                if let Some(t) = split_row_tokens[r_idx + 1].get(c_idx) {
-                    next_bottom_cell = t.clone();
-                }
+            if r_idx + 1 < split_row_tokens.len()
+                && let Some(t) = split_row_tokens[r_idx + 1].get(c_idx)
+            {
+                next_bottom_cell = t.clone();
             }
             if next_right_cell == OTSL_LCEL || next_right_cell == OTSL_XCEL {
                 col_span +=
@@ -842,10 +843,11 @@ pub(super) const IGNORE_LABELS: [&str; 8] = [
 
 /// Strip a trailing `_NN` numeric suffix: "text_01" -> "text".
 pub(super) fn base_label(label: &str) -> &str {
-    if let Some((base, suffix)) = label.rsplit_once('_') {
-        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-            return base;
-        }
+    if let Some((base, suffix)) = label.rsplit_once('_')
+        && !suffix.is_empty()
+        && suffix.chars().all(|c| c.is_ascii_digit())
+    {
+        return base;
     }
     label
 }

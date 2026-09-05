@@ -8,7 +8,7 @@ LocalTeX is one Rust package and one application process. Supported desktop targ
 
 ## Build and run
 
-Use stable Rust and clone the repository:
+Use the latest stable Rust (edition 2024) and clone the repository:
 
 ```sh
 git clone https://github.com/kenanking/LocalTeX.git

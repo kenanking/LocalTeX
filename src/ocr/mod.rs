@@ -381,10 +381,10 @@ fn ink_formula_result(text: String, (w, h): (u32, u32), elapsed_s: f32) -> OcrRe
 /// latency and keeps the desktop responsive. Override with
 /// `LOCALTEX_INTRA_THREADS`.
 fn default_intra() -> usize {
-    if let Ok(v) = std::env::var("LOCALTEX_INTRA_THREADS") {
-        if let Ok(n) = v.parse::<usize>() {
-            return n.max(1);
-        }
+    if let Ok(v) = std::env::var("LOCALTEX_INTRA_THREADS")
+        && let Ok(n) = v.parse::<usize>()
+    {
+        return n.max(1);
     }
     let cores = std::thread::available_parallelism()
         .map(|n| n.get())

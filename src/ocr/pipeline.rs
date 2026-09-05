@@ -148,11 +148,11 @@ impl Pipeline {
             let Some(rec) = rec else {
                 continue;
             };
-            if let Some(&fj) = tag_pairs.get(&bi) {
-                if let Some(tag) = clean_tag(&rec.text) {
-                    tags_for.entry(fj).or_default().push(tag);
-                    consumed[bi] = true;
-                }
+            if let Some(&fj) = tag_pairs.get(&bi)
+                && let Some(tag) = clean_tag(&rec.text)
+            {
+                tags_for.entry(fj).or_default().push(tag);
+                consumed[bi] = true;
             }
         }
         for (fj, tags) in &tags_for {

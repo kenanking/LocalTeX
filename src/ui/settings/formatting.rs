@@ -5,7 +5,7 @@ use super::{patch_prefs, picker};
 use crate::prefs::{BlockDelim, InlineDelim, Prefs, ReadingWidth};
 use crate::state::AppState;
 
-pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement {
+pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()

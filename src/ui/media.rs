@@ -313,19 +313,20 @@ impl MainWindow {
         if self.media.derived.as_ref().is_some_and(|d| d.id != id) {
             self.media.derived = None;
         }
-        if let Some(delayed) = self.media.delayed_error.take() {
-            if ready && delayed.matches(id, revision, dpr, &prefs) {
-                if self
-                    .state
-                    .read(cx)
-                    .doc(id)
-                    .is_some_and(|doc| doc.source_feedback_ready())
-                {
-                    self.media.derived = Some(delayed);
-                } else {
-                    self.media.delayed_error = Some(delayed);
-                    return;
-                }
+        if let Some(delayed) = self.media.delayed_error.take()
+            && ready
+            && delayed.matches(id, revision, dpr, &prefs)
+        {
+            if self
+                .state
+                .read(cx)
+                .doc(id)
+                .is_some_and(|doc| doc.source_feedback_ready())
+            {
+                self.media.derived = Some(delayed);
+            } else {
+                self.media.delayed_error = Some(delayed);
+                return;
             }
         }
         if !ready {

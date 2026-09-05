@@ -625,17 +625,17 @@ impl Element for FieldElement {
                     }
                 }
             }
-            if cursor >= *start && cursor <= end {
-                if let Some(p) = line.position_for_index(cursor.saturating_sub(*start), line_height)
-                {
-                    cursor_quad = Some(fill(
-                        Bounds::new(
-                            point(bounds.left() + p.x, y + p.y),
-                            size(px(2.), line_height),
-                        ),
-                        rgb(theme::ACCENT),
-                    ));
-                }
+            if cursor >= *start
+                && cursor <= end
+                && let Some(p) = line.position_for_index(cursor.saturating_sub(*start), line_height)
+            {
+                cursor_quad = Some(fill(
+                    Bounds::new(
+                        point(bounds.left() + p.x, y + p.y),
+                        size(px(2.), line_height),
+                    ),
+                    rgb(theme::ACCENT),
+                ));
             }
             y += h;
         }
@@ -679,10 +679,10 @@ impl Element for FieldElement {
             );
             origin.y += line.size(line_height).height;
         }
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
         let lines = std::mem::take(&mut prepaint.lines);
         let height = prepaint.height;

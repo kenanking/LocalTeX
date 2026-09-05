@@ -112,7 +112,11 @@ impl HistoryPane {
 }
 
 impl MainWindow {
-    pub(crate) fn render_history(&self, n_docs: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_history(
+        &self,
+        n_docs: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let collapsed = self.history.fold.collapsed;
         let (date_preset, width, ids, selected) = {
             let state = self.state.read(cx);
@@ -326,7 +330,7 @@ impl MainWindow {
         n_docs: usize,
         collapsed: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let entity = cx.entity();
         let chevron = icon_btn_sized(
             "sidebar-toggle",

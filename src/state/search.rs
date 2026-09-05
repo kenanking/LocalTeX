@@ -27,14 +27,14 @@ impl AppState {
     }
 
     pub(super) fn schedule_filter(&mut self, cx: &mut Context<Self>) {
-        let gen = self.search.bump();
+        let generation = self.search.bump();
         self.search.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
             let snapshot = this
                 .update(cx, |this, _| {
-                    if this.search.gen != gen {
+                    if this.search.generation != generation {
                         return None;
                     }
                     let query = this.search.query.clone();
@@ -86,13 +86,13 @@ impl AppState {
                 })
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
-                if this.search.gen != gen {
+                if this.search.generation != generation {
                     return;
                 }
-                if this.library.set_visible(ids) {
-                    if let Some(id) = this.library.selected() {
-                        this.ensure_detail(id, cx);
-                    }
+                if this.library.set_visible(ids)
+                    && let Some(id) = this.library.selected()
+                {
+                    this.ensure_detail(id, cx);
                 }
                 cx.notify();
             }) {

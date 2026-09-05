@@ -40,7 +40,7 @@ impl MainWindow {
         status: &DocStatus,
         pane_w: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         if let Some(doc) = self.state.read(cx).doc(doc_id) {
             if let Some(error) = doc
                 .source_error
@@ -160,7 +160,7 @@ impl MainWindow {
         pane_w: f32,
         font: ContentFontSize,
         cx: &mut App,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let m = font.metrics();
         match block {
             PreviewBlock::Paragraph(segs) => {
@@ -499,7 +499,7 @@ impl MainWindow {
         layout: &PreviewLayout,
         font: ContentFontSize,
         cx: &mut App,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let mut wrap = div()
             .id(SharedString::from(format!("tbl-{i}")))
             .relative()
@@ -743,7 +743,7 @@ impl MainWindow {
         spec: TextRunSpec,
         sel: Rc<RefCell<PreviewSel>>,
         font: ContentFontSize,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let m = font.metrics();
         div()
             .id(SharedString::from(spec.run_id.clone()))
@@ -777,7 +777,7 @@ impl MainWindow {
         }
     }
 
-    fn math_img(&mut self, math: &SvgMath, cx: &mut App) -> impl IntoElement {
+    fn math_img(&mut self, math: &SvgMath, cx: &mut App) -> impl IntoElement + use<> {
         let image = self.math_image(&math.svg, cx);
         img(image)
             .w(px(math.width))

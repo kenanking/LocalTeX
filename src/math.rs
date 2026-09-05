@@ -57,14 +57,16 @@ pub fn split_math(input: &str) -> Vec<MathRun> {
         }
     };
     while i < chars.len() {
-        if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '[' {
-            if let Some(end) = find_bracket_closer(&chars, i + 2) {
-                push_text(&mut buf, &mut runs);
-                let body: String = chars[i + 2..end].iter().collect();
-                runs.push(MathRun::Display(canonicalize_tex(body.trim())));
-                i = end + 2;
-                continue;
-            }
+        if chars[i] == '\\'
+            && i + 1 < chars.len()
+            && chars[i + 1] == '['
+            && let Some(end) = find_bracket_closer(&chars, i + 2)
+        {
+            push_text(&mut buf, &mut runs);
+            let body: String = chars[i + 2..end].iter().collect();
+            runs.push(MathRun::Display(canonicalize_tex(body.trim())));
+            i = end + 2;
+            continue;
         }
         if chars[i] == '$' {
             let display = i + 1 < chars.len() && chars[i + 1] == '$';
@@ -125,30 +127,30 @@ pub fn canonicalize_mixed_text(input: &str) -> String {
 pub fn unwrap_formula(text: &str) -> (String, bool) {
     let t = text.trim();
     let chars: Vec<char> = t.chars().collect();
-    if chars.len() >= 4 && chars[0] == '\\' && chars[1] == '[' {
-        if let Some(end) = find_bracket_closer(&chars, 2) {
-            if chars[end + 2..].iter().all(|c| c.is_whitespace()) {
-                let body: String = chars[2..end].iter().collect();
-                return finish_formula(body.trim().to_string(), true);
-            }
-        }
+    if chars.len() >= 4
+        && chars[0] == '\\'
+        && chars[1] == '['
+        && let Some(end) = find_bracket_closer(&chars, 2)
+        && chars[end + 2..].iter().all(|c| c.is_whitespace())
+    {
+        let body: String = chars[2..end].iter().collect();
+        return finish_formula(body.trim().to_string(), true);
     }
     if chars.len() >= 2 && chars[0] == '$' && chars[1] == '$' {
-        if let Some(end) = find_closer(&chars, 2, true) {
-            if chars[end + 2..].iter().all(|c| c.is_whitespace()) {
-                let body: String = chars[2..end].iter().collect();
-                return finish_formula(body.trim().to_string(), true);
-            }
+        if let Some(end) = find_closer(&chars, 2, true)
+            && chars[end + 2..].iter().all(|c| c.is_whitespace())
+        {
+            let body: String = chars[2..end].iter().collect();
+            return finish_formula(body.trim().to_string(), true);
         }
-    } else if chars.first() == Some(&'$') {
-        if let Some(end) = find_closer(&chars, 1, false) {
-            if chars[end + 1..].iter().all(|c| c.is_whitespace()) {
-                return finish_formula(
-                    chars[1..end].iter().collect::<String>().trim().to_string(),
-                    false,
-                );
-            }
-        }
+    } else if chars.first() == Some(&'$')
+        && let Some(end) = find_closer(&chars, 1, false)
+        && chars[end + 1..].iter().all(|c| c.is_whitespace())
+    {
+        return finish_formula(
+            chars[1..end].iter().collect::<String>().trim().to_string(),
+            false,
+        );
     }
     finish_formula(t.to_string(), false)
 }
@@ -178,10 +180,11 @@ pub fn canonicalize_tex(s: &str) -> String {
         t = trimmed.to_string();
         break;
     }
-    if let Some(i) = t.rfind(r"\tag{") {
-        if i > 0 && !t.as_bytes()[i - 1].is_ascii_whitespace() {
-            t.insert(i, ' ');
-        }
+    if let Some(i) = t.rfind(r"\tag{")
+        && i > 0
+        && !t.as_bytes()[i - 1].is_ascii_whitespace()
+    {
+        t.insert(i, ' ');
     }
     t
 }

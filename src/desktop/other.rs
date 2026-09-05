@@ -74,11 +74,10 @@ pub fn start_tray(tx: Sender<DesktopCmd>) -> Option<TrayIcon> {
                 button_state: MouseButtonState::Up,
                 ..
             } = event
+                && let Err(err) = tx.send(DesktopCmd::Show)
             {
-                if let Err(err) = tx.send(DesktopCmd::Show) {
-                    eprintln!("{APP_SLUG}: tray send: {err}");
-                    break;
-                }
+                eprintln!("{APP_SLUG}: tray send: {err}");
+                break;
             }
         }
     });

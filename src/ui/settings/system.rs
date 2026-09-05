@@ -15,7 +15,7 @@ pub(super) fn system_page(
     snap: &SysSnapshot,
     models: &ModelInfo,
     snip_count: usize,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
         _ => "—".into(),
@@ -163,7 +163,7 @@ fn pack_line(
     observed: Option<&str>,
     runtime: ModelRuntimeState,
     detail: Option<&str>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let (label, color) = if !available {
         ("Missing", theme::DANGER)
     } else {

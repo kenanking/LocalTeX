@@ -34,12 +34,12 @@ impl AppState {
     }
 
     pub(super) fn flash_error(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
-        let gen = self.toast.show(msg.into());
+        let generation = self.toast.show(msg.into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(4)).await;
             let _ = this.update(cx, |this, cx| {
-                if this.toast.clear(gen) {
+                if this.toast.clear(generation) {
                     cx.notify();
                 }
             });
@@ -250,12 +250,12 @@ impl AppState {
     fn defer_minimize(&self, cx: &mut Context<Self>, fail_label: &'static str) {
         let handle = self.main_window.handle();
         cx.defer(move |cx| {
-            if let Some(handle) = handle {
-                if let Err(err) = handle.update(cx, |_, window, _| {
+            if let Some(handle) = handle
+                && let Err(err) = handle.update(cx, |_, window, _| {
                     window.minimize_window();
-                }) {
-                    eprintln!("{APP_SLUG}: {fail_label}: {err}");
-                }
+                })
+            {
+                eprintln!("{APP_SLUG}: {fail_label}: {err}");
             }
         });
     }
@@ -277,12 +277,12 @@ impl AppState {
     pub(super) fn dismiss_main_sheet(&self, cx: &mut Context<Self>) {
         let handle = self.main_window.handle();
         cx.defer(move |cx| {
-            if let Some(handle) = handle {
-                if let Err(err) = handle.update(cx, |view, _, cx| {
+            if let Some(handle) = handle
+                && let Err(err) = handle.update(cx, |view, _, cx| {
                     view.dismiss_sheet(cx);
-                }) {
-                    eprintln!("{APP_SLUG}: dismiss sheet: {err}");
-                }
+                })
+            {
+                eprintln!("{APP_SLUG}: dismiss sheet: {err}");
             }
         });
     }

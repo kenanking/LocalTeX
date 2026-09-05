@@ -58,7 +58,7 @@ pub(crate) struct IntakeCard {
 
 #[derive(Clone, Debug)]
 pub(crate) struct IntakePresentation {
-    pub gen: u64,
+    pub generation: u64,
     pub counts: IntakeCounts,
     pub phase: IntakePhase,
     cards: Vec<IntakeCard>,
@@ -93,7 +93,7 @@ pub(crate) fn intake_feedback_duration(succeeded: bool) -> Duration {
 impl IntakePresentation {
     pub fn new(batch: &IntakeBatch) -> (Self, IntakeSync) {
         let mut presentation = Self {
-            gen: batch.gen,
+            generation: batch.generation,
             counts: batch.counts(),
             phase: IntakePhase::Running,
             cards: Vec::new(),
@@ -109,7 +109,7 @@ impl IntakePresentation {
     }
 
     pub fn sync(&mut self, batch: &IntakeBatch) -> IntakeSync {
-        debug_assert_eq!(self.gen, batch.gen);
+        debug_assert_eq!(self.generation, batch.generation);
         self.counts = batch.counts();
         self.done = 0;
         self.succeeded = 0;
@@ -265,7 +265,7 @@ impl IntakePresentation {
         self.visible_cards()
             .filter_map(|(slot, card)| {
                 card.id
-                    .map(|id| (id, intake_paper_spec(self.gen, card.key, slot)))
+                    .map(|id| (id, intake_paper_spec(self.generation, card.key, slot)))
             })
             .collect()
     }
@@ -309,7 +309,7 @@ pub(crate) fn slots_from_batch(
     batch
         .visible_cards()
         .map(|(slot, item)| {
-            let paper = intake_paper_spec(batch.gen, item.key, slot);
+            let paper = intake_paper_spec(batch.generation, item.key, slot);
             IntakeSlot {
                 key: SharedString::from(item.key.to_string()),
                 work: item.work,
@@ -327,7 +327,7 @@ pub(crate) fn render_intake_overlay(
     counts: IntakeCounts,
     batch: Option<&IntakePresentation>,
     slots: &[IntakeSlot],
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let reject = counts.images == 0;
     let fading = batch.is_some_and(|batch| batch.phase == IntakePhase::Fading);
     let complete = batch.is_some_and(|batch| batch.phase != IntakePhase::Running);
@@ -381,7 +381,12 @@ pub(crate) fn render_intake_overlay(
     let complete_view = complete.then(|| render_complete(batch.expect("complete batch exists")));
     let animation_key = batch.map_or_else(
         || SharedString::from("intake-platen-hover"),
-        |batch| SharedString::from(format!("intake-platen-{}-{:?}", batch.gen, batch.phase)),
+        |batch| {
+            SharedString::from(format!(
+                "intake-platen-{}-{:?}",
+                batch.generation, batch.phase
+            ))
+        },
     );
     let platen = div()
         .id("intake-platen")
@@ -674,7 +679,7 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
     const H: f32 = 118.0;
     const CX: f32 = W * 0.5;
     const CY: f32 = 45.0;
-    let gen = batch.gen;
+    let generation = batch.generation;
     let (_, failed) = batch.results();
     let label = if failed == 0 {
         "All images recognized".to_string()
@@ -688,10 +693,10 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
         .relative()
         .w(px(W))
         .h(px(H))
-        .child(complete_ring(gen, 0, CX, CY))
-        .child(complete_ring(gen, 1, CX, CY));
+        .child(complete_ring(generation, 0, CX, CY))
+        .child(complete_ring(generation, 1, CX, CY));
     for index in 0..8 {
-        effect = effect.child(complete_spark(gen, index, CX, CY));
+        effect = effect.child(complete_spark(generation, index, CX, CY));
     }
     effect
         .child(
@@ -713,7 +718,7 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
                         .text_color(rgb(theme::ON_ACCENT)),
                 )
                 .with_animation(
-                    SharedString::from(format!("intake-complete-mark-{gen}")),
+                    SharedString::from(format!("intake-complete-mark-{generation}")),
                     Animation::new(INTAKE_COMPLETE_EFFECT).with_easing(ease_out_quint()),
                     |this, delta| this.opacity(delta),
                 ),
@@ -731,14 +736,14 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
         .into_any_element()
 }
 
-fn complete_ring(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
+fn complete_ring(generation: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
     div()
         .absolute()
         .rounded_full()
         .border_1()
         .border_color(rgb(0x79c990))
         .with_animation(
-            SharedString::from(format!("intake-complete-ring-{gen}-{index}")),
+            SharedString::from(format!("intake-complete-ring-{generation}-{index}")),
             Animation::new(INTAKE_COMPLETE_EFFECT),
             move |this, delta| {
                 let delay = index as f32 * 0.14;
@@ -753,7 +758,7 @@ fn complete_ring(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
         .into_any_element()
 }
 
-fn complete_spark(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
+fn complete_spark(generation: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
     let angle = index as f32 * std::f32::consts::TAU / 8.0;
     let (sin, cos) = angle.sin_cos();
     div()
@@ -766,7 +771,7 @@ fn complete_spark(gen: u64, index: usize, cx: f32, cy: f32) -> AnyElement {
             theme::OK
         }))
         .with_animation(
-            SharedString::from(format!("intake-complete-spark-{gen}-{index}")),
+            SharedString::from(format!("intake-complete-spark-{generation}-{index}")),
             Animation::new(INTAKE_COMPLETE_EFFECT),
             move |this, delta| {
                 let delay = index as f32 * 0.035;

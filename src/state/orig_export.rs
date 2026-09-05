@@ -123,14 +123,14 @@ impl AppState {
                 fallback: None,
             }),
             ImageSlot::Loaded(img) => {
-                if doc.is_persisted() {
-                    if let Some(store) = self.store() {
-                        return Some(OrigPng::File {
-                            store,
-                            id,
-                            fallback: Some(img.clone()),
-                        });
-                    }
+                if doc.is_persisted()
+                    && let Some(store) = self.store()
+                {
+                    return Some(OrigPng::File {
+                        store,
+                        id,
+                        fallback: Some(img.clone()),
+                    });
                 }
                 Some(OrigPng::Encode(img.clone()))
             }
@@ -140,14 +140,14 @@ impl AppState {
     fn flash_orig_copy(&mut self, id: Uuid, cx: &mut Context<Self>) {
         self.orig_copy_flash = Some(id);
         self.orig_copy_flash_gen = self.orig_copy_flash_gen.wrapping_add(1);
-        let gen = self.orig_copy_flash_gen;
+        let generation = self.orig_copy_flash_gen;
         cx.notify();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(1200))
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.orig_copy_flash_gen == gen {
+                if this.orig_copy_flash_gen == generation {
                     this.orig_copy_flash = None;
                     cx.notify();
                 }

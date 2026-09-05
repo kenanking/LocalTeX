@@ -204,41 +204,45 @@ fn split_display_islands(src: &str) -> Vec<Island> {
     let raw: Vec<char> = src.chars().collect();
     let mut i = 0usize;
     while i < raw.len() {
-        if raw[i] == '\\' && i + 1 < raw.len() && raw[i + 1] == '[' {
-            if let Some(end) = find_raw_bracket_end(&raw, i + 2) {
-                let byte_start = chars[i].0;
-                let byte_end = if end + 2 < chars.len() {
-                    chars[end + 2].0
-                } else {
-                    src.len()
-                };
-                if byte_start > last {
-                    push_md(&mut out, &src[last..byte_start]);
-                }
-                let body: String = raw[i + 2..end].iter().collect();
-                out.push(Island::Display(body.trim().to_string()));
-                last = byte_end;
-                i = end + 2;
-                continue;
+        if raw[i] == '\\'
+            && i + 1 < raw.len()
+            && raw[i + 1] == '['
+            && let Some(end) = find_raw_bracket_end(&raw, i + 2)
+        {
+            let byte_start = chars[i].0;
+            let byte_end = if end + 2 < chars.len() {
+                chars[end + 2].0
+            } else {
+                src.len()
+            };
+            if byte_start > last {
+                push_md(&mut out, &src[last..byte_start]);
             }
+            let body: String = raw[i + 2..end].iter().collect();
+            out.push(Island::Display(body.trim().to_string()));
+            last = byte_end;
+            i = end + 2;
+            continue;
         }
-        if raw[i] == '$' && i + 1 < raw.len() && raw[i + 1] == '$' {
-            if let Some(end) = find_raw_dollar_end(&raw, i + 2) {
-                let byte_start = chars[i].0;
-                let byte_end = if end + 2 < chars.len() {
-                    chars[end + 2].0
-                } else {
-                    src.len()
-                };
-                if byte_start > last {
-                    push_md(&mut out, &src[last..byte_start]);
-                }
-                let body: String = raw[i + 2..end].iter().collect();
-                out.push(Island::Display(body.trim().to_string()));
-                last = byte_end;
-                i = end + 2;
-                continue;
+        if raw[i] == '$'
+            && i + 1 < raw.len()
+            && raw[i + 1] == '$'
+            && let Some(end) = find_raw_dollar_end(&raw, i + 2)
+        {
+            let byte_start = chars[i].0;
+            let byte_end = if end + 2 < chars.len() {
+                chars[end + 2].0
+            } else {
+                src.len()
+            };
+            if byte_start > last {
+                push_md(&mut out, &src[last..byte_start]);
             }
+            let body: String = raw[i + 2..end].iter().collect();
+            out.push(Island::Display(body.trim().to_string()));
+            last = byte_end;
+            i = end + 2;
+            continue;
         }
         i += 1;
     }
@@ -283,10 +287,10 @@ fn collapse_inline_only(islands: Vec<Island>) -> Vec<Island> {
     if let Island::Markdown(md) = &islands[0] {
         let t = md.trim();
         let runs = math::split_math(t);
-        if runs.len() == 1 {
-            if let MathRun::Inline(s) = &runs[0] {
-                return vec![Island::InlineOnly(s.clone())];
-            }
+        if runs.len() == 1
+            && let MathRun::Inline(s) = &runs[0]
+        {
+            return vec![Island::InlineOnly(s.clone())];
         }
         let (body, display) = unwrap_formula(t);
         if display && t.starts_with(r"\begin{") {

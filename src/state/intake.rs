@@ -55,12 +55,12 @@ impl IntakeItem {
 pub struct IntakeBatch {
     pub items: Vec<IntakeItem>,
     pub skipped: usize,
-    pub gen: u64,
+    pub generation: u64,
     next_item_key: u64,
 }
 
 impl IntakeBatch {
-    pub fn from_paths(paths: Vec<PathBuf>, skipped: usize, gen: u64) -> Self {
+    pub fn from_paths(paths: Vec<PathBuf>, skipped: usize, generation: u64) -> Self {
         let items: Vec<_> = paths
             .into_iter()
             .enumerate()
@@ -70,15 +70,15 @@ impl IntakeBatch {
             next_item_key: items.len() as u64 + 1,
             items,
             skipped,
-            gen,
+            generation,
         }
     }
 
-    pub fn reject(skipped: usize, gen: u64) -> Self {
+    pub fn reject(skipped: usize, generation: u64) -> Self {
         Self {
             items: Vec::new(),
             skipped,
-            gen,
+            generation,
             next_item_key: 1,
         }
     }
@@ -130,10 +130,10 @@ impl IntakeBatch {
     }
 
     pub fn mark_working(&mut self, id: Uuid) {
-        if let Some(item) = self.items.iter_mut().find(|item| item.id == Some(id)) {
-            if item.work == IntakeWork::Waiting {
-                item.work = IntakeWork::Working;
-            }
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == Some(id))
+            && item.work == IntakeWork::Waiting
+        {
+            item.work = IntakeWork::Working;
         }
     }
 
@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(batch.next_pending(), None);
 
         batch.extend(vec![PathBuf::from("b.png")], 2);
-        assert_eq!(batch.gen, 7);
+        assert_eq!(batch.generation, 7);
         assert_eq!(batch.next_pending(), Some((2, PathBuf::from("b.png"))));
         assert_eq!(batch.counts().skipped, 2);
     }

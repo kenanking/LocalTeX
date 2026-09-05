@@ -147,10 +147,10 @@ impl Library {
 
     pub fn gpu_full_ids(&self) -> Vec<Uuid> {
         let mut ids = self.loaded_lru.clone();
-        if let Some(sel) = self.selected {
-            if !ids.contains(&sel) {
-                ids.push(sel);
-            }
+        if let Some(sel) = self.selected
+            && !ids.contains(&sel)
+        {
+            ids.push(sel);
         }
         ids
     }
@@ -187,10 +187,11 @@ impl Library {
                 break;
             };
             let evict = self.loaded_lru.remove(pos);
-            if let Some(doc) = self.docs.get_mut(&evict) {
-                if doc.is_persisted() && matches!(doc.image, ImageSlot::Loaded(_)) {
-                    doc.image = ImageSlot::OnDisk;
-                }
+            if let Some(doc) = self.docs.get_mut(&evict)
+                && doc.is_persisted()
+                && matches!(doc.image, ImageSlot::Loaded(_))
+            {
+                doc.image = ImageSlot::OnDisk;
             }
         }
     }

@@ -99,10 +99,10 @@ fn resolve_models_location(
     let mut bundled = Vec::new();
     if let Some(exe) = exe_dir {
         bundled.push((exe.join("models"), "Beside executable"));
-        if exe.file_name().is_some_and(|name| name == "deps") {
-            if let Some(parent) = exe.parent() {
-                bundled.push((parent.join("models"), "Test executable parent"));
-            }
+        if exe.file_name().is_some_and(|name| name == "deps")
+            && let Some(parent) = exe.parent()
+        {
+            bundled.push((parent.join("models"), "Test executable parent"));
         }
         #[cfg(target_os = "linux")]
         if let Some(prefix) = exe.parent() {

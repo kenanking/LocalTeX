@@ -355,13 +355,12 @@ fn group_rows(blocks: &[Block]) -> Vec<Vec<&Block>> {
             rows.push(vec![block]);
             continue;
         }
-        if let Some(row) = rows.last_mut() {
-            if let Some(prev) = row.last() {
-                if vertically_overlap(prev.bbox, block.bbox) {
-                    row.push(block);
-                    continue;
-                }
-            }
+        if let Some(row) = rows.last_mut()
+            && let Some(prev) = row.last()
+            && vertically_overlap(prev.bbox, block.bbox)
+        {
+            row.push(block);
+            continue;
         }
         rows.push(vec![block]);
     }

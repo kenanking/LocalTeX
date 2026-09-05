@@ -52,7 +52,7 @@ impl CaptureSession {
 
 pub(crate) struct SearchFilter {
     pub query: String,
-    pub gen: u64,
+    pub generation: u64,
     pub task: Option<gpui::Task<()>>,
 }
 
@@ -60,14 +60,14 @@ impl SearchFilter {
     pub fn new() -> Self {
         Self {
             query: String::new(),
-            gen: 0,
+            generation: 0,
             task: None,
         }
     }
 
     pub fn bump(&mut self) -> u64 {
-        self.gen = self.gen.wrapping_add(1);
-        self.gen
+        self.generation = self.generation.wrapping_add(1);
+        self.generation
     }
 }
 

@@ -110,10 +110,8 @@ impl AppState {
         if !stored && doc.image.pixels().is_none() {
             return;
         }
-        if !stored {
-            if let Some(doc) = self.library.get_mut(id) {
-                doc.persist = PersistState::InsertPending { revision };
-            }
+        if !stored && let Some(doc) = self.library.get_mut(id) {
+            doc.persist = PersistState::InsertPending { revision };
         }
         let Some(doc) = self.library.get(id).cloned() else {
             return;
@@ -124,10 +122,10 @@ impl AppState {
             writer.insert(doc)
         };
         if let Err(err) = queued {
-            if let Some(d) = self.library.get_mut(id) {
-                if d.insert_pending_revision() == Some(revision) {
-                    d.persist = PersistState::New;
-                }
+            if let Some(d) = self.library.get_mut(id)
+                && d.insert_pending_revision() == Some(revision)
+            {
+                d.persist = PersistState::New;
             }
             eprintln!("{APP_SLUG}: queue persist snip: {err:#}");
             self.flash_error("Couldn't save that snip", cx);
@@ -403,12 +401,12 @@ impl AppState {
         match (event.kind, event.result) {
             (WriteKind::Insert { id, revision }, Ok(WriteResult::Inserted(thumb))) => {
                 let mut changed_during_insert = false;
-                if let Some(doc) = self.library.get_mut(id) {
-                    if doc.insert_pending_revision() == Some(revision) {
-                        changed_during_insert = doc.revision != revision;
-                        doc.persist = PersistState::Stored;
-                        doc.thumb_jpeg = thumb;
-                    }
+                if let Some(doc) = self.library.get_mut(id)
+                    && doc.insert_pending_revision() == Some(revision)
+                {
+                    changed_during_insert = doc.revision != revision;
+                    doc.persist = PersistState::Stored;
+                    doc.thumb_jpeg = thumb;
                 }
                 self.library.touch_lru(id);
                 self.documents.clear_persist_retry(id);
@@ -425,10 +423,10 @@ impl AppState {
                 self.schedule_filter(cx);
             }
             (WriteKind::Insert { id, revision }, Err(err)) => {
-                if let Some(doc) = self.library.get_mut(id) {
-                    if doc.insert_pending_revision() == Some(revision) {
-                        doc.persist = PersistState::New;
-                    }
+                if let Some(doc) = self.library.get_mut(id)
+                    && doc.insert_pending_revision() == Some(revision)
+                {
+                    doc.persist = PersistState::New;
                 }
                 eprintln!("{APP_SLUG}: persist snip: {err:#}");
                 self.flash_error("Couldn't save that snip", cx);

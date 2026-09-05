@@ -302,14 +302,13 @@ impl InkTex {
         let mut num_layers = 0usize;
         let (mut num_heads, mut head_dim) = (0usize, 0usize);
         for inp in decoder.inputs() {
-            if inp.name() == "self_k" {
-                if let ort::value::ValueType::Tensor { shape, .. } = inp.dtype() {
-                    if shape.len() == 5 {
-                        num_layers = shape[0] as usize;
-                        num_heads = shape[2] as usize;
-                        head_dim = shape[4] as usize;
-                    }
-                }
+            if inp.name() == "self_k"
+                && let ort::value::ValueType::Tensor { shape, .. } = inp.dtype()
+                && shape.len() == 5
+            {
+                num_layers = shape[0] as usize;
+                num_heads = shape[2] as usize;
+                head_dim = shape[4] as usize;
             }
         }
         if num_layers == 0 || num_heads == 0 || head_dim == 0 {

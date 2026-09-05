@@ -34,7 +34,7 @@ impl MainWindow {
         copy_pane_w: f32,
         workspace_h: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         if self.orig_strip.bind_doc(self.state.read(cx).selected())
             && self.window_drag.as_ref().is_some_and(|d| d.is_strip())
         {
@@ -324,7 +324,7 @@ impl MainWindow {
         can_redo: bool,
         pane_w: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let entity = cx.entity();
         let (cap, font) = {
             let prefs = &self.state.read(cx).prefs;
@@ -443,7 +443,7 @@ impl MainWindow {
             )
     }
 
-    fn render_source_split(&self, pane_w: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_source_split(&self, pane_w: f32, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let start_split = self.source_panel.split;
         div()
             .id("source-split")
@@ -483,7 +483,7 @@ impl MainWindow {
         ocr: Option<OcrMeta>,
         pane_w: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let current = self.state.read(cx).selected_doc().is_some_and(|doc| {
             !doc.source_pending
                 && doc.source_error.is_none()

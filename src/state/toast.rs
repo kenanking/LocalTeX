@@ -1,13 +1,13 @@
 pub(crate) struct ToastState {
     message: Option<String>,
-    gen: u64,
+    generation: u64,
 }
 
 impl ToastState {
     pub fn new() -> Self {
         Self {
             message: None,
-            gen: 0,
+            generation: 0,
         }
     }
 
@@ -17,12 +17,12 @@ impl ToastState {
 
     pub fn show(&mut self, message: String) -> u64 {
         self.message = Some(message);
-        self.gen = self.gen.wrapping_add(1);
-        self.gen
+        self.generation = self.generation.wrapping_add(1);
+        self.generation
     }
 
-    pub fn clear(&mut self, gen: u64) -> bool {
-        if self.gen != gen || self.message.is_none() {
+    pub fn clear(&mut self, generation: u64) -> bool {
+        if self.generation != generation || self.message.is_none() {
             return false;
         }
         self.message = None;

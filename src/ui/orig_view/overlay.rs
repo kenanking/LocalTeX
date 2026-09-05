@@ -21,7 +21,7 @@ impl MainWindow {
         window: &Window,
         workspace_h: f32,
         cx: &mut Context<Self>,
-    ) -> impl gpui::IntoElement {
+    ) -> impl gpui::IntoElement + use<> {
         self.ensure_selected_full(cx);
         let (ids, selected, age, idx, copy_flashed, reveal_enabled) = {
             let state = self.state.read(cx);
@@ -36,12 +36,11 @@ impl MainWindow {
             let reveal_enabled = selected.is_some_and(|id| state.can_reveal_original(id));
             (ids, selected, age, idx, copy_flashed, reveal_enabled)
         };
-        if let Some(id) = selected {
-            if self.orig.on_new_image(id) {
-                if let Some(i) = idx {
-                    self.orig.request_film_reveal(i);
-                }
-            }
+        if let Some(id) = selected
+            && self.orig.on_new_image(id)
+            && let Some(i) = idx
+        {
+            self.orig.request_film_reveal(i);
         }
         self.orig.apply_film_reveal();
         let full = selected.and_then(|id| self.full(id));
@@ -152,7 +151,7 @@ impl MainWindow {
         at_start: bool,
         at_end: bool,
         cx: &mut Context<Self>,
-    ) -> impl gpui::IntoElement {
+    ) -> impl gpui::IntoElement + use<> {
         let entity = cx.entity();
         let img_data = full.clone();
         let img_w = self.orig.img_w;
@@ -247,7 +246,7 @@ impl MainWindow {
         copy_flashed: bool,
         reveal_enabled: bool,
         cx: &mut Context<Self>,
-    ) -> impl gpui::IntoElement {
+    ) -> impl gpui::IntoElement + use<> {
         let entity = cx.entity();
         div()
             .absolute()
@@ -301,7 +300,7 @@ impl MainWindow {
         thumbs: &[(Uuid, Option<std::sync::Arc<gpui::RenderImage>>)],
         selected: Option<Uuid>,
         cx: &mut Context<Self>,
-    ) -> impl gpui::IntoElement {
+    ) -> impl gpui::IntoElement + use<> {
         let content_w = film_content_w(thumbs.len());
         let entity = cx.entity();
         let mut row = div()
@@ -436,7 +435,7 @@ fn nav_disc(
     prev: bool,
     disabled: bool,
     cx: &mut Context<MainWindow>,
-) -> impl gpui::IntoElement {
+) -> impl gpui::IntoElement + use<> {
     div()
         .id(id)
         .absolute()

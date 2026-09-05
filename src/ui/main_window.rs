@@ -283,7 +283,7 @@ impl MainWindow {
         let is_new = self
             .intake
             .as_ref()
-            .is_none_or(|intake| intake.gen != batch.gen);
+            .is_none_or(|intake| intake.generation != batch.generation);
         let sync = if is_new {
             let (presentation, sync) = IntakePresentation::new(&batch);
             self.intake = Some(presentation);
@@ -296,17 +296,22 @@ impl MainWindow {
         };
 
         if is_new && batch.items.is_empty() {
-            self.schedule_intake_reject(batch.gen, cx);
+            self.schedule_intake_reject(batch.generation, cx);
         }
         if sync.complete {
             if let Some(intake) = &mut self.intake {
                 intake.phase = IntakePhase::Complete;
             }
-            self.acknowledge_intake(batch.gen, cx);
-            self.schedule_intake_complete(batch.gen, cx);
+            self.acknowledge_intake(batch.generation, cx);
+            self.schedule_intake_complete(batch.generation, cx);
         } else {
             for feedback in sync.feedback {
-                self.schedule_intake_feedback(batch.gen, feedback.key, feedback.succeeded, cx);
+                self.schedule_intake_feedback(
+                    batch.generation,
+                    feedback.key,
+                    feedback.succeeded,
+                    cx,
+                );
             }
         }
 
@@ -320,47 +325,44 @@ impl MainWindow {
         }
     }
 
-    fn acknowledge_intake(&self, gen: u64, cx: &mut Context<Self>) {
+    fn acknowledge_intake(&self, generation: u64, cx: &mut Context<Self>) {
         let state = self.state.clone();
         cx.defer(move |cx| {
-            state.update(cx, |state, cx| state.acknowledge_intake(gen, cx));
+            state.update(cx, |state, cx| state.acknowledge_intake(generation, cx));
         });
     }
 
-    fn schedule_intake_reject(&mut self, gen: u64, cx: &mut Context<Self>) {
+    fn schedule_intake_reject(&mut self, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INTAKE_REJECT_HOLD).await;
             let _ = this.update(cx, |this, cx| {
-                let Some(intake) = this
-                    .intake
-                    .as_mut()
-                    .filter(|intake| intake.gen == gen && intake.phase == IntakePhase::Running)
-                else {
+                let Some(intake) = this.intake.as_mut().filter(|intake| {
+                    intake.generation == generation && intake.phase == IntakePhase::Running
+                }) else {
                     return;
                 };
                 intake.phase = IntakePhase::Fading;
-                this.acknowledge_intake(gen, cx);
+                this.acknowledge_intake(generation, cx);
                 cx.notify();
             });
             cx.background_executor().timer(INTAKE_PLATEN_OUT).await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    if this.intake.as_ref().is_some_and(|intake| {
-                        intake.gen == gen && intake.phase == IntakePhase::Fading
-                    }) {
-                        this.intake = None;
-                        this.release_intake_polaroids(cx);
-                        this.resume_deferred_media(cx);
-                        cx.notify();
-                    }
-                });
+            let _ = this.update(cx, |this, cx| {
+                if this.intake.as_ref().is_some_and(|intake| {
+                    intake.generation == generation && intake.phase == IntakePhase::Fading
+                }) {
+                    this.intake = None;
+                    this.release_intake_polaroids(cx);
+                    this.resume_deferred_media(cx);
+                    cx.notify();
+                }
+            });
         })
         .detach();
     }
 
     fn schedule_intake_feedback(
         &mut self,
-        gen: u64,
+        generation: u64,
         key: u64,
         succeeded: bool,
         cx: &mut Context<Self>,
@@ -371,11 +373,9 @@ impl MainWindow {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 let mut complete = false;
-                let changed = if let Some(intake) = this
-                    .intake
-                    .as_mut()
-                    .filter(|intake| intake.gen == gen && intake.phase == IntakePhase::Running)
-                {
+                let changed = if let Some(intake) = this.intake.as_mut().filter(|intake| {
+                    intake.generation == generation && intake.phase == IntakePhase::Running
+                }) {
                     let changed = intake.finish_feedback_and_promote(key);
                     if changed && intake.ready_to_complete() {
                         intake.phase = IntakePhase::Complete;
@@ -387,8 +387,8 @@ impl MainWindow {
                 };
                 if changed {
                     if complete {
-                        this.acknowledge_intake(gen, cx);
-                        this.schedule_intake_complete(gen, cx);
+                        this.acknowledge_intake(generation, cx);
+                        this.schedule_intake_complete(generation, cx);
                     } else {
                         this.refresh_intake_media(cx);
                     }
@@ -399,31 +399,29 @@ impl MainWindow {
         .detach();
     }
 
-    fn schedule_intake_complete(&mut self, gen: u64, cx: &mut Context<Self>) {
+    fn schedule_intake_complete(&mut self, generation: u64, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INTAKE_COMPLETE_HOLD).await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    let Some(intake) = this.intake.as_mut().filter(|intake| {
-                        intake.gen == gen && intake.phase == IntakePhase::Complete
-                    }) else {
-                        return;
-                    };
-                    intake.phase = IntakePhase::Fading;
-                    cx.notify();
-                });
+            let _ = this.update(cx, |this, cx| {
+                let Some(intake) = this.intake.as_mut().filter(|intake| {
+                    intake.generation == generation && intake.phase == IntakePhase::Complete
+                }) else {
+                    return;
+                };
+                intake.phase = IntakePhase::Fading;
+                cx.notify();
+            });
             cx.background_executor().timer(INTAKE_PLATEN_OUT).await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    if this.intake.as_ref().is_some_and(|intake| {
-                        intake.gen == gen && intake.phase == IntakePhase::Fading
-                    }) {
-                        this.intake = None;
-                        this.release_intake_polaroids(cx);
-                        this.resume_deferred_media(cx);
-                        cx.notify();
-                    }
-                });
+            let _ = this.update(cx, |this, cx| {
+                if this.intake.as_ref().is_some_and(|intake| {
+                    intake.generation == generation && intake.phase == IntakePhase::Fading
+                }) {
+                    this.intake = None;
+                    this.release_intake_polaroids(cx);
+                    this.resume_deferred_media(cx);
+                    cx.notify();
+                }
+            });
         })
         .detach();
     }

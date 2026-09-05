@@ -53,12 +53,12 @@ pub(crate) fn intercept_recording(
     .detach();
 }
 
-pub(super) fn shortcuts_page(
+pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'static>(
     state: Entity<AppState>,
     prefs: &Prefs,
     listen: Option<ShortcutId>,
-    on_listen: impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static,
-) -> impl IntoElement {
+    on_listen: F,
+) -> impl IntoElement + use<F> {
     let over = &prefs.shortcuts;
     let reset_state = state.clone();
     div()
@@ -124,14 +124,14 @@ pub(super) fn shortcuts_page(
         ))
 }
 
-fn shortcut_group(
+fn shortcut_group<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'static>(
     title: &'static str,
     group: Group,
     over: &keymap::Overrides,
     listen: Option<ShortcutId>,
     state: &Entity<AppState>,
-    on_listen: &(impl Fn(Option<ShortcutId>, &mut App) + Clone + 'static),
-) -> impl IntoElement {
+    on_listen: &F,
+) -> impl IntoElement + use<F> {
     let rows = keymap::CATALOG
         .iter()
         .filter(|s| s.group == group)

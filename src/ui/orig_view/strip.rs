@@ -70,7 +70,7 @@ impl MainWindow {
         &self,
         frame: OrigStripFrame,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let OrigStripFrame {
             doc_id,
             full,
@@ -230,7 +230,7 @@ impl MainWindow {
         pane_w: f32,
         max_h: f32,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         div()
             .id("orig-strip-resize")
             .absolute()

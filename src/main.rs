@@ -61,6 +61,11 @@ impl StartupMode {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: No application threads exist before the instance service starts.
+    unsafe {
+        pin_display_vulkan();
+    }
     match instance::claim() {
         instance::Claim::AlreadyRunning => {}
         instance::Claim::Primary(seat) => run(seat),
@@ -98,7 +103,6 @@ fn interactive_windows_ui() {
 
 fn run(mut seat: instance::Seat) {
     let startup_mode = StartupMode::from_args();
-    pin_display_vulkan();
     crate::icon::install_desktop_identity();
     let engine = std::thread::spawn(crate::ocr::Engine::load);
     gpui_platform::application()
@@ -181,7 +185,8 @@ pub(crate) fn open_main_window(
     Ok(())
 }
 
-fn pin_display_vulkan() {
+#[cfg(target_os = "linux")]
+unsafe fn pin_display_vulkan() {
     if std::env::var_os("VK_DRIVER_FILES").is_some()
         || std::env::var_os("VK_ICD_FILENAMES").is_some()
     {
@@ -198,8 +203,11 @@ fn pin_display_vulkan() {
         .copied()
         .find(|p| std::path::Path::new(p).exists())
     {
-        std::env::set_var("VK_DRIVER_FILES", path);
-        std::env::set_var("VK_ICD_FILENAMES", path);
+        // SAFETY: The caller runs this before starting any application threads.
+        unsafe {
+            std::env::set_var("VK_DRIVER_FILES", path);
+            std::env::set_var("VK_ICD_FILENAMES", path);
+        }
         eprintln!("{}: pin Vulkan ICD {path}", crate::identity::APP_SLUG);
     }
 }

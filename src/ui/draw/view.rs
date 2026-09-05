@@ -19,7 +19,7 @@ const PAPER_RULE_GAP: f32 = 28.0;
 const INK_WIDTH: f32 = 2.4;
 
 impl MainWindow {
-    pub(crate) fn render_draw(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_draw(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let lines: Vec<Vec<Point<Pixels>>> = self
             .board
             .lines
@@ -260,7 +260,7 @@ fn draw_dock(
     can_undo: bool,
     can_redo: bool,
     cx: &mut Context<MainWindow>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     div()
         .id("draw-dock")
         .absolute()

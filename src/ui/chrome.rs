@@ -45,7 +45,7 @@ impl MainWindow {
         can_open_docx: bool,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let capture_tip = {
             let over = &self.state.read(cx).prefs.shortcuts;
@@ -77,7 +77,7 @@ impl MainWindow {
             ))
     }
 
-    fn render_caption(&self, window: &Window) -> impl IntoElement {
+    fn render_caption(&self, window: &Window) -> impl IntoElement + use<> {
         let close_state = self.state.clone();
         let minimize_state = self.state.clone();
         // Move only after the pointer actually travels. Starting a compositor
@@ -183,7 +183,11 @@ impl MainWindow {
             ))
     }
 
-    fn render_toolbar(&self, toolbar: ToolbarState, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(
+        &self,
+        toolbar: ToolbarState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let ToolbarState {
             capturing,
             has_selected,
@@ -334,7 +338,7 @@ impl MainWindow {
         &self,
         status_kind: theme::StatusKind,
         status_label: String,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_center()
@@ -502,10 +506,10 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     if let Some(err) = state.error_message() {
         return (theme::StatusKind::Error, err.to_string());
     }
-    if let Some(doc) = state.selected_doc() {
-        if let DocStatus::Failed(err) = &doc.status {
-            return (theme::StatusKind::Error, err.clone());
-        }
+    if let Some(doc) = state.selected_doc()
+        && let DocStatus::Failed(err) = &doc.status
+    {
+        return (theme::StatusKind::Error, err.clone());
     }
     match state.engine_status() {
         status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),

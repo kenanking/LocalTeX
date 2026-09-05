@@ -30,12 +30,12 @@ pub(crate) fn table_preview_layout(
     let mut col_w = vec![MIN_COL; cols];
     for row in &slots {
         for (c, slot) in row.iter().enumerate() {
-            if let Slot::Origin { text, colspan, .. } = slot {
-                if *colspan <= 1 {
-                    col_w[c] = col_w[c]
-                        .max(estimate_text_width(text, caption) + PAD_X)
-                        .min(MAX_COL);
-                }
+            if let Slot::Origin { text, colspan, .. } = slot
+                && *colspan <= 1
+            {
+                col_w[c] = col_w[c]
+                    .max(estimate_text_width(text, caption) + PAD_X)
+                    .min(MAX_COL);
             }
         }
     }

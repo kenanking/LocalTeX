@@ -542,18 +542,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            if session.anchor.is_some() {
-                if let Some(pt) = cursor_canvas(session, hwnd)
+            if session.anchor.is_some()
+                && let Some(pt) = cursor_canvas(session, hwnd)
                     .or_else(|| to_canvas(session, hwnd, lparam_x(lparam), lparam_y(lparam)))
-                {
-                    if let Some((ax, ay)) = session.anchor {
-                        let next = norm_rect(ax, ay, pt.0, pt.1);
-                        if session.last != Some(next) {
-                            let prev = session.last;
-                            session.last = Some(next);
-                            invalidate_selection(session, prev, session.last);
-                        }
-                    }
+                && let Some((ax, ay)) = session.anchor
+            {
+                let next = norm_rect(ax, ay, pt.0, pt.1);
+                if session.last != Some(next) {
+                    let prev = session.last;
+                    session.last = Some(next);
+                    invalidate_selection(session, prev, session.last);
                 }
             }
             LRESULT(0)
@@ -640,8 +638,8 @@ fn compose(overlay: &Overlay, session: &Session, hdc: HDC, clip: RECT) {
         unsafe { IntersectClipRect(hdc, clip.left, clip.top, clip.right, clip.bottom) };
     }
     blit_full(hdc, &overlay.dim);
-    if let Some((x0, y0, x1, y1)) = session.last {
-        if let Some((ix0, iy0, ix1, iy1)) = intersect(
+    if let Some((x0, y0, x1, y1)) = session.last
+        && let Some((ix0, iy0, ix1, iy1)) = intersect(
             (x0, y0, x1, y1),
             (
                 src_x,
@@ -649,30 +647,30 @@ fn compose(overlay: &Overlay, session: &Session, hdc: HDC, clip: RECT) {
                 src_x.saturating_add(overlay.bright.width),
                 src_y.saturating_add(overlay.bright.height),
             ),
-        ) {
-            let dx = ix0 - src_x;
-            let dy = iy0 - src_y;
-            let inner = unsafe { SaveDC(hdc) };
-            if inner != 0 {
-                unsafe { IntersectClipRect(hdc, dx, dy, ix1 - src_x, iy1 - src_y) };
-                blit_full(hdc, &overlay.bright);
-                let _ = unsafe { RestoreDC(hdc, inner) };
-            }
-            let accent = unsafe {
-                CreateSolidBrush(windows::Win32::Foundation::COLORREF(
-                    u32::from(ACCENT.2) | u32::from(ACCENT.1) << 8 | u32::from(ACCENT.0) << 16,
-                ))
+        )
+    {
+        let dx = ix0 - src_x;
+        let dy = iy0 - src_y;
+        let inner = unsafe { SaveDC(hdc) };
+        if inner != 0 {
+            unsafe { IntersectClipRect(hdc, dx, dy, ix1 - src_x, iy1 - src_y) };
+            blit_full(hdc, &overlay.bright);
+            let _ = unsafe { RestoreDC(hdc, inner) };
+        }
+        let accent = unsafe {
+            CreateSolidBrush(windows::Win32::Foundation::COLORREF(
+                u32::from(ACCENT.2) | u32::from(ACCENT.1) << 8 | u32::from(ACCENT.0) << 16,
+            ))
+        };
+        if !accent.is_invalid() {
+            let rc = RECT {
+                left: dx,
+                top: dy,
+                right: ix1 - src_x,
+                bottom: iy1 - src_y,
             };
-            if !accent.is_invalid() {
-                let rc = RECT {
-                    left: dx,
-                    top: dy,
-                    right: ix1 - src_x,
-                    bottom: iy1 - src_y,
-                };
-                unsafe { FrameRect(hdc, &rc, accent) };
-                let _ = unsafe { DeleteObject(accent.into()) };
-            }
+            unsafe { FrameRect(hdc, &rc, accent) };
+            let _ = unsafe { DeleteObject(accent.into()) };
         }
     }
     if saved != 0 {
