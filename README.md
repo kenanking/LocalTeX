@@ -31,7 +31,7 @@ Check [Releases](https://github.com/kenanking/LocalTeX/releases) for available b
 | Platform | Support |
 |---|---|
 | Windows x86_64 | Native desktop app, screen capture, global shortcuts, and system tray |
-| Linux x86_64, X11 | Native desktop app; Ubuntu 22.04 / glibc 2.35 or newer |
+| Linux x86_64, X11 | Ubuntu 24.04 LTS (glibc 2.39); Ubuntu 22.04 is not supported |
 | Linux Wayland | Not supported; use an X11 session |
 | macOS | Outside the supported platforms |
 

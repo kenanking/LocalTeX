@@ -56,7 +56,7 @@ CI also runs `cargo clippy --all-targets -- -D warnings`. Report checks and plat
 - Use `scripts/bundle-linux.sh` (tar.gz + deb) or `scripts/bundle-windows.ps1` (zip + Inno), with artifacts in `dist/` (gitignored). Do not add cargo-packager.
 - For model installation, cache validation, and discovery, see `docs/development.md` and the matching `scripts/download-models.*`. Bundle scripts already invoke the downloader. Do not call bash from Windows packaging; WindowsApps `bash.exe` is often a WSL stub.
 - When publishing model packs: package ocr-pipeline's `current/opendoc` and `current/handwriting` outside this repo under the dated directory names in both download scripts. Keep those names, required files, and checksums aligned with `models/manifest.json`. The `v0.0.0` model release needs both tarballs, the manifest, and `SHA256SUMS` covering all three.
-- Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
+- Keep the GitHub Release Linux job on `ubuntu-24.04`. Linux releases target Ubuntu 24.04 LTS / glibc 2.39; Ubuntu 22.04 is not supported.
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
 - Windows packaging uses Inno Setup 7. User-scope installs may omit `ISCC.exe` from PATH; compiler discovery is in the bundle script, and CI installation is in `.github/workflows/release.yml`.
 - `Setup.exe` needs `SetupIconFile` separately from the app icon. `build.rs` generates `target/localtex.ico` for the bundle script; do not check the ICO into git.

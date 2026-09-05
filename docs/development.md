@@ -27,7 +27,7 @@ cargo build --profile dev-opt
 
 ### Linux X11
 
-On Ubuntu 22.04, install the build dependencies used by the release workflow:
+On Ubuntu 24.04 LTS, install the build dependencies used by the release workflow:
 
 ```sh
 sudo apt-get update
@@ -40,7 +40,7 @@ cargo build --profile dev-opt
 ./target/dev-opt/localtex
 ```
 
-Run from an X11 graphical session with a working Vulkan driver. Linux release packages target glibc 2.35 or newer. If linking fails on `-lgbm`, install `libgbm-dev`; machine-local linker configuration is documented in [`.cargo/config.toml.example`](../.cargo/config.toml.example).
+Run from an X11 graphical session with a working Vulkan driver. Linux release packages target Ubuntu 24.04 LTS and require glibc 2.39 or newer; Ubuntu 22.04 is not supported. If linking fails on `-lgbm`, install `libgbm-dev`; machine-local linker configuration is documented in [`.cargo/config.toml.example`](../.cargo/config.toml.example).
 
 Use `cargo build --release` for a shipping binary. The `dev-opt` profile skips LTO for faster iteration; its output is separate from `target/release`.
 
