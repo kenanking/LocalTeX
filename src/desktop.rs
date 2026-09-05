@@ -39,6 +39,7 @@ pub enum DesktopCmd {
     Show,
     Reveal,
     Quit,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     ServiceFailed(&'static str),
 }
 

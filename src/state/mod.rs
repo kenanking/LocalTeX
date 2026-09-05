@@ -519,6 +519,7 @@ impl AppState {
             }
             DesktopCmd::Reveal => self.restore_main(cx),
             DesktopCmd::Quit => self.request_quit(cx),
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             DesktopCmd::ServiceFailed(message) => self.flash_error(message, cx),
         }
     }
