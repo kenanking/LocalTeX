@@ -82,7 +82,7 @@ Architecture: ${DEB_ARCH}
 Installed-Size: ${SIZE_KB}
 Maintainer: Yan Tang
 Homepage: https://github.com/kenanking/LocalTeX
-Depends: libc6, libgcc-s1, libstdc++6, libgbm1, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libxcb-xkb1, libvulkan1, libx11-6, libfontconfig1
+Depends: libc6, libgcc-s1, libstdc++6, libegl1, libgbm1, libpipewire-0.3-0, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libxcb-xkb1, libvulkan1, libx11-6, libfontconfig1
 Description: Offline screenshot OCR to TeX and Markdown
  LocalTeX snips the screen and recognizes mixed text and formulas on-device.
  This package includes the OpenDoc and handwriting ONNX packs.

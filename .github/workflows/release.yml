@@ -59,9 +59,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            clang cmake pkg-config dpkg-dev \
+            clang libclang-dev cmake pkg-config dpkg-dev \
             libfontconfig-dev libgbm-dev libegl1-mesa-dev \
-            libvulkan-dev libx11-dev libx11-xcb-dev \
+            libpipewire-0.3-dev libvulkan-dev libx11-dev libx11-xcb-dev \
             libxcb1-dev libxkbcommon-x11-dev
 
       - uses: Swatinem/rust-cache@v2

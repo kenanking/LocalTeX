@@ -31,9 +31,9 @@ On Ubuntu 22.04, install the build dependencies used by the release workflow:
 
 ```sh
 sudo apt-get update
-sudo apt-get install clang cmake pkg-config \
+sudo apt-get install clang libclang-dev cmake pkg-config \
   libfontconfig-dev libgbm-dev libegl1-mesa-dev libvulkan-dev \
-  libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-x11-dev
+  libpipewire-0.3-dev libx11-dev libx11-xcb-dev libxcb1-dev libxkbcommon-x11-dev
 
 ./scripts/download-models.sh
 cargo build --profile dev-opt
