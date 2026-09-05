@@ -746,7 +746,7 @@ impl Render for SourceEditor {
             .pb(px(52.))
             .text_size(px(self.font_px))
             .line_height(px(self.line_px))
-            .font_family("monospace")
+            .font_family(theme::SOURCE_FONT)
             .text_color(rgb(theme::TEXT))
             .child(FieldElement { input: cx.entity() })
     }

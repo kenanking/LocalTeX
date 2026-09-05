@@ -57,7 +57,6 @@ impl MainWindow {
                 show_original: state.prefs.show_original,
                 orig_strip_h: state.prefs.orig_strip_h,
                 reading_cap: state.prefs.reading_width.cap_px(),
-                revision: doc.revision,
                 ready: matches!(doc.status, DocStatus::Ready),
             }
         };
@@ -68,7 +67,7 @@ impl MainWindow {
             .media
             .derived
             .as_ref()
-            .filter(|d| d.id == snap.id && d.revision == snap.revision)
+            .filter(|d| d.id == snap.id)
             .map(|d| d.copy_rows.clone())
             .unwrap_or_default();
         let retry_state = self.state.clone();
@@ -76,6 +75,21 @@ impl MainWindow {
         let doc_id = snap.id;
         self.preview.reset_for(doc_id);
         let source_open = self.source_panel.open;
+        let updating = self.state.read(cx).selected_doc().is_some_and(|doc| {
+            doc.source_error.is_none()
+                && doc.source_updated_at.is_some()
+                && doc.source_feedback_ready()
+                && (doc.source_pending
+                    || self
+                        .media
+                        .derived
+                        .as_ref()
+                        .is_none_or(|d| d.id != doc.id || d.revision != doc.revision))
+                && doc
+                    .raw_text
+                    .as_ref()
+                    .is_some_and(|text| !text.trim().is_empty())
+        });
         let preview_w = preview_column_width(
             copy_pane_w,
             source_open,
@@ -188,7 +202,7 @@ impl MainWindow {
                         .rounded_md()
                         .border_1()
                         .border_color(rgb(theme::BORDER))
-                        .bg(rgb(theme::BG))
+                        .bg(rgb(theme::BG_RAISED))
                         .overflow_hidden()
                         .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                             let next = overlay_chrome_hovered(
@@ -253,6 +267,20 @@ impl MainWindow {
                                     .is_some_and(|d| d.vertical),
                             ScrollbarTone::Subtle,
                         ))
+                        .when(updating, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(8.))
+                                    .right(px(12.))
+                                    .px_2()
+                                    .rounded_sm()
+                                    .bg(rgb(theme::BG_RAISED))
+                                    .text_sm()
+                                    .text_color(rgb(theme::MUTED))
+                                    .child("Updating…"),
+                            )
+                        })
                         .when(ready && !source_open && self.preview.hover, |d| {
                             d.child(div().absolute().top(px(8.)).right(px(8.)).child(
                                 orig_hud_disc("edit-source", IconKind::Draw, "Edit source", {
@@ -328,6 +356,7 @@ impl MainWindow {
                     .size_full()
                     .px_4()
                     .pt_3()
+                    .pb(px(52.))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -455,6 +484,15 @@ impl MainWindow {
         pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let current = self.state.read(cx).selected_doc().is_some_and(|doc| {
+            !doc.source_pending
+                && doc.source_error.is_none()
+                && self
+                    .media
+                    .derived
+                    .as_ref()
+                    .is_some_and(|d| d.id == doc.id && d.revision == doc.revision)
+        });
         let mut col = div()
             .w_full()
             .px_4()
@@ -479,12 +517,14 @@ impl MainWindow {
             for row in chunk {
                 let kind = row.kind;
                 let text = row.payload.clone();
-                let hint = if copied.is_some_and(|(_, k)| k == kind) {
+                let hint = if !current {
+                    SharedString::from("Preview is not up to date")
+                } else if copied.is_some_and(|(_, k)| k == kind) {
                     SharedString::from("Copied")
                 } else {
                     row.hint.clone()
                 };
-                let is_copied = copied.is_some_and(|(_, k)| k == kind);
+                let is_copied = current && copied.is_some_and(|(_, k)| k == kind);
                 let entity = cx.entity();
                 let state = self.state.clone();
                 line = line.child(copy_chip(
@@ -493,7 +533,7 @@ impl MainWindow {
                     kind.symbol(),
                     hint,
                     is_copied,
-                    !text.is_empty(),
+                    current && !text.is_empty(),
                     move |_, cx| {
                         state.update(cx, |s, cx| s.copy_chip_payload(kind, text.to_string(), cx));
                         entity.update(cx, |this, cx| {
@@ -522,7 +562,6 @@ struct DetailSnap {
     show_original: bool,
     orig_strip_h: f32,
     reading_cap: f32,
-    revision: u64,
     ready: bool,
 }
 

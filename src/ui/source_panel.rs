@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui::{AppContext, Context, Entity, Focusable, Window};
 use uuid::Uuid;
 
@@ -151,6 +149,18 @@ impl MainWindow {
         let Some(revision) = revision else {
             return;
         };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(crate::source::PREVIEW_FEEDBACK_DELAY)
+                .await;
+            if let Err(err) = this.update(cx, |this, cx| {
+                this.schedule_derived_from_app(cx);
+                cx.notify();
+            }) {
+                eprintln!("preview update: {err}");
+            }
+        })
+        .detach();
         let prefs = self.state.read(cx).prefs.clone();
         let state = self.state.clone();
         if let Some(task) = self.source_panel.flush_task.take() {
@@ -158,7 +168,7 @@ impl MainWindow {
         }
         self.source_panel.flush_task = Some(cx.spawn(async move |_, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(280))
+                .timer(crate::source::PREVIEW_DEBOUNCE)
                 .await;
             if !state.update(cx, |state, _| {
                 state.doc(id).is_some_and(|doc| doc.revision == revision)

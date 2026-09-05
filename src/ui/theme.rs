@@ -91,3 +91,8 @@ pub enum StatusKind {
     Busy,
     Error,
 }
+
+#[cfg(target_os = "windows")]
+pub const SOURCE_FONT: &str = "Consolas";
+#[cfg(not(target_os = "windows"))]
+pub const SOURCE_FONT: &str = "monospace";

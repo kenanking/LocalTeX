@@ -509,6 +509,8 @@ mod tests {
             ocr_blocks: blocks,
             raw_text: None,
             source_error: None,
+            source_pending: false,
+            source_updated_at: None,
         }
     }
 

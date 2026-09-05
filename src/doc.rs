@@ -176,9 +176,16 @@ pub struct Document {
     pub ocr_blocks: Vec<Block>,
     pub raw_text: Option<String>,
     pub source_error: Option<String>,
+    pub source_pending: bool,
+    pub source_updated_at: Option<std::time::Instant>,
 }
 
 impl Document {
+    pub fn source_feedback_ready(&self) -> bool {
+        self.source_updated_at
+            .is_none_or(|at| at.elapsed() >= crate::source::PREVIEW_FEEDBACK_DELAY)
+    }
+
     pub fn pending(image: Arc<RgbaImage>) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -196,6 +203,8 @@ impl Document {
             ocr_blocks: Vec::new(),
             raw_text: None,
             source_error: None,
+            source_pending: false,
+            source_updated_at: None,
         }
     }
 
@@ -216,6 +225,8 @@ impl Document {
             ocr_blocks: Vec::new(),
             raw_text: None,
             source_error: None,
+            source_pending: false,
+            source_updated_at: None,
         }
     }
 
@@ -308,7 +319,7 @@ impl Document {
     }
 
     pub fn text_for(&self, kind: CopyKind, prefs: &crate::prefs::Prefs) -> String {
-        if self.source_error.is_some() {
+        if self.source_pending || self.source_error.is_some() {
             return self.raw_text.clone().unwrap_or_default();
         }
         kind.render(&self.blocks, prefs)
@@ -435,6 +446,29 @@ mod tests {
             serde_json::from_str(r#"{"formula":"not_a_kind","table":"tsv"}"#).unwrap();
         assert_eq!(h.preferred(SnipKind::Formula), None);
         assert_eq!(h.preferred(SnipKind::Table), Some(CopyKind::Tsv));
+    }
+
+    #[test]
+    fn source_feedback_waits_for_idle_and_resets_on_new_edit() {
+        let mut doc = Document::pending(Arc::new(RgbaImage::new(1, 1)));
+        assert!(doc.source_feedback_ready());
+        doc.source_updated_at =
+            Some(std::time::Instant::now() - crate::source::PREVIEW_FEEDBACK_DELAY);
+        assert!(doc.source_feedback_ready());
+        doc.source_updated_at = Some(std::time::Instant::now());
+        assert!(!doc.source_feedback_ready());
+    }
+
+    #[test]
+    fn pending_source_copies_latest_text_instead_of_previous_blocks() {
+        let mut doc = Document::pending(Arc::new(RgbaImage::new(1, 1)));
+        doc.blocks = vec![Block::new(BlockKind::Formula, rect(0), "x")];
+        doc.raw_text = Some("$$ y $$".into());
+        doc.source_pending = true;
+        assert_eq!(
+            doc.text_for(CopyKind::Markdown, &crate::prefs::Prefs::default()),
+            "$$ y $$"
+        );
     }
 
     #[test]

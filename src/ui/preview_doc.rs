@@ -42,32 +42,31 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if let Some(doc) = self.state.read(cx).doc(doc_id) {
-            if let Some(error) = &doc.source_error {
-                let state = self.state.clone();
+            if let Some(error) = doc
+                .source_error
+                .as_ref()
+                .filter(|_| doc.source_feedback_ready())
+            {
+                let source = doc.raw_text.clone().unwrap_or_default();
+                let error = error.clone();
+                let font = self.state.read(cx).prefs.content_font;
+                self.preview
+                    .sel
+                    .borrow_mut()
+                    .set_flow(vec![("source-error".into(), source.clone().into())]);
+                return self.render_source_failure(
+                    "source-error".into(),
+                    source,
+                    Some(error),
+                    font,
+                    cx,
+                );
+            }
+            if doc.raw_text.as_ref().is_some_and(|s| s.trim().is_empty()) {
                 return div()
-                    .id("preview-source-error")
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(theme::MUTED))
-                            .child(error.clone()),
-                    )
-                    .child(doc.raw_text.clone().unwrap_or_default())
-                    .child(super::widgets::btn(
-                        "copy-source",
-                        "Copy original text",
-                        false,
-                        true,
-                        move |_, cx| {
-                            state.update(cx, |state, cx| {
-                                state.copy_selected(cx);
-                            });
-                        },
-                    ))
+                    .text_sm()
+                    .text_color(rgb(theme::MUTED))
+                    .child("No content")
                     .into_any_element();
             }
         }
@@ -139,7 +138,9 @@ impl MainWindow {
                 | PreviewBlock::Caption(segs) => {
                     Some((format!("p-{i}"), concat_inline_segs(segs).0.into()))
                 }
-                PreviewBlock::Fallback(text) => Some((format!("f-{i}"), text.clone().into())),
+                PreviewBlock::Fallback(text) | PreviewBlock::Error { source: text, .. } => {
+                    Some((format!("f-{i}"), text.clone().into()))
+                }
                 PreviewBlock::Display { .. } | PreviewBlock::Table(_) => None,
             })
             .collect();
@@ -219,7 +220,7 @@ impl MainWindow {
             PreviewBlock::Table(layout) => {
                 let handle = self.preview.hscroll_handle(&format!("tbl-{i}"));
                 let table_el = self.render_table_preview(i, layout, font, cx);
-                h_scroll_pane(
+                let table = h_scroll_pane(
                     format!("tbl-{i}"),
                     ScrollChrome {
                         handle: &handle,
@@ -231,23 +232,172 @@ impl MainWindow {
                     layout.height,
                     false,
                     table_el,
-                )
-                .into_any()
+                );
+                let mut column = div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(table);
+                for cell in &layout.cells {
+                    for (j, seg) in cell.segs.iter().enumerate() {
+                        if let InlineSeg::Error { source, error } = seg {
+                            column = column.child(self.render_source_failure(
+                                format!("table-error-{i}-{}-{}-{j}", cell.row, cell.col),
+                                source.clone(),
+                                Some(error.clone()),
+                                font,
+                                cx,
+                            ));
+                        }
+                    }
+                }
+                column.into_any()
             }
-            PreviewBlock::Fallback(text) => div()
-                .id(SharedString::from(format!("f-{i}")))
-                .w_full()
-                .min_w_0()
-                .text_size(px(m.body))
-                .whitespace_normal()
-                .text_color(rgb(theme::INK))
-                .child(selectable_text(
-                    format!("f-{i}"),
-                    text.clone(),
-                    self.preview.sel.clone(),
-                ))
-                .into_any(),
+            PreviewBlock::Fallback(text) => {
+                self.render_source_failure(format!("f-{i}"), text.clone(), None, font, cx)
+            }
+            PreviewBlock::Error { source, error } => self.render_source_failure(
+                format!("f-{i}"),
+                source.clone(),
+                Some(error.clone()),
+                font,
+                cx,
+            ),
         }
+    }
+
+    fn render_source_failure(
+        &self,
+        id: String,
+        source: String,
+        error: Option<String>,
+        font: ContentFontSize,
+        cx: &App,
+    ) -> AnyElement {
+        let source = if id.starts_with("f-")
+            && self
+                .media
+                .derived
+                .as_ref()
+                .is_some_and(|d| d.preview.len() == 1)
+        {
+            self.state
+                .read(cx)
+                .selected_doc()
+                .and_then(|doc| doc.raw_text.clone())
+                .unwrap_or(source)
+        } else {
+            source
+        };
+        let current = self.state.read(cx).selected_doc().is_some_and(|doc| {
+            !doc.source_pending
+                && doc.source_feedback_ready()
+                && (doc.source_error.is_some()
+                    || self
+                        .media
+                        .derived
+                        .as_ref()
+                        .is_some_and(|d| d.id == doc.id && d.revision == doc.revision))
+        });
+        let m = font.metrics();
+        let copy = source.clone();
+        div()
+            .w_full()
+            .min_w_0()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .when(current, |d| {
+                d.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .size(px(6.))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(rgb(theme::WARN)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(m.caption))
+                                .line_height(px(m.table_line))
+                                .text_color(rgb(theme::TEXT))
+                                .child("Preview unavailable"),
+                        )
+                        .child(div().flex_shrink_0().child(super::widgets::icon_btn_sized(
+                            format!("{id}-copy"),
+                            super::widgets::IconKind::Copy,
+                            "Copy source",
+                            false,
+                            true,
+                            super::widgets::IconBtnSize {
+                                hit: px(28.),
+                                glyph: px(15.),
+                                kbd: None,
+                            },
+                            move |_, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    copy.clone(),
+                                ));
+                            },
+                        ))),
+                )
+            })
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .p_3()
+                    .rounded_md()
+                    .bg(rgb(theme::BG))
+                    .font_family(theme::SOURCE_FONT)
+                    .text_size(px(m.body))
+                    .line_height(px(m.body_line))
+                    .text_color(rgb(theme::INK))
+                    .child(selectable_text(
+                        id.clone(),
+                        source,
+                        self.preview.sel.clone(),
+                    )),
+            )
+            .when(current, |d| {
+                d.children(error.map(|error| {
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .pl_3()
+                        .border_l_1()
+                        .border_color(rgb(theme::BORDER))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{id}-error-scroll")))
+                                .w_full()
+                                .min_w_0()
+                                .max_h(px(108.))
+                                .overflow_y_scroll()
+                                .font_family(theme::SOURCE_FONT)
+                                .text_size(px(m.caption))
+                                .line_height(px(m.table_line))
+                                .text_color(rgb(theme::MUTED))
+                                .child(selectable_text(
+                                    format!("{id}-error"),
+                                    error,
+                                    self.preview.sel.clone(),
+                                )),
+                        )
+                }))
+            })
+            .into_any_element()
     }
 
     fn render_display_math(
@@ -539,6 +689,25 @@ impl MainWindow {
                         }
                     }
                 }
+                InlineSeg::Error { source, error } => {
+                    if id.starts_with("c-") {
+                        row = row.child(div().font_family(theme::SOURCE_FONT).child(
+                            selectable_text(
+                                format!("{id}-error-{j}"),
+                                source.clone(),
+                                self.preview.sel.clone(),
+                            ),
+                        ));
+                    } else {
+                        row = row.child(self.render_source_failure(
+                            format!("{id}-error-{j}"),
+                            source.clone(),
+                            Some(error.clone()),
+                            font,
+                            cx,
+                        ));
+                    }
+                }
                 InlineSeg::Math { svg, .. } => {
                     let img = self.math_img(svg, cx);
                     let glyph = if svg.height <= line_h + 2.0 {
@@ -631,6 +800,7 @@ fn concat_inline_segs(segs: &[InlineSeg]) -> (String, Vec<std::ops::Range<usize>
         let start = text.len();
         match seg {
             InlineSeg::Text(t) => text.push_str(t),
+            InlineSeg::Error { source, .. } => text.push_str(source),
             InlineSeg::TextScript { nucleus, glyph } => {
                 text.push_str(nucleus);
                 text.push('$');

@@ -15,7 +15,7 @@ impl AppState {
             .library
             .iter_all()
             .filter_map(|doc| {
-                (doc.source_error.as_deref() == Some("Updating preview…"))
+                doc.source_pending
                     .then(|| {
                         doc.raw_text
                             .clone()
@@ -141,7 +141,9 @@ impl AppState {
         }
         let doc = self.library.get_mut(id)?;
         doc.raw_text = Some(text);
-        doc.source_error = Some("Updating preview…".into());
+        doc.source_error = None;
+        doc.source_pending = true;
+        doc.source_updated_at = Some(std::time::Instant::now());
         doc.refresh_first_line();
         doc.bump_revision();
         let revision = doc.revision;
@@ -165,6 +167,7 @@ impl AppState {
             if doc.revision != revision {
                 return;
             }
+            doc.source_pending = false;
             match result {
                 Ok(blocks) => {
                     doc.blocks = blocks;
@@ -172,7 +175,7 @@ impl AppState {
                 }
                 Err(error) => {
                     doc.blocks.clear();
-                    doc.source_error = Some(format!("Unable to preview: {error}"));
+                    doc.source_error = Some(error.to_string());
                 }
             }
             doc.refresh_first_line();
@@ -195,6 +198,8 @@ impl AppState {
         }
         doc.blocks = doc.ocr_blocks.clone();
         doc.raw_text = None;
+        doc.source_pending = false;
+        doc.source_updated_at = None;
         doc.source_error = None;
         doc.refresh_first_line();
         doc.bump_revision();
@@ -294,7 +299,7 @@ impl AppState {
                             Ok(parsed) => blocks = parsed,
                             Err(err) => {
                                 blocks.clear();
-                                error = Some(format!("Unable to preview: {err}"));
+                                error = Some(err.to_string());
                             }
                         }
                     }

@@ -7,6 +7,9 @@ use crate::math::{self, canonicalize_mixed_text, is_display_body, MathRun};
 use crate::prefs::Prefs;
 use crate::table;
 
+pub const PREVIEW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(80);
+pub const PREVIEW_FEEDBACK_DELAY: std::time::Duration = std::time::Duration::from_millis(800);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     pub message: String,

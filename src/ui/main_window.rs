@@ -747,9 +747,9 @@ impl gpui::Render for MainWindow {
         let (has_selected, can_open_docx) = {
             let state = self.state.read(cx);
             let has_selected = state.selected().is_some();
-            let can_open_docx = state
-                .selected_doc()
-                .is_some_and(|doc| doc.has_ready_blocks() && doc.source_error.is_none());
+            let can_open_docx = state.selected_doc().is_some_and(|doc| {
+                doc.has_ready_blocks() && !doc.source_pending && doc.source_error.is_none()
+            });
             (has_selected, can_open_docx)
         };
         let accepting = self

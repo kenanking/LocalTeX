@@ -16,6 +16,7 @@ use crate::preview::{
 pub(crate) struct WindowMedia {
     pub(crate) cache: Rc<RefCell<MediaCache>>,
     pub(crate) derived: Option<DocDerived>,
+    delayed_error: Option<DocDerived>,
     derived_busy: bool,
     gc_scheduled: bool,
     pub(crate) last_scale: f32,
@@ -36,6 +37,7 @@ impl WindowMedia {
         Self {
             cache: Rc::new(RefCell::new(MediaCache::new())),
             derived: None,
+            delayed_error: None,
             derived_busy: false,
             gc_scheduled: false,
             last_scale: scale,
@@ -94,6 +96,7 @@ impl MainWindow {
         self.media.full_inflight.clear();
         self.media.thumb_inflight.borrow_mut().clear();
         self.media.derived = None;
+        self.media.delayed_error = None;
         self.release_intake_polaroids(cx);
         self.media.cache.borrow_mut().clear(cx);
         cx.notify();
@@ -297,22 +300,33 @@ impl MainWindow {
                 (
                     doc.id,
                     doc.revision,
-                    doc.has_ready_blocks() && doc.source_error.is_none(),
+                    doc.has_ready_blocks() && !doc.source_pending && doc.source_error.is_none(),
                     state.prefs.clone(),
                 )
             })
         };
         let Some((id, revision, ready, prefs)) = selected else {
             self.media.derived = None;
+            self.media.delayed_error = None;
             return;
         };
-        if self
-            .media
-            .derived
-            .as_ref()
-            .is_some_and(|d| d.id != id || d.revision != revision)
-        {
+        if self.media.derived.as_ref().is_some_and(|d| d.id != id) {
             self.media.derived = None;
+        }
+        if let Some(delayed) = self.media.delayed_error.take() {
+            if ready && delayed.matches(id, revision, dpr, &prefs) {
+                if self
+                    .state
+                    .read(cx)
+                    .doc(id)
+                    .is_some_and(|doc| doc.source_feedback_ready())
+                {
+                    self.media.derived = Some(delayed);
+                } else {
+                    self.media.delayed_error = Some(delayed);
+                    return;
+                }
+            }
         }
         if !ready {
             return;
@@ -350,8 +364,29 @@ impl MainWindow {
                 .await;
             if let Err(err) = this.update(cx, |this, cx| {
                 this.media.derived_busy = false;
-                let selected = this.state.read(cx).selected();
-                this.media.derived = built.keep_if_selected(selected);
+                let state = this.state.read(cx);
+                if state.selected_doc().is_some_and(|doc| {
+                    !doc.source_pending
+                        && built.matches(
+                            doc.id,
+                            doc.revision,
+                            raster_dpr(this.media.last_scale),
+                            &state.prefs,
+                        )
+                }) {
+                    if built
+                        .preview
+                        .iter()
+                        .any(crate::preview::PreviewBlock::has_error)
+                        && state
+                            .selected_doc()
+                            .is_some_and(|doc| !doc.source_feedback_ready())
+                    {
+                        this.media.delayed_error = Some(built);
+                    } else {
+                        this.media.derived = Some(built);
+                    }
+                }
                 this.schedule_derived_from_app(cx);
                 cx.notify();
             }) {

@@ -14,12 +14,40 @@ fn dummy_derived(id: Uuid) -> DocDerived {
 }
 
 #[test]
-fn keep_if_selected_drops_stale_build() {
+fn derived_rejects_another_document_and_older_revision() {
     let id = Uuid::new_v4();
     let other = Uuid::new_v4();
-    assert!(dummy_derived(id).keep_if_selected(Some(id)).is_some());
-    assert!(dummy_derived(id).keep_if_selected(Some(other)).is_none());
-    assert!(dummy_derived(id).keep_if_selected(None).is_none());
+    let prefs = Prefs::default();
+    assert!(dummy_derived(id).matches(id, 1, 1.0, &prefs));
+    assert!(!dummy_derived(id).matches(other, 1, 1.0, &prefs));
+    assert!(!dummy_derived(id).matches(id, 2, 1.0, &prefs));
+}
+
+#[test]
+fn invalid_display_preserves_engine_error_and_other_blocks() {
+    let source = "Before\n\n$$\\frac{$$\n\nAfter\n\n$$x+1$$";
+    let blocks = crate::source::parse_source(source, &Prefs::default()).unwrap();
+    let preview = document_preview_with_dpr(&blocks, 1.0, ContentFontSize::Medium);
+    let engine_error = latex_to_math_with_dpr(r"\frac{", MathStyle::Display, 1.0)
+        .unwrap_err()
+        .to_string();
+    assert!(preview.iter().any(|block| matches!(block, PreviewBlock::Error { source, error } if source.contains(r"\frac{") && error == &engine_error)));
+    assert!(preview
+        .iter()
+        .any(|block| matches!(block, PreviewBlock::Display { .. })));
+    assert_eq!(
+        preview
+            .iter()
+            .filter(|block| matches!(block, PreviewBlock::Paragraph(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn invalid_inline_preserves_source_and_engine_error() {
+    let segs = inline_preview(r"Before $\frac{$ after");
+    assert!(segs.iter().any(|seg| matches!(seg, InlineSeg::Error { source, error } if source == r"$\frac{$" && error.contains("ratex parse:"))));
 }
 
 #[test]
@@ -654,6 +682,7 @@ fn cell_plain(c: &PlacedCell) -> String {
             InlineSeg::Text(t) => t.as_str(),
             InlineSeg::TextScript { nucleus, .. } => nucleus.as_str(),
             InlineSeg::Math { .. } => "",
+            InlineSeg::Error { source, .. } => source.as_str(),
         })
         .collect()
 }

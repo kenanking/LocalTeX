@@ -1,65 +1,68 @@
 # LocalTeX agent guide
 
-LocalTeX is a single-crate, single-process Rust desktop app built with git `gpui` and `gpui_platform` pinned to Zed `c8e44cfa7bda9b2e22c8d6934d78969352e7f61a` (v1.17.2), `gpui_platform` features `x11` only. Read the code for architecture; this file only records constraints that are easy to violate.
+LocalTeX is a Rust/GPUI desktop app for Windows and Linux X11; Wayland is out of scope. This file records project boundaries and non-obvious traps. Dependency versions and features live in `Cargo.toml`.
 
 ## Scope
 
 - Keep one Cargo package and one application process. Do not introduce a workspace or extra crates unless explicitly requested.
 - Make the smallest coherent change. Avoid unrelated dependencies, abstractions, features, and formatting.
-- Preserve unrelated work in the tree. Read relevant callers, platform variants, and nearby tests before editing.
-- Verify the current host before choosing platform checks. Windows and Linux X11 are supported runtime paths; Wayland is out of scope. Report only platforms actually exercised.
+- Preserve unrelated work in the tree.
+- Complete the requested change through relevant verification and fixes for regressions it causes; local build/test iterations do not need separate approval.
 
 ## Checks
 
-```bash
+Choose checks for the affected behavior; documentation-only edits do not need Rust builds or tests. Available checks:
+
+```text
 cargo fmt --all -- --check
 cargo test
 cargo build --profile dev-opt
 ```
 
-Run checks relevant to the change and report what actually ran. For visible UI changes, inspect the running app when possible.
+CI also runs `cargo clippy --all-targets -- -D warnings`. Report checks and platforms actually exercised. For visible UI changes, inspect the running app when possible.
 
-On Linux, agent shells may lack `DISPLAY`. Discover the active X11 session and its `XAUTHORITY`, build first, then launch with `systemd-run --user` using those values. On Windows, build `target/dev-opt/localtex.exe` and verify the running process path before UI testing. Schema and destructive UI tests use the ignored `interactive_windows_ui` test with an absolute `LOCALTEX_TEST_ROOT`; that override exists only in test binaries.
+- Linux UI: if the shell lacks `DISPLAY`, discover the active X11 session and `XAUTHORITY`, then launch the built app with `systemd-run --user` using those values.
+- Windows UI: build `target/dev-opt/localtex.exe` and verify the running process path. For schema and destructive UI checks, use the ignored `interactive_windows_ui` test with an absolute, disposable `LOCALTEX_TEST_ROOT`; the normal executable ignores this override.
+- OCR inference tests are ignored by default and require installed weights. For model-related changes, see `models/README.md` for installation and smoke-test commands.
 
 ## Rust and GPUI
 
-- Prefer existing files, `?`, and explicit error handling. Do not silently discard fallible results.
 - Name contexts `cx`; order parameters as `window, cx`, with callbacks after `cx`.
 - Inside `entity.update`, use the closure's inner `cx`. Never update an entity already being updated.
 - Call `cx.notify()` after render-affecting state changes.
 - `cx.spawn` runs on the UI thread. Put OCR, capture, image work, and disk access in `cx.background_spawn`.
 - GPUI tasks are cancelled when dropped; await, store, or explicitly detach work that must continue.
 - Render paths use prepared in-memory state: no I/O, model loading, subprocesses, blocking locks, or full-library scans.
-- Use APIs available at the pinned Zed rev; do not chase later Zed or Waku APIs. Here, `svg().path(...)` also requires `text_color` to paint.
+- Use APIs available at the Zed revision pinned in `Cargo.toml`. Here, `svg().path(...)` also requires `text_color` to paint.
 - Focusable mouse-down targets inside the history sidebar must stop propagation or the sidebar steals focus.
 
 ## Platform traps
 
 - Keep xcap for one-shot capture. Do not replace it with streaming capture or an ffmpeg subprocess.
 - Create `GlobalHotKeyManager` on the GPUI UI thread on platforms that use it. Windows uses its dedicated low-level hook thread.
-- Never open a second GPUI/Vulkan window for selection; use the native X11/Win32 overlays in `desktop/`.
+- Never open a second GPUI/Vulkan window for selection; use the native X11/Win32 overlays in `src/desktop/`.
 - Freeze-frame, overlay, and crop coordinates are physical pixels at 1:1. Keep overlay placement tied to the same `capture::stitch` grab list.
-- On Linux, hide and await the GPUI window before xcap. The overlay's X11 connection must not activate or configure GPUI's XID.
+- When hide-on-capture is enabled, await the GPUI window's hide/minimize before xcap. The Linux overlay's X11 connection must not activate or configure GPUI's XID.
 - On Windows, keep one popup and monitor-local DIB per display; preserve the post-minimize WGC wait.
 
 ## OCR
 
 - Do not replace or expand the current OCR pipeline unless explicitly requested.
 - Keep ONNX sessions lazy-loaded. Missing weights must fail clearly instead of producing placeholder output.
-- Do not compile weights into the Rust binary (`include_bytes!`, `rust-embed`, linking `.onnx` as objects). Release packages may ship the on-disk `opendoc/` and `handwriting/` trees beside the executable.
+- Keep weights on disk, outside git and the Rust binary. Bundles ship `models/opendoc/` and `models/handwriting/` beside the executable.
 
 ## Packaging
 
-- Linux artifacts come from `scripts/bundle-linux.sh` (tar.gz + deb). Windows artifacts come from `scripts/bundle-windows.ps1` (zip + Inno). Write them to `dist/` (gitignored). Do not add cargo-packager or a second crate.
-- `scripts/download-models.sh` (Linux) and `scripts/download-models.ps1` (Windows) install `opendoc/` and `handwriting/` for a checkout. Pass a directory to fill a bundle tree. They reuse a local cache when one exists, otherwise they download. The matching bundle script calls them with a destination. If that directory already has a pack, the script exits. Delete the pack to re-fetch. Do not call bash from `bundle-windows.ps1`; WindowsApps `bash.exe` is often a WSL stub.
-- Model tarballs on the `v0.0.0` GitHub Release are packed outside this repo. From ocr-pipeline `current/opendoc` and `current/handwriting` (this host: `~/personal/ocr-pipeline/models/current/`), copy into the dated directory names in `download-models.sh` / `download-models.ps1`, tar those dirs, and publish with `models/manifest.json` plus a `SHA256SUMS` covering the two tarballs and the manifest. Keep dated names, file lists, and checksums in lockstep with both download scripts and `models/README.md`.
+- Use `scripts/bundle-linux.sh` (tar.gz + deb) or `scripts/bundle-windows.ps1` (zip + Inno), with artifacts in `dist/` (gitignored). Do not add cargo-packager.
+- For model installation, cache validation, and discovery, see `models/README.md` and the matching `scripts/download-models.*`. Bundle scripts already invoke the downloader. Do not call bash from Windows packaging; WindowsApps `bash.exe` is often a WSL stub.
+- When publishing model packs: package ocr-pipeline's `current/opendoc` and `current/handwriting` outside this repo under the dated directory names in both download scripts. Keep those names, required files, and checksums aligned with `models/manifest.json` and `models/README.md`. The `v0.0.0` model release needs both tarballs, the manifest, and `SHA256SUMS` covering all three.
 - Keep the GitHub Release Linux job on `ubuntu-22.04`. That runner is the glibc floor (2.35).
 - Do not change `AppId` in `resources/windows/localtex.iss`. Windows treats a new GUID as a second install.
-- Windows packaging uses Inno Setup 7 (`ISCC.exe`). `bundle-windows.ps1` looks in `Inno Setup 7` first (machine `Program Files`, then per-user `%LOCALAPPDATA%\Programs`), then `Inno Setup 6`. A user-scope `winget install JRSoftware.InnoSetup.7` does not add `ISCC.exe` to PATH. CI installs the 64-bit 7.1.0 compiler from the jrsoftware GitHub release (Chocolatey `innosetup` is still 6.x).
-- `Setup.exe` in Explorer uses `SetupIconFile`. `build.rs` writes the same ICO it embeds in `localtex.exe` to `target/localtex.ico`; the bundle script passes that path to ISCC. Do not check the ICO into git.
+- Windows packaging uses Inno Setup 7. User-scope installs may omit `ISCC.exe` from PATH; compiler discovery is in the bundle script, and CI installation is in `.github/workflows/release.yml`.
+- `Setup.exe` needs `SetupIconFile` separately from the app icon. `build.rs` generates `target/localtex.ico` for the bundle script; do not check the ICO into git.
 
 ## Hygiene
 
 - User-facing replies are Simplified Chinese; code, comments, identifiers, and commit messages are English.
-- Do not commit, push, or add machine-local files unless explicitly requested.
-- Add rules only for repeated, non-obvious, actionable failures or deliberate constraints.
+- Commit and push only when requested. Keep machine-local configuration and generated artifacts out of git.
+- Add rules only for repeated, non-obvious, actionable failures or deliberate constraints. Keep task-specific procedures in their existing docs/scripts and link them where relevant; remove stale or redundant rules.

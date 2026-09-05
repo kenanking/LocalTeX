@@ -40,6 +40,7 @@ pub struct ScriptGlyph {
 #[derive(Clone, Debug)]
 pub enum InlineSeg {
     Text(String),
+    Error { source: String, error: String },
     TextScript { nucleus: String, glyph: ScriptGlyph },
     Math { svg: SvgMath, tex: String },
 }
@@ -47,6 +48,7 @@ pub enum InlineSeg {
 fn seg_is_visible(seg: &InlineSeg) -> bool {
     match seg {
         InlineSeg::Text(t) => !t.trim().is_empty(),
+        InlineSeg::Error { .. } => true,
         InlineSeg::TextScript { .. } | InlineSeg::Math { .. } => true,
     }
 }
@@ -93,6 +95,27 @@ pub enum PreviewBlock {
     },
     Table(PreviewLayout),
     Fallback(String),
+    Error {
+        source: String,
+        error: String,
+    },
+}
+
+impl PreviewBlock {
+    pub fn has_error(&self) -> bool {
+        match self {
+            Self::Error { .. } | Self::Fallback(_) => true,
+            Self::Paragraph(segs) | Self::Heading { segs, .. } | Self::Caption(segs) => {
+                segs.iter().any(|s| matches!(s, InlineSeg::Error { .. }))
+            }
+            Self::Table(layout) => layout.cells.iter().any(|cell| {
+                cell.segs
+                    .iter()
+                    .any(|s| matches!(s, InlineSeg::Error { .. }))
+            }),
+            Self::Display { .. } => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -160,10 +183,6 @@ impl DocDerived {
             && self.inline_delim == prefs.inline_delim
             && self.block_delim == prefs.block_delim
             && self.content_font == prefs.content_font
-    }
-
-    pub fn keep_if_selected(self, selected: Option<Uuid>) -> Option<Self> {
-        (selected == Some(self.id)).then_some(self)
     }
 }
 
@@ -309,7 +328,7 @@ fn last_attach_char(segs: &[InlineSeg]) -> Option<char> {
     match segs.last()? {
         InlineSeg::Text(t) => t.chars().last(),
         InlineSeg::TextScript { nucleus, .. } => nucleus.chars().last(),
-        InlineSeg::Math { .. } => None,
+        InlineSeg::Math { .. } | InlineSeg::Error { .. } => None,
     }
 }
 
@@ -357,7 +376,10 @@ fn math_only(tex: &str, style: MathStyle, dpr: f64, font: ContentFontSize) -> In
             svg,
             tex: tex.to_string(),
         },
-        Err(_) => InlineSeg::Text(format!("${tex}$")),
+        Err(error) => InlineSeg::Error {
+            source: format!("${tex}$"),
+            error: error.to_string(),
+        },
     }
 }
 
@@ -489,8 +511,14 @@ fn push_display(
     } else {
         body.as_str()
     };
-    match try_math(typeset, MathStyle::Display, dpr, font) {
-        Some(math) => {
+    match latex_to_math_sized(
+        typeset,
+        MathStyle::Display,
+        dpr,
+        math_font_size(font, MathStyle::Display),
+        FONT_PAD,
+    ) {
+        Ok(math) => {
             let eqno = tags
                 .last()
                 .filter(|s| !s.is_empty())
@@ -498,7 +526,10 @@ fn push_display(
                 .map(|raw| Eqno::new(raw, dpr, font));
             out.push(PreviewBlock::Display { math, eqno });
         }
-        None => out.push(PreviewBlock::Fallback(fallback.to_string())),
+        Err(error) => out.push(PreviewBlock::Error {
+            source: fallback.to_string(),
+            error: error.to_string(),
+        }),
     }
 }
 

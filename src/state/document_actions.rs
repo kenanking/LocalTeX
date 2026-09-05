@@ -12,7 +12,7 @@ impl AppState {
         let doc = self.selected_doc()?;
         let id = doc.id;
         let snip = doc.snip_kind();
-        let kind = if doc.source_error.is_some() {
+        let kind = if doc.source_pending || doc.source_error.is_some() {
             CopyKind::Markdown
         } else {
             self.prefs.copy_habit.resolve(snip, self.export_fmt)
@@ -48,7 +48,7 @@ impl AppState {
         let Some(doc) = self.selected_doc() else {
             return;
         };
-        if !doc.has_ready_blocks() || doc.source_error.is_some() {
+        if !doc.has_ready_blocks() || doc.source_pending || doc.source_error.is_some() {
             return;
         }
         let blocks = doc.blocks.clone();
