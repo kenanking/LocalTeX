@@ -68,6 +68,12 @@ jobs:
         with:
           key: release-linux-x86_64
 
+      - name: Check
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked
+          cargo clippy --all-targets -- -D warnings
+
       - name: Bundle
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,6 +122,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-windows-x86_64
+
+      - name: Check
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked
+          cargo clippy --all-targets -- -D warnings
 
       - name: Bundle
         env:

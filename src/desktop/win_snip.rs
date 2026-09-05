@@ -62,6 +62,18 @@ struct Overlay {
     back_old: HGDIOBJ,
 }
 
+impl Drop for Overlay {
+    fn drop(&mut self) {
+        unsafe {
+            SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            let _ = SelectObject(self.back_hdc, self.back_old);
+            let _ = DeleteObject(self.back_bmp.into());
+            let _ = DeleteDC(self.back_hdc);
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+}
+
 struct Session {
     image: *const RgbaImage,
     shot_origin_x: i32,
@@ -121,9 +133,8 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         cursor: overlay_cursor.handle,
     };
     for &(x, y, w, h) in &rects {
-        let dim = rgba_to_dib_region(&shot.image, shot.origin_x, shot.origin_y, x, y, w, h, true)?;
-        let bright =
-            rgba_to_dib_region(&shot.image, shot.origin_x, shot.origin_y, x, y, w, h, false)?;
+        let (dim, bright) =
+            rgba_to_dib_pair(&shot.image, (shot.origin_x, shot.origin_y), (x, y, w, h))?;
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -222,15 +233,7 @@ fn run_overlay(shot: &DesktopShot) -> Result<Option<RgbaImage>> {
         let _ = unsafe { UnregisterHotKey(None, ESCAPE_HOTKEY_ID) };
     }
     let crop = session.done.take().flatten();
-    for overlay in session.overlays.drain(..) {
-        unsafe {
-            SetWindowLongPtrW(overlay.hwnd, GWLP_USERDATA, 0);
-            let _ = SelectObject(overlay.back_hdc, overlay.back_old);
-            let _ = DeleteObject(overlay.back_bmp.into());
-            let _ = DeleteDC(overlay.back_hdc);
-            let _ = DestroyWindow(overlay.hwnd);
-        }
-    }
+    session.overlays.clear();
     win::reset_pointer_state();
     Ok(crop)
 }
@@ -266,27 +269,20 @@ fn clip_monitor_to_shot(
     let shot_w = i32::try_from(shot.image.width()).ok()?;
     let shot_h = i32::try_from(shot.image.height()).ok()?;
     let (ix0, iy0, ix1, iy1) = intersect(
-        x,
-        y,
-        x.saturating_add(w),
-        y.saturating_add(h),
-        shot.origin_x,
-        shot.origin_y,
-        shot.origin_x.saturating_add(shot_w),
-        shot.origin_y.saturating_add(shot_h),
+        (x, y, x.saturating_add(w), y.saturating_add(h)),
+        (
+            shot.origin_x,
+            shot.origin_y,
+            shot.origin_x.saturating_add(shot_w),
+            shot.origin_y.saturating_add(shot_h),
+        ),
     )?;
     Some((ix0, iy0, ix1 - ix0, iy1 - iy0))
 }
 
 fn intersect(
-    ax0: i32,
-    ay0: i32,
-    ax1: i32,
-    ay1: i32,
-    bx0: i32,
-    by0: i32,
-    bx1: i32,
-    by1: i32,
+    (ax0, ay0, ax1, ay1): (i32, i32, i32, i32),
+    (bx0, by0, bx1, by1): (i32, i32, i32, i32),
 ) -> Option<(i32, i32, i32, i32)> {
     let x0 = ax0.max(bx0);
     let y0 = ay0.max(by0);
@@ -319,16 +315,11 @@ fn register_class() -> Result<()> {
     Ok(())
 }
 
-fn rgba_to_dib_region(
+fn rgba_to_dib_pair(
     img: &RgbaImage,
-    shot_ox: i32,
-    shot_oy: i32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    gray_dim: bool,
-) -> Result<Dib> {
+    (shot_ox, shot_oy): (i32, i32),
+    (x, y, w, h): (i32, i32, i32, i32),
+) -> Result<(Dib, Dib)> {
     let src_x = u32::try_from(x - shot_ox).map_err(|_| anyhow!("slice x"))?;
     let src_y = u32::try_from(y - shot_oy).map_err(|_| anyhow!("slice y"))?;
     if w <= 0 || h <= 0 {
@@ -344,7 +335,8 @@ fn rgba_to_dib_region(
     let stride = (width as usize) * 4;
     let src_stride = src_w as usize * 4;
     let raw = img.as_raw();
-    let mut bits = vec![0u8; stride * height as usize];
+    let mut dim_bits = vec![0u8; stride * height as usize];
+    let mut bright_bits = vec![0u8; stride * height as usize];
     for row in 0..height as usize {
         let src_row = (src_y as usize + row) * src_stride + src_x as usize * 4;
         let dst_row = (height as usize - 1 - row) * stride;
@@ -354,36 +346,43 @@ fn rgba_to_dib_region(
             let r = raw[s];
             let g = raw[s + 1];
             let b = raw[s + 2];
-            if gray_dim {
-                let d = capture::dim_luma(r, g, b);
-                bits[o] = d;
-                bits[o + 1] = d;
-                bits[o + 2] = d;
-            } else {
-                bits[o] = b;
-                bits[o + 1] = g;
-                bits[o + 2] = r;
-            }
-            bits[o + 3] = 255;
+            let d = capture::dim_luma(r, g, b);
+            dim_bits[o] = d;
+            dim_bits[o + 1] = d;
+            dim_bits[o + 2] = d;
+            dim_bits[o + 3] = 255;
+            bright_bits[o] = b;
+            bright_bits[o + 1] = g;
+            bright_bits[o + 2] = r;
+            bright_bits[o + 3] = 255;
         }
     }
-    let mut info = BITMAPINFO::default();
-    info.bmiHeader = BITMAPINFOHEADER {
-        biSize: size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: width,
-        biHeight: height,
-        biPlanes: 1,
-        biBitCount: 32,
-        biCompression: BI_RGB.0,
-        biSizeImage: bits.len() as u32,
+    Ok((
+        dib_from_bits(dim_bits, width, height),
+        dib_from_bits(bright_bits, width, height),
+    ))
+}
+
+fn dib_from_bits(bits: Vec<u8>, width: i32, height: i32) -> Dib {
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            biSizeImage: bits.len() as u32,
+            ..Default::default()
+        },
         ..Default::default()
     };
-    Ok(Dib {
+    Dib {
         info,
         bits,
         width,
         height,
-    })
+    }
 }
 
 fn create_back_buffer(hwnd: HWND, width: i32, height: i32) -> Result<(HDC, HBITMAP, HGDIOBJ)> {
@@ -461,14 +460,13 @@ fn selection_client_rect(
     let src_x = overlay.origin_x - session.shot_origin_x;
     let src_y = overlay.origin_y - session.shot_origin_y;
     let (ix0, iy0, ix1, iy1) = intersect(
-        rect.0,
-        rect.1,
-        rect.2,
-        rect.3,
-        src_x,
-        src_y,
-        src_x.saturating_add(overlay.dim.width),
-        src_y.saturating_add(overlay.dim.height),
+        rect,
+        (
+            src_x,
+            src_y,
+            src_x.saturating_add(overlay.dim.width),
+            src_y.saturating_add(overlay.dim.height),
+        ),
     )?;
     Some(RECT {
         left: (ix0 - src_x - 1).max(0),
@@ -623,14 +621,13 @@ fn compose(overlay: &Overlay, session: &Session, hdc: HDC, clip: RECT) {
     blit_full(hdc, &overlay.dim);
     if let Some((x0, y0, x1, y1)) = session.last {
         if let Some((ix0, iy0, ix1, iy1)) = intersect(
-            x0,
-            y0,
-            x1,
-            y1,
-            src_x,
-            src_y,
-            src_x.saturating_add(overlay.bright.width),
-            src_y.saturating_add(overlay.bright.height),
+            (x0, y0, x1, y1),
+            (
+                src_x,
+                src_y,
+                src_x.saturating_add(overlay.bright.width),
+                src_y.saturating_add(overlay.bright.height),
+            ),
         ) {
             let dx = ix0 - src_x;
             let dy = iy0 - src_y;
@@ -759,6 +756,15 @@ mod tests {
         assert_eq!(primary.get_pixel(0, 0).0, [10, 0, 0, 255]);
         assert_eq!(secondary.get_pixel(0, 0).0, [20, 0, 0, 255]);
         assert_eq!(overlay_rects(&shot), vec![(0, 0, 20, 10), (2, 10, 10, 8)]);
+    }
+
+    #[test]
+    fn dib_pair_builds_dim_and_bright_pixels_together() {
+        let img = RgbaImage::from_pixel(1, 1, Rgba([10, 20, 30, 40]));
+        let (dim, bright) = rgba_to_dib_pair(&img, (0, 0), (0, 0, 1, 1)).unwrap();
+        let d = capture::dim_luma(10, 20, 30);
+        assert_eq!(dim.bits, [d, d, d, 255]);
+        assert_eq!(bright.bits, [30, 20, 10, 255]);
     }
 
     #[test]

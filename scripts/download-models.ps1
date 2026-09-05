@@ -118,20 +118,37 @@ function Get-RemoteFile([string]$Url, [string]$OutFile) {
 }
 
 function Assert-Sha256Sums([string]$Dir, [string]$SumsFile) {
-    Get-Content -LiteralPath $SumsFile | ForEach-Object {
-        $line = $_.Trim()
-        if (-not $line -or $line.StartsWith("#")) { return }
+    $required = @($OpenDocTar, $HandwritingTar, "manifest.json")
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($raw in Get-Content -LiteralPath $SumsFile) {
+        $line = $raw.Trim()
+        if (-not $line -or $line.StartsWith("#")) { continue }
         $parts = $line -split "\s+", 2
-        if ($parts.Count -lt 2) { return }
+        if ($parts.Count -ne 2 -or $parts[0] -notmatch "^[0-9a-fA-F]{64}$") {
+            throw "localtex: malformed checksum line: $raw"
+        }
         $want = $parts[0].ToLowerInvariant()
         $name = $parts[1].Trim().TrimStart("*")
+        if ($name -notin $required) {
+            throw "localtex: unexpected checksum entry: $name"
+        }
+        if (-not $seen.Add($name)) {
+            throw "localtex: duplicate checksum entry: $name"
+        }
         $path = Join-Path $Dir $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "localtex: checksum target missing: $name"
+        }
         $got = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($got -ne $want) {
             throw "localtex: checksum mismatch for $name"
         }
         Write-Host "${name}: OK"
+    }
+    foreach ($name in $required) {
+        if (-not $seen.Contains($name)) {
+            throw "localtex: checksum entry missing: $name"
+        }
     }
 }
 

@@ -392,7 +392,7 @@ pub(crate) fn client_frame(content: impl IntoElement, window: &mut Window) -> An
     #[cfg(not(target_os = "linux"))]
     {
         let _ = window;
-        return content.into_any_element();
+        content.into_any_element()
     }
 
     #[cfg(target_os = "linux")]

@@ -114,13 +114,17 @@ unsafe fn hbitmap_to_dib32(hbmp: HBITMAP) -> Option<Vec<u8>> {
         return None;
     }
     let width = info.bmiHeader.biWidth;
-    let height = info.bmiHeader.biHeight.unsigned_abs();
+    let Some((height, bits_len)) = dib32_layout(width, info.bmiHeader.biHeight) else {
+        let _ = DeleteDC(hdc);
+        ReleaseDC(None, screen);
+        return None;
+    };
     info.bmiHeader.biHeight = -(height as i32);
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB.0;
     info.bmiHeader.biSizeImage = 0;
-    let mut bits = vec![0u8; (width as usize) * (height as usize) * 4];
+    let mut bits = vec![0u8; bits_len];
     let rows = GetDIBits(
         hdc,
         hbmp,
@@ -143,6 +147,16 @@ unsafe fn hbitmap_to_dib32(hbmp: HBITMAP) -> Option<Vec<u8>> {
     out[14..16].copy_from_slice(&32u16.to_le_bytes());
     out.extend_from_slice(&bits);
     Some(out)
+}
+
+fn dib32_layout(width: i32, height: i32) -> Option<(u32, usize)> {
+    let width = usize::try_from(width).ok()?;
+    let height = height.checked_abs()? as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let len = width.checked_mul(height as usize)?.checked_mul(4)?;
+    Some((height, len))
 }
 
 fn with_clipboard<T>(f: impl FnOnce() -> T) -> Option<T> {
@@ -188,5 +202,15 @@ mod tests {
         assert!(is_jpeg(&[0xFF, 0xD8, 0xFF, 0xE0]));
         assert!(is_gif(b"GIF89a"));
         assert!(!is_png(&[0, 1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn dib32_layout_rejects_invalid_dimensions() {
+        assert_eq!(dib32_layout(1920, -1080), Some((1080, 1920 * 1080 * 4)));
+        assert_eq!(dib32_layout(1920, 1080), Some((1080, 1920 * 1080 * 4)));
+        assert_eq!(dib32_layout(0, 1080), None);
+        assert_eq!(dib32_layout(-1, 1080), None);
+        assert_eq!(dib32_layout(1920, 0), None);
+        assert_eq!(dib32_layout(1920, i32::MIN), None);
     }
 }

@@ -168,7 +168,6 @@ impl AppState {
                 });
             })
             .detach();
-            return;
         }
         #[cfg(not(target_os = "windows"))]
         self.request_paste_fallback(cx);

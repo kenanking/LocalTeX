@@ -25,7 +25,7 @@ use windows::Win32::System::Pipes::{
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcess, OpenProcessToken, ResetEvent, SetEvent, WaitForSingleObject,
 };
-use windows::Win32::System::IO::OVERLAPPED;
+use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
 
 use crate::desktop::DesktopCmd;
@@ -103,8 +103,15 @@ pub(super) fn try_bind(endpoint: &Endpoint) -> io::Result<Inner> {
         let code = unsafe { GetLastError() };
         return Err(io::Error::from_raw_os_error(code.0 as i32));
     }
-    let event = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }
-        .map_err(|err| io::Error::from_raw_os_error(win32_code(&err) as i32))?;
+    let event = match unsafe { CreateEventW(None, true, false, PCWSTR::null()) } {
+        Ok(event) => event,
+        Err(err) => {
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            return Err(io::Error::from_raw_os_error(win32_code(&err) as i32));
+        }
+    };
     let (pending_tx, pending_rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let accept_stop = stop.clone();
@@ -118,24 +125,33 @@ pub(super) fn try_bind(endpoint: &Endpoint) -> io::Result<Inner> {
                 break;
             }
             let _ = unsafe { ResetEvent(event) };
-            let mut overlapped = OVERLAPPED::default();
-            overlapped.hEvent = event;
+            let mut overlapped = OVERLAPPED {
+                hEvent: event,
+                ..Default::default()
+            };
             // Overlapped listen: same-process blocking ConnectNamedPipe + CreateFile can hang.
-            match unsafe { ConnectNamedPipe(accept_handle, Some(&mut overlapped as *mut _)) } {
-                Ok(()) => {}
-                Err(err) if win32_code(&err) == ERROR_PIPE_CONNECTED.0 => {}
+            let connected = match unsafe {
+                ConnectNamedPipe(accept_handle, Some(&mut overlapped as *mut _))
+            } {
+                Ok(()) => true,
+                Err(err) if win32_code(&err) == ERROR_PIPE_CONNECTED.0 => true,
                 Err(err) if win32_code(&err) == ERROR_IO_PENDING.0 => loop {
                     if accept_stop.load(Ordering::SeqCst) {
                         return;
                     }
                     if unsafe { WaitForSingleObject(event, 50) }.0 == 0 {
-                        break;
+                        let mut transferred = 0;
+                        break unsafe {
+                            GetOverlappedResult(accept_handle, &overlapped, &mut transferred, false)
+                        }
+                        .is_ok();
                     }
                 },
-                Err(_) => {
-                    thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
+                Err(_) => false,
+            };
+            if !connected {
+                thread::sleep(Duration::from_millis(10));
+                continue;
             }
             if accept_stop.load(Ordering::SeqCst) {
                 break;
@@ -166,7 +182,8 @@ pub(super) fn connect(endpoint: &Endpoint) -> io::Result<()> {
         // The activating click belongs to this loser; restore_main needs the grant.
         let _ = unsafe { AllowSetForegroundWindow(pid) };
     }
-    // Accept records Reveal on another thread after ConnectNamedPipe completes.
+    // This connection is the reveal signal, so keep it alive until the accept
+    // thread has observed it. There is no request/ack payload to wait on.
     thread::sleep(Duration::from_millis(50));
     unsafe {
         let _ = CloseHandle(client);

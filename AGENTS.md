@@ -36,7 +36,7 @@ Agent shells usually have no `DISPLAY`. This host's GNOME session is X11 on `:1`
 ## Platform traps
 
 - Keep xcap for one-shot capture. Do not replace it with streaming capture or an ffmpeg subprocess.
-- Create `GlobalHotKeyManager` on the GPUI UI thread.
+- Create `GlobalHotKeyManager` on the GPUI UI thread on platforms that use it. Windows uses its dedicated low-level hook thread.
 - Never open a second GPUI/Vulkan window for selection; use the native X11/Win32 overlays in `desktop/`.
 - Freeze-frame, overlay, and crop coordinates are physical pixels at 1:1. Keep overlay placement tied to the same `capture::stitch` grab list.
 - On Linux, hide and await the GPUI window before xcap. The overlay's X11 connection must not activate or configure GPUI's XID.

@@ -276,7 +276,15 @@ fn hook_thread_main(ready: Sender<Result<(), String>>) {
         }
     }
     let mut msg = MSG::default();
-    while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
+    loop {
+        let status = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+        if status.0 == 0 {
+            break;
+        }
+        if status.0 == -1 {
+            eprintln!("{APP_SLUG}: windows chord hook message loop failed");
+            break;
+        }
         unsafe {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);

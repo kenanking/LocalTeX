@@ -135,6 +135,9 @@ impl MainWindow {
             state_for_close.update(cx, |state, cx| state.handle_main_close(action, window, cx))
         });
         cx.observe(&state, |this, _, cx| {
+            if !this.state.read(cx).main_window_visible() {
+                this.settings.update(cx, |settings, _| settings.hide());
+            }
             this.sync_intake(cx);
             if this.intake.is_none() {
                 this.ensure_selected_full(cx);

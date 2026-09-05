@@ -31,11 +31,11 @@ To package from a checkout, run `./scripts/bundle-linux.sh` or `.\scripts\bundle
 | Target | Capture | Snip UI | Hotkey | Tray | Notes |
 |---|---|---|---|---|---|
 | **Linux X11** | xcap | override-redirect freeze-frame | Ctrl+Alt+M | StatusNotifier (`ksni`) | Current product |
-| **Windows** | xcap (WGC) | per-monitor Win32 freeze-frame | Ctrl+Alt+M (UI thread) | `tray-icon` | Dual-monitor / mixed DPI: overlay per display |
+| **Windows** | xcap (WGC) | per-monitor Win32 freeze-frame | Ctrl+Alt+M (low-level hook thread) | `tray-icon` | Dual-monitor / mixed DPI: overlay per display |
 | **macOS** | xcap | not implemented yet | same as Windows | `tray-icon` | Compiles; no dedicated QA yet |
 | **Linux Wayland** | — | — | — | — | Not supported |
 
-The global hotkey uses `global-hotkey`, which on Linux is **X11 only**. Wayland has no standard global-hotkey API.
+Windows global shortcuts use a low-level keyboard hook. Other platforms use `global-hotkey`, which on Linux is **X11 only**. Wayland has no standard global-hotkey API.
 
 ## Build
 
@@ -91,7 +91,7 @@ src/
   state/            documents, capture lifecycle, OCR jobs
   doc.rs            Block / Document / export
   capture.rs        xcap grab + virtual-desktop stitch
-  desktop.rs        DesktopCmd; hotkey on the UI thread
+  desktop.rs        DesktopCmd and platform hotkey service
   desktop/linux.rs  ksni tray
   desktop/x11_snip.rs  override-redirect freeze-frame overlay
   desktop/other.rs  tray-icon (Windows / macOS)
