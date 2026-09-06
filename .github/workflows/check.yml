@@ -1,13 +1,43 @@
 name: Check
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang libclang-dev cmake pkg-config \
+            libfontconfig-dev libgbm-dev libegl1-mesa-dev \
+            libpipewire-0.3-dev libvulkan-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libxkbcommon-x11-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -29,4 +59,4 @@ jobs:
       - name: Test
         run: cargo test --locked
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings

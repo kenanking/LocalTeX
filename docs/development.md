@@ -97,7 +97,9 @@ Both scripts build the release binary, download the models, and write packages t
 
 Keep the bundled model folders when unpacking a portable package. Windows uses `models/` next to `localtex.exe`; Linux uses `share/localtex/models/`.
 
-To publish an application release, update `version` in `Cargo.toml` and push a matching `v*` tag. The [release workflow](../.github/workflows/release.yml) builds and uploads the application packages. Check [Releases](https://github.com/kenanking/LocalTeX/releases) for available downloads.
+The [Check workflow](../.github/workflows/check.yml) runs formatting, tests, and Clippy on Windows and Ubuntu 24.04 for pull requests and pushes to `main`. It can also be run manually; newer runs on the same ref cancel older checks.
+
+To publish an application release, update the version in `Cargo.toml` and `Cargo.lock`, push to `main`, and wait for Check to pass before pushing a matching `v*` tag. The [release workflow](../.github/workflows/release.yml) requires a successful Check run for that exact commit, then builds and uploads the application packages without repeating tests or Clippy. If Check is pending or failed, Release stops before building; rerun Release after Check passes. Check [Releases](https://github.com/kenanking/LocalTeX/releases) for available downloads.
 
 ## Project layout
 

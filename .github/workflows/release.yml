@@ -22,11 +22,26 @@ jobs:
     name: Resolve version
     runs-on: ubuntu-22.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Require successful Check CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh run list --workflow check.yml --commit "$GITHUB_SHA" \
+            --limit 100 --json event,conclusion \
+            --jq 'map(select(.event == "push" or .event == "workflow_dispatch")) | first | .conclusion // ""')
+          if [ "$conclusion" != success ]; then
+            echo "::error::Check CI must pass for $GITHUB_SHA before releasing. Wait for Check on main, or run it manually for this commit, then rerun Release."
+            exit 1
+          fi
 
       - id: resolve
         name: Match tag to Cargo.toml
@@ -67,12 +82,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-linux-x86_64
-
-      - name: Check
-        run: |
-          cargo fmt --all -- --check
-          cargo test --locked
-          cargo clippy --all-targets -- -D warnings
 
       - name: Bundle
         env:
@@ -122,16 +131,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-windows-x86_64
-
-      - name: Check
-        shell: pwsh
-        run: cargo fmt --all -- --check
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
 
       - name: Bundle
         env:
