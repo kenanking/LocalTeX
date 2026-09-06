@@ -8,9 +8,9 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-use super::{metadata_mismatch, PackReport};
+use super::{PackReport, metadata_mismatch};
 
 const WIRE_VARINT: u32 = 0;
 const WIRE_I64: u32 = 1;

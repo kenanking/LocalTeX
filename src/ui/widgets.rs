@@ -1,6 +1,6 @@
 use gpui::{
-    div, prelude::*, px, relative, rgb, svg, AnyElement, AnyView, App, MouseButton, Pixels,
-    SharedString, Window,
+    AnyElement, AnyView, App, MouseButton, Pixels, SharedString, Window, div, prelude::*, px,
+    relative, rgb, svg,
 };
 
 use super::theme;

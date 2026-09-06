@@ -7,17 +7,17 @@
 use std::mem::size_of;
 use std::time::Duration;
 
-use windows::core::w;
 use windows::Win32::Foundation::{HANDLE, HGLOBAL};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, DeleteDC, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HBITMAP,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, GetDC,
+    GetDIBits, HBITMAP, ReleaseDC,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW,
 };
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows::core::w;
 
 use crate::identity::APP_SLUG;
 

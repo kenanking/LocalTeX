@@ -5,9 +5,9 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, App, Bounds, DispatchPhase, Element, EntityId, LayoutId,
-    MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Style,
-    Window,
+    AnyElement, App, Bounds, DispatchPhase, Element, EntityId, LayoutId, MouseButton,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Style, Window, div,
+    prelude::*, px,
 };
 
 use super::theme;

@@ -376,22 +376,24 @@ impl AppState {
         mut events: std::sync::mpsc::Receiver<WriteEvent>,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn(async move |this, cx| loop {
-            let (next, event) = cx
-                .background_spawn(async move {
-                    let event = events.recv();
-                    (events, event)
-                })
-                .await;
-            events = next;
-            let Ok(event) = event else {
-                break;
-            };
-            if this
-                .update(cx, |this, cx| this.handle_store_event(event, cx))
-                .is_err()
-            {
-                break;
+        cx.spawn(async move |this, cx| {
+            loop {
+                let (next, event) = cx
+                    .background_spawn(async move {
+                        let event = events.recv();
+                        (events, event)
+                    })
+                    .await;
+                events = next;
+                let Ok(event) = event else {
+                    break;
+                };
+                if this
+                    .update(cx, |this, cx| this.handle_store_event(event, cx))
+                    .is_err()
+                {
+                    break;
+                }
             }
         })
         .detach();

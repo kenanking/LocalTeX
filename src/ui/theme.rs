@@ -1,4 +1,4 @@
-use gpui::{rgb, rgba, Rgba};
+use gpui::{Rgba, rgb, rgba};
 
 pub const BG: u32 = 0xf6f5f6;
 pub const BG_RAISED: u32 = 0xffffff;

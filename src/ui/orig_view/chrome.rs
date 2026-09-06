@@ -1,4 +1,4 @@
-use gpui::{div, prelude::*, px, rgb, rgba, svg, Context, SharedString};
+use gpui::{Context, SharedString, div, prelude::*, px, rgb, rgba, svg};
 use uuid::Uuid;
 
 use super::super::main_window::MainWindow;

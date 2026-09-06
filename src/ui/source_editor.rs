@@ -1,11 +1,11 @@
 use std::ops::Range;
 
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, rgba, size, App, AvailableSpace,
-    Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Size,
-    Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
+    App, AvailableSpace, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, Size, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine, actions,
+    div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 
 use super::text_buffer::TextBuffer;

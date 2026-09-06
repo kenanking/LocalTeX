@@ -1,17 +1,17 @@
 use gpui::{
-    canvas, div, img, prelude::*, px, rgb, rgba, svg, Context, CursorStyle, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent, SharedString, Window,
+    Context, CursorStyle, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ScrollWheelEvent, SharedString, Window, canvas, div, img, prelude::*, px, rgb, rgba, svg,
 };
 use uuid::Uuid;
 
 use super::super::main_window::MainWindow;
-use super::super::scroll::{overlay_scrollbar, ScrollAxis, ScrollbarTone};
+use super::super::scroll::{ScrollAxis, ScrollbarTone, overlay_scrollbar};
 use super::super::theme;
 use super::super::widgets::IconKind;
 use super::chrome::{hud_pill, orig_action_capsule, orig_hud_disc};
 use super::geom::{
-    film_content_w, film_pan_offset, zoom_factor_for_wheel, zoom_percent, FILM_GAP, FILM_H,
-    FILM_PAD_X, FILM_THUMB_H, FILM_THUMB_W, ZOOM_PILL_W,
+    FILM_GAP, FILM_H, FILM_PAD_X, FILM_THUMB_H, FILM_THUMB_W, ZOOM_PILL_W, film_content_w,
+    film_pan_offset, zoom_factor_for_wheel, zoom_percent,
 };
 use crate::doc::ImageSlot;
 

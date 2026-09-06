@@ -3,14 +3,14 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{prelude::*, App, Context, Image, Priority, RenderImage, Window};
+use gpui::{App, Context, Image, Priority, RenderImage, Window, prelude::*};
 use uuid::Uuid;
 
 use super::intake_paper::IntakePaperSpec;
 use super::main_window::MainWindow;
-use crate::cache::{thumb_retain_ids, MediaCache};
+use crate::cache::{MediaCache, thumb_retain_ids};
 use crate::preview::{
-    derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived, DocDerived,
+    DocDerived, derived_copy_rows, document_preview_with_dpr, raster_dpr, should_spawn_derived,
 };
 
 pub(crate) struct WindowMedia {

@@ -2,18 +2,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, AnyElement, App, Context, EntityId, MouseButton, SharedString,
+    AnyElement, App, Context, EntityId, MouseButton, SharedString, div, img, prelude::*, px, rgb,
 };
 
 use super::main_window::MainWindow;
-use super::scroll::{h_scroll_pane, hscroll_should_center, ScrollChrome};
-use super::selectable::{selectable_run, selectable_text, PreviewSel};
+use super::scroll::{ScrollChrome, h_scroll_pane, hscroll_should_center};
+use super::selectable::{PreviewSel, selectable_run, selectable_text};
 use super::theme;
 use crate::doc::DocStatus;
 use crate::math::ScriptKind;
 use crate::prefs::ContentFontSize;
 use crate::preview::{
-    segs_lines, Eqno, InlineSeg, PreviewBlock, PreviewLayout, ScriptGlyph, SvgMath,
+    Eqno, InlineSeg, PreviewBlock, PreviewLayout, ScriptGlyph, SvgMath, segs_lines,
 };
 use uuid::Uuid;
 

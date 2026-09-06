@@ -128,9 +128,9 @@ END
 }
 
 fn write_ico(path: &std::path::Path) {
+    use image::ExtendedColorType;
     use image::codecs::ico::{IcoEncoder, IcoFrame};
     use image::imageops::{self, FilterType};
-    use image::ExtendedColorType;
 
     let src = icon_mark::raster(256);
     let sizes = [16_u32, 32, 48, 256];

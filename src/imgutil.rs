@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 #[cfg(any(test, target_os = "windows"))]
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use gpui::RenderImage;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
-use image::{imageops, ColorType, ImageEncoder, Rgba, RgbaImage};
+use image::{ColorType, ImageEncoder, Rgba, RgbaImage, imageops};
 
 pub fn rgba_to_render(img: &RgbaImage) -> Arc<RenderImage> {
     let mut bgra = img.clone();

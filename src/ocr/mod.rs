@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use image::RgbaImage;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
+use ort::session::builder::GraphOptimizationLevel;
 
+use crate::identity::APP_SLUG;
 #[cfg(test)]
 use crate::identity::models_dir;
-use crate::identity::APP_SLUG;
 
 mod imgops;
 pub(crate) mod inktex;
@@ -22,13 +22,13 @@ mod unirec;
 
 use crate::doc::{Block, BlockKind, OcrMeta, Rect};
 use imgops::RgbImg;
-use inktex::{InkTex, INK_FILES};
-use pipeline::{Pipeline, OPENDOC_FILES};
+use inktex::{INK_FILES, InkTex};
+use pipeline::{OPENDOC_FILES, Pipeline};
 
-use model_info::{inspect_stamps, FileStamp, PackReport};
-#[cfg(test)]
-use model_info::{reconcile_pack, ModelManifestState};
+use model_info::{FileStamp, PackReport, inspect_stamps};
 pub use model_info::{ModelInfo, ModelRuntimeState};
+#[cfg(test)]
+use model_info::{ModelManifestState, reconcile_pack};
 pub use pipeline::OcrResult;
 
 #[derive(Debug, Clone)]
@@ -408,7 +408,7 @@ mod tests {
     use super::*;
     use crate::doc::{BlockKind, BlockRole};
     use crate::math::unwrap_formula;
-    use pipeline::{rec_kind, to_doc_block, RecKind};
+    use pipeline::{RecKind, rec_kind, to_doc_block};
 
     #[test]
     fn formula_label_excludes_formula_number() {

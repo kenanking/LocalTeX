@@ -155,11 +155,13 @@ mod tests {
         };
         let next = drag.strip_h_for(40.0, 500.0).expect("strip");
         assert!((next - 210.0).abs() < 0.5, "got {next}");
-        assert!(WindowDrag::Sidebar {
-            start_x: 0.0,
-            start_w: 200.0
-        }
-        .strip_h_for(40.0, 500.0)
-        .is_none());
+        assert!(
+            WindowDrag::Sidebar {
+                start_x: 0.0,
+                start_w: 200.0
+            }
+            .strip_h_for(40.0, 500.0)
+            .is_none()
+        );
     }
 }

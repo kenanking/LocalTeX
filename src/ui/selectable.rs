@@ -6,10 +6,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    fill, point, prelude::*, rgb, App, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, StyledText, TextLayout,
-    Window,
+    App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox,
+    HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, SharedString, StyledText, TextLayout, Window, fill, point, prelude::*,
+    rgb,
 };
 
 use super::theme;

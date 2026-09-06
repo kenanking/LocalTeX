@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{Local, NaiveDate, TimeZone};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
-use crate::doc::{decode_blocks_json, encode_blocks_json, Block, Document, OcrMeta};
+use crate::doc::{Block, Document, OcrMeta, decode_blocks_json, encode_blocks_json};
 use crate::identity::APP_SLUG;
 use crate::imgutil;
 
@@ -640,10 +640,12 @@ mod tests {
         store.delete(id).unwrap();
         assert!(store.list().unwrap().is_empty());
         assert!(!root.join(format!("snips/{id}.png")).exists());
-        assert!(store
-            .query_ids("frac", DateRange::default())
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .query_ids("frac", DateRange::default())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -686,10 +688,12 @@ mod tests {
             store.query_ids("x_", DateRange::default()).unwrap(),
             vec![sub.id]
         );
-        assert!(store
-            .query_ids("%", DateRange::default())
-            .unwrap()
-            .is_empty());
+        assert!(
+            store
+                .query_ids("%", DateRange::default())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -8,9 +8,9 @@ use uuid::Uuid;
 use crate::doc::{DocStatus, Document, ImageSlot};
 use crate::identity::APP_SLUG;
 
-use super::intake::{classify_image_paths, ClassifiedPaths, IntakeBatch};
-use super::session::Capture;
 use super::AppState;
+use super::intake::{ClassifiedPaths, IntakeBatch, classify_image_paths};
+use super::session::Capture;
 
 impl AppState {
     pub fn ingest_strokes(&mut self, pts: Vec<Vec<[f32; 3]>>, cx: &mut Context<Self>) {

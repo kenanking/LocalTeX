@@ -1,4 +1,4 @@
-use gpui::{div, prelude::*, Entity};
+use gpui::{Entity, div, prelude::*};
 
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{patch_prefs, picker};

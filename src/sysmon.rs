@@ -286,8 +286,8 @@ fn drive_stats(path: &Path) -> (Option<u64>, Option<u64>) {
 #[cfg(target_os = "windows")]
 fn drive_stats(path: &Path) -> (Option<u64>, Option<u64>) {
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows::core::PCWSTR;
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut total = 0u64;
     let mut free = 0u64;

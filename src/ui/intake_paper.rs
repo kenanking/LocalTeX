@@ -1,4 +1,4 @@
-use image::{imageops, GrayImage, Luma, Rgba, RgbaImage};
+use image::{GrayImage, Luma, Rgba, RgbaImage, imageops};
 
 pub(crate) const INTAKE_PAPER_SIZE: u32 = 82;
 const INTAKE_PAPER_SCALE: u32 = 2;
@@ -325,9 +325,11 @@ mod tests {
         assert_eq!(first.dimensions(), (INTAKE_PAPER_SIZE, INTAKE_PAPER_SIZE));
         assert_eq!(first, second);
         assert!(first.pixels().any(|pixel| pixel.0[3] == 0));
-        assert!(first
-            .pixels()
-            .any(|pixel| pixel.0[0] > 245 && pixel.0[3] == 255));
+        assert!(
+            first
+                .pixels()
+                .any(|pixel| pixel.0[0] > 245 && pixel.0[3] == 255)
+        );
     }
 
     #[test]

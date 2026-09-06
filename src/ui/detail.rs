@@ -1,19 +1,19 @@
 use gpui::{
-    div, img, prelude::*, px, rgb, Context, CursorStyle, Entity, MouseButton, MouseDownEvent,
-    SharedString,
+    Context, CursorStyle, Entity, MouseButton, MouseDownEvent, SharedString, div, img, prelude::*,
+    px, rgb,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::orig_view::{
-    clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_done_disc, source_hud_bar,
-    source_hud_disc, source_hud_sep, OrigStripFrame,
+    OrigStripFrame, clamp_strip_h, copy_reserve, max_strip_h, orig_hud_disc, source_done_disc,
+    source_hud_bar, source_hud_disc, source_hud_sep,
 };
 use super::scroll::{
-    overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar, ScrollAxis, ScrollbarTone,
+    ScrollAxis, ScrollbarTone, overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar,
 };
 use super::theme;
-use super::widgets::{btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, IconKind};
+use super::widgets::{IconKind, btn, copy_chip, kbd_chip, ocr_meta_bar, section_label};
 use super::window_drag::WindowDrag;
 use crate::doc::{DocStatus, ImageSlot, OcrMeta};
 use crate::export::CopyKind;

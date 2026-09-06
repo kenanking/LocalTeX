@@ -1,7 +1,7 @@
-use gpui::{div, prelude::*, px, rgb, AnyElement, App, Entity, SharedString};
+use gpui::{AnyElement, App, Entity, SharedString, div, prelude::*, px, rgb};
 
 use super::super::theme;
-use super::super::widgets::{btn, icon_btn_sized, kbd_chip, settings_group, IconBtnSize, IconKind};
+use super::super::widgets::{IconBtnSize, IconKind, btn, icon_btn_sized, kbd_chip, settings_group};
 use super::SettingsPane;
 use crate::keymap::{self, Group, ShortcutId};
 use crate::prefs::Prefs;

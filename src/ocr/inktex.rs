@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use ort::session::{Session, SessionInputValue};
 use ort::value::{DynValue, Tensor};
 

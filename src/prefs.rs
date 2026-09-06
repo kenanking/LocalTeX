@@ -343,10 +343,10 @@ fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Resul
 #[cfg(target_os = "windows")]
 fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
+    use windows::core::PCWSTR;
 
     let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();

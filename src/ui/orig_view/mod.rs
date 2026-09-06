@@ -9,19 +9,19 @@ pub(crate) use chrome::{
     orig_hud_disc, source_done_disc, source_hud_bar, source_hud_disc, source_hud_sep,
 };
 pub(crate) use geom::fit_scale;
-pub(crate) use strip::{clamp_strip_h, copy_reserve, max_strip_h, OrigStrip, OrigStripFrame};
+pub(crate) use strip::{OrigStrip, OrigStripFrame, clamp_strip_h, copy_reserve, max_strip_h};
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui::{px, Bounds, Pixels, ScrollHandle};
+use gpui::{Bounds, Pixels, ScrollHandle, px};
 use uuid::Uuid;
 
 use super::scroll::ScrollThumbDrag;
 
 use geom::{
-    film_cell_w, film_pan_offset, film_scroll_to_show, film_thumb_left, release_is_click, ZOOM_MAX,
-    ZOOM_MIN,
+    ZOOM_MAX, ZOOM_MIN, film_cell_w, film_pan_offset, film_scroll_to_show, film_thumb_left,
+    release_is_click,
 };
 
 pub(crate) struct OrigDrag {

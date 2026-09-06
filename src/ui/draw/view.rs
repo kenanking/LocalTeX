@@ -1,6 +1,6 @@
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, rgb, Bounds, Context, CursorStyle, MouseButton,
-    MouseDownEvent, PathBuilder, Pixels, Point,
+    Bounds, Context, CursorStyle, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, canvas,
+    div, fill, point, prelude::*, px, rgb,
 };
 
 use super::{DrawPaper, DrawTool};
@@ -8,7 +8,7 @@ use crate::actions::{DrawEraser, DrawPen, DrawRedo, DrawUndo};
 use crate::ui::main_window::{MainWindow, View};
 use crate::ui::theme;
 use crate::ui::widgets::{
-    btn, ghost_btn, icon_btn_kbd, section_label, seg_item, segmented, IconKind,
+    IconKind, btn, ghost_btn, icon_btn_kbd, section_label, seg_item, segmented,
 };
 
 use super::ink::ERASER_RADIUS;

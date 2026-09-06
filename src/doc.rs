@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::export::CopyKind;
 use crate::table;
 
-pub use crate::math::{split_math, unwrap_formula, MathRun};
+pub use crate::math::{MathRun, split_math, unwrap_formula};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockKind {

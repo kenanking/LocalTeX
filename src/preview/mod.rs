@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use gpui::SharedString;
 use ratex_layout::layout_options::LayoutOptions;
 use ratex_layout::{layout, to_display_list};
 use ratex_parser::parser::parse;
-use ratex_svg::{render_to_svg_with_color_syntax, SvgColorSyntax, SvgOptions};
+use ratex_svg::{SvgColorSyntax, SvgOptions, render_to_svg_with_color_syntax};
 use ratex_types::math_style::MathStyle;
 
-use crate::doc::{snip_kind, split_math, Block, BlockKind, BlockRole, MathRun, SnipKind};
+use crate::doc::{Block, BlockKind, BlockRole, MathRun, SnipKind, snip_kind, split_math};
 use crate::export::CopyKind;
 use crate::math::ScriptKind;
 use crate::prefs::{BlockDelim, ContentFontSize, InlineDelim, Prefs};

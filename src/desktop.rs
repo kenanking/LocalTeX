@@ -1,14 +1,14 @@
 use std::cell::RefCell;
-use std::sync::mpsc::{self, Receiver, Sender};
 #[cfg(not(target_os = "windows"))]
 use std::sync::RwLock;
+use std::sync::mpsc::{self, Receiver, Sender};
 #[cfg(not(target_os = "windows"))]
 use std::thread;
 
 #[cfg(not(target_os = "windows"))]
-use global_hotkey::hotkey::HotKey;
-#[cfg(not(target_os = "windows"))]
 use global_hotkey::GlobalHotKeyManager;
+#[cfg(not(target_os = "windows"))]
+use global_hotkey::hotkey::HotKey;
 #[cfg(not(target_os = "windows"))]
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 

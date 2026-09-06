@@ -1,7 +1,7 @@
 use crate::prefs::ContentFontSize;
 use crate::table::{self, Slot, Table};
 
-use super::{segs_from_cell, PlacedCell, PreviewLayout};
+use super::{PlacedCell, PreviewLayout, segs_from_cell};
 
 pub(crate) fn table_preview_layout(
     table: &Table,

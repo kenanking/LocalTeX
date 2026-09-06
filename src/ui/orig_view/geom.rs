@@ -9,11 +9,7 @@ pub(crate) const ZOOM_STEP: f32 = 1.12;
 /// GPUI reports wheel-up as **positive** `delta.y` (X11 `ScrollDirection::Up`,
 /// Win32 `WHEEL_DELTA`). CSS `wheel.deltaY` is the opposite sign.
 pub(crate) fn zoom_factor_for_wheel(dy: f32) -> f32 {
-    if dy > 0.0 {
-        ZOOM_STEP
-    } else {
-        1.0 / ZOOM_STEP
-    }
+    if dy > 0.0 { ZOOM_STEP } else { 1.0 / ZOOM_STEP }
 }
 
 pub(crate) const FILM_H: f32 = 72.0;
@@ -78,11 +74,7 @@ pub(crate) fn fit_scale(img_w: f32, img_h: f32, stage_w: f32, stage_h: f32) -> f
         return 1.0;
     }
     let s = (stage_w / img_w).min(stage_h / img_h);
-    if s.is_finite() && s > 0.0 {
-        s
-    } else {
-        1.0
-    }
+    if s.is_finite() && s > 0.0 { s } else { 1.0 }
 }
 
 pub(crate) fn zoom_percent(scale: f32, fit: f32) -> i32 {

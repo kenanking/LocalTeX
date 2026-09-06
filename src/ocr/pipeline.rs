@@ -12,10 +12,10 @@ use anyhow::Result;
 use ort::session::Session;
 
 use super::imgops::{self, RgbImg};
-use super::layout::{self, Region, IMAGE_LABELS};
+use super::layout::{self, IMAGE_LABELS, Region};
 use super::text::{self, IGNORE_LABELS};
 use super::unirec::{RecognizeOut, Tokenizer, UniRec};
-use super::{build_session, inspect_onnx_pack, PackReport};
+use super::{PackReport, build_session, inspect_onnx_pack};
 use crate::doc::{Block, BlockKind, BlockRole, OcrMeta, Rect};
 use crate::identity::APP_SLUG;
 

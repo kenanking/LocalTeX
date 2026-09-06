@@ -1,7 +1,7 @@
 //! Image helpers: RGB in-memory images, luma/invert, SIMD resize, crops,
 //! and formula margin cropping.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use fast_image_resize::images::Image as FirImage;
 use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
 

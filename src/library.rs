@@ -6,7 +6,7 @@ use std::sync::Arc;
 use image::RgbaImage;
 use uuid::Uuid;
 
-use crate::cache::{pixel_bytes, PIXEL_BUDGET, PIXEL_MAX_ENTRIES};
+use crate::cache::{PIXEL_BUDGET, PIXEL_MAX_ENTRIES, pixel_bytes};
 use crate::doc::{Document, ImageSlot};
 use crate::store::{CivilDate, DateRange, SnipListItem};
 

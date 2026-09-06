@@ -2,7 +2,7 @@
 //! PE `build.rs` icon. Keep this file free of GPUI so the build script can
 //! `include` it.
 
-use image::{imageops, Rgba, RgbaImage};
+use image::{Rgba, RgbaImage, imageops};
 
 const SRC: u32 = 256;
 const WHITE: [u8; 4] = [255, 255, 255, 255];

@@ -4,15 +4,15 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use image::RgbaImage;
 use x11rb::connection::Connection;
 use x11rb::image::{BitsPerPixel, ColorComponent, Image, ImageOrder, PixelLayout, ScanlinePad};
+use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     ConnectionExt, CreateGCAux, CreateWindowAux, Cursor, EventMask, Gcontext, GrabMode, GrabStatus,
     Rectangle, Screen, Window, WindowClass,
 };
-use x11rb::protocol::Event;
 use x11rb::{CURRENT_TIME, NONE};
 
 use crate::capture::{self, DesktopShot};

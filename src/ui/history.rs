@@ -3,19 +3,19 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    div, img, prelude::*, px, rgb, uniform_list, App, Context, CursorStyle, MouseButton,
-    MouseDownEvent, ScrollHandle, SharedString, UniformListScrollHandle, Window,
+    App, Context, CursorStyle, MouseButton, MouseDownEvent, ScrollHandle, SharedString,
+    UniformListScrollHandle, Window, div, img, prelude::*, px, rgb, uniform_list,
 };
 use uuid::Uuid;
 
 use super::main_window::MainWindow;
 use super::scroll::{
-    overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar, ScrollAxis,
-    ScrollThumbDrag, ScrollbarTone,
+    ScrollAxis, ScrollThumbDrag, ScrollbarTone, overlay_chrome_hovered, overlay_pointer_in_pane,
+    overlay_scrollbar,
 };
 use super::theme;
 use super::widgets::{
-    icon_btn_sized, missing_image_slot, section_label, seg_item, segmented, IconBtnSize, IconKind,
+    IconBtnSize, IconKind, icon_btn_sized, missing_image_slot, section_label, seg_item, segmented,
 };
 use super::window_drag::WindowDrag;
 use crate::cache::{ROW_HEIGHT_PX, THUMB_VIEWPORT_MULT};

@@ -27,7 +27,7 @@ mod search;
 mod session;
 mod toast;
 
-pub use intake::{classify_image_paths, IntakeBatch, IntakeCounts, IntakeWork};
+pub use intake::{IntakeBatch, IntakeCounts, IntakeWork, classify_image_paths};
 
 use runtime::{DocumentRuntime, FileIntakeSession};
 use session::{CaptureSession, SearchFilter};
@@ -527,15 +527,17 @@ impl AppState {
 
 pub fn pump_desktop_events(state: gpui::Entity<AppState>, rx: Receiver<DesktopCmd>, cx: &mut App) {
     let rx = Arc::new(Mutex::new(rx));
-    cx.spawn(async move |cx| loop {
-        let rx = rx.clone();
-        let cmd = cx
-            .background_spawn(async move { rx.lock().ok()?.recv().ok() })
-            .await;
-        let Some(cmd) = cmd else {
-            break;
-        };
-        state.update(cx, |state, cx| state.handle_desktop(cmd, cx));
+    cx.spawn(async move |cx| {
+        loop {
+            let rx = rx.clone();
+            let cmd = cx
+                .background_spawn(async move { rx.lock().ok()?.recv().ok() })
+                .await;
+            let Some(cmd) = cmd else {
+                break;
+            };
+            state.update(cx, |state, cx| state.handle_desktop(cmd, cx));
+        }
     })
     .detach();
 }

@@ -3,7 +3,7 @@
 //! (LayoutDetectorONNX) and openocr/tools/utils/opendoc_onnx_utils/utils.py
 //! (filter_overlap_boxes).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use fast_image_resize::FilterType;
 use ort::session::Session;
 use ort::value::Tensor;

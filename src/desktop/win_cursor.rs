@@ -1,11 +1,11 @@
 //! Black snip-overlay reticle. Native Win32 cursor — do not use GPUI's
 //! Crosshair style (it can leak after destroy).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use windows::Win32::Foundation::HINSTANCE;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateCursor, DestroyCursor, GetSystemMetrics, LoadCursorW, SetCursor, HCURSOR, IDC_ARROW,
-    IDC_CROSS, SM_CXCURSOR, SM_CYCURSOR,
+    CreateCursor, DestroyCursor, GetSystemMetrics, HCURSOR, IDC_ARROW, IDC_CROSS, LoadCursorW,
+    SM_CXCURSOR, SM_CYCURSOR, SetCursor,
 };
 
 pub struct OverlayCursor {

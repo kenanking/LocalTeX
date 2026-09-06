@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, ease_out_quint, fill, img, point, prelude::*, px, relative, rgb, svg, Animation,
-    AnimationExt, AnyElement, Bounds, Pixels, RenderImage, SharedString,
+    Animation, AnimationExt, AnyElement, Bounds, Pixels, RenderImage, SharedString, canvas, div,
+    ease_out_quint, fill, img, point, prelude::*, px, relative, rgb, svg,
 };
 
 use super::theme;
 use crate::state::{IntakeBatch, IntakeCounts, IntakeWork};
 
-use super::intake_paper::{intake_paper_spec, IntakePaperSpec};
+use super::intake_paper::{IntakePaperSpec, intake_paper_spec};
 
 const PLATEN_W: f32 = 500.0;
 const PLATEN_H: f32 = 330.0;

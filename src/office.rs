@@ -3,8 +3,8 @@ use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::doc::{unwrap_formula, Block, BlockKind, BlockRole};
-use crate::math::{format_eqno, split_display_tag, split_math, MathRun};
+use crate::doc::{Block, BlockKind, BlockRole, unwrap_formula};
+use crate::math::{MathRun, format_eqno, split_display_tag, split_math};
 use crate::table::{self, Slot};
 
 const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";

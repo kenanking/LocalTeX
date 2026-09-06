@@ -2,8 +2,8 @@
 //! Formula snips are a TeX body (display wrapped with newlines). Mixed is
 //! Markdown with `$` / `$$` / `\[` islands. Tables are `\begin{tabular}`.
 
-use crate::doc::{unwrap_formula, Block, BlockKind, BlockRole, Rect, SnipKind};
-use crate::math::{self, canonicalize_mixed_text, is_display_body, MathRun};
+use crate::doc::{Block, BlockKind, BlockRole, Rect, SnipKind, unwrap_formula};
+use crate::math::{self, MathRun, canonicalize_mixed_text, is_display_body};
 use crate::prefs::Prefs;
 use crate::table;
 
@@ -344,11 +344,13 @@ fn parse_markdown_chunk(md: &str) -> Vec<Block> {
 mod tests {
     #[test]
     fn incomplete_tabular_is_not_exported_as_a_formula() {
-        assert!(super::parse_source(
-            r"\begin{tabular}{cc} unfinished",
-            &crate::prefs::Prefs::default()
-        )
-        .is_err());
+        assert!(
+            super::parse_source(
+                r"\begin{tabular}{cc} unfinished",
+                &crate::prefs::Prefs::default()
+            )
+            .is_err()
+        );
     }
     use super::*;
     use crate::doc::snip_kind;

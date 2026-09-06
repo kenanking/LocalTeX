@@ -86,12 +86,12 @@ fn apply_linux_at(enabled: bool, desktop: &Path, exe: &Path) -> std::io::Result<
 
 #[cfg(target_os = "windows")]
 fn apply_windows(enabled: bool, exe: &Path) -> anyhow::Result<()> {
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-        KEY_SET_VALUE, REG_SZ,
+        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegDeleteValueW,
+        RegOpenKeyExW, RegSetValueExW,
     };
+    use windows::core::PCWSTR;
 
     let mut key = HKEY::default();
     let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"

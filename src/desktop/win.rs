@@ -1,23 +1,23 @@
 //! Windows window-manager helpers (hide-before-WGC). Overlay lives in
 //! `win_snip`; this file is the analogue of `linux.rs` hide/wait.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::{
     AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetActiveWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, BringWindowToTop, ClipCursor, EnumWindows, GetForegroundWindow,
-    GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow,
-    ShowCursor, ShowWindow, ASFW_ANY, GWL_EXSTYLE, SW_HIDE, SW_RESTORE, WM_ENDSESSION,
+    ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, ClipCursor, EnumWindows, GWL_EXSTYLE,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SW_HIDE, SW_RESTORE, SetForegroundWindow, ShowCursor, ShowWindow, WM_ENDSESSION,
     WM_QUERYENDSESSION, WS_EX_TOOLWINDOW,
 };
+use windows::core::BOOL;
 
 use super::DesktopCmd;
 use crate::identity::APP_SLUG;

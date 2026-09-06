@@ -32,8 +32,8 @@ mod ui;
 #[cfg(target_os = "linux")]
 use gpui::WindowDecorations;
 use gpui::{
-    px, size, App, AppContext, Bounds, Entity, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions,
+    App, AppContext, Bounds, Entity, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
+    px, size,
 };
 
 use crate::actions::{

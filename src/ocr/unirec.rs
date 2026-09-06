@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use fast_image_resize::FilterType;
 use ort::session::{Session, SessionInputValue};
 use ort::value::{DynValue, Tensor};

@@ -4,9 +4,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, App, ClipboardItem, Context, CursorStyle, DragMoveEvent,
-    Entity, ExternalPaths, FocusHandle, Focusable, MouseButton, MouseMoveEvent, ScrollHandle,
-    Window,
+    App, ClipboardItem, Context, CursorStyle, DragMoveEvent, Entity, ExternalPaths, FocusHandle,
+    Focusable, MouseButton, MouseMoveEvent, ScrollHandle, Window, div, point, prelude::*, px, rgb,
 };
 use uuid::Uuid;
 
@@ -14,11 +13,11 @@ use super::chrome::{chrome, workspace_height};
 use super::draw::DrawBoard;
 use super::history::{HistoryPane, SIDEBAR_MAX, SIDEBAR_MIN};
 use super::intake::{
-    intake_feedback_duration, render_intake_overlay, slots_from_batch, IntakeKind, IntakePhase,
-    IntakePresentation, INTAKE_COMPLETE_HOLD, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD,
+    INTAKE_COMPLETE_HOLD, INTAKE_PLATEN_OUT, INTAKE_REJECT_HOLD, IntakeKind, IntakePhase,
+    IntakePresentation, intake_feedback_duration, render_intake_overlay, slots_from_batch,
 };
 use super::media::WindowMedia;
-use super::orig_view::{copy_reserve, max_strip_h, OrigStrip, OrigView};
+use super::orig_view::{OrigStrip, OrigView, copy_reserve, max_strip_h};
 use super::scroll::{ScrollThumbDrag, ThumbDragCatcher};
 use super::search_field::SearchField;
 use super::selectable::PreviewSel;
@@ -34,7 +33,7 @@ use crate::actions::{
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
-use crate::state::{classify_image_paths, AppState, IntakeCounts};
+use crate::state::{AppState, IntakeCounts, classify_image_paths};
 
 #[derive(Clone)]
 pub(crate) enum View {

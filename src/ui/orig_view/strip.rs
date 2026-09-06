@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use gpui::{
-    canvas, div, prelude::*, px, rgb, Context, Corners, CursorStyle, MouseButton, MouseDownEvent,
-    ObjectFit, RenderImage,
+    Context, Corners, CursorStyle, MouseButton, MouseDownEvent, ObjectFit, RenderImage, canvas,
+    div, prelude::*, px, rgb,
 };
 use uuid::Uuid;
 
 use super::super::main_window::MainWindow;
 use super::super::theme;
-use super::super::widgets::{missing_image_slot, IconKind};
+use super::super::widgets::{IconKind, missing_image_slot};
 use super::super::window_drag::WindowDrag;
 use super::chrome::{orig_action_capsule, orig_hud_disc};
 pub const STRIP_MIN: f32 = 64.0;
@@ -21,11 +21,7 @@ pub const STRIP_MIN_PREVIEW: f32 = 80.0;
 pub const COPY_RESERVE_H: f32 = 72.0;
 
 pub fn copy_reserve(ready: bool) -> f32 {
-    if ready {
-        COPY_RESERVE_H
-    } else {
-        0.0
-    }
+    if ready { COPY_RESERVE_H } else { 0.0 }
 }
 
 pub struct OrigStrip {

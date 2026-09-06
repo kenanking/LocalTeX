@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, AnyElement, App, Context, Entity, FocusHandle, ScrollHandle,
-    Window,
+    AnyElement, App, Context, Entity, FocusHandle, ScrollHandle, Window, div, point, prelude::*,
+    px, rgb,
 };
 
-use super::scroll::{overlay_scrollbar, ScrollAxis, ScrollThumbDrag, ScrollbarTone};
+use super::scroll::{ScrollAxis, ScrollThumbDrag, ScrollbarTone, overlay_scrollbar};
 use super::theme;
 use super::widgets::{pill_tab, segmented, setting_row, switch};
 use crate::keymap::ShortcutId;

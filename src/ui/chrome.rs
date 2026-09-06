@@ -1,15 +1,15 @@
-#[cfg(target_os = "linux")]
-use gpui::{canvas, Bounds, CursorStyle, Decorations, HitboxBehavior};
 use gpui::{
-    div, img, prelude::*, px, rgb, svg, AnyElement, Context, Entity, MouseButton, ObjectFit,
-    SharedString, Window,
+    AnyElement, Context, Entity, MouseButton, ObjectFit, SharedString, Window, div, img,
+    prelude::*, px, rgb, svg,
 };
+#[cfg(target_os = "linux")]
+use gpui::{Bounds, CursorStyle, Decorations, HitboxBehavior, canvas};
 #[cfg(any(test, target_os = "linux"))]
-use gpui::{point, Pixels, Point, ResizeEdge, Size, Tiling};
+use gpui::{Pixels, Point, ResizeEdge, Size, Tiling, point};
 
 use super::main_window::{MainWindow, View};
 use super::theme;
-use super::widgets::{icon_btn, status_dot, IconKind};
+use super::widgets::{IconKind, icon_btn, status_dot};
 use crate::doc::DocStatus;
 use crate::keymap::{self, ShortcutId};
 use crate::ocr::EngineStatus;

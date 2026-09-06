@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    handwriting_dir, metadata_mismatch, opendoc_dir, pack_present, INK_FILES, OPENDOC_FILES,
+    INK_FILES, OPENDOC_FILES, handwriting_dir, metadata_mismatch, opendoc_dir, pack_present,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::doc::{unwrap_formula, Block, BlockKind, BlockRole, ExportFmt, MathRun, Rect, SnipKind};
+use crate::doc::{Block, BlockKind, BlockRole, ExportFmt, MathRun, Rect, SnipKind, unwrap_formula};
 use crate::math;
 use crate::prefs::Prefs;
 use crate::table;
@@ -485,17 +485,19 @@ mod tests {
         )];
         let md = export_blocks(&blocks, ExportFmt::Markdown, &prefs);
         assert_eq!(md, "\\# not a heading");
-        let titled = vec![Block::new(
-            BlockKind::Text,
-            crate::doc::Rect {
-                x: 0,
-                y: 0,
-                w: 1,
-                h: 1,
-            },
-            "Intro",
-        )
-        .with_role(BlockRole::DocTitle)];
+        let titled = vec![
+            Block::new(
+                BlockKind::Text,
+                crate::doc::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                },
+                "Intro",
+            )
+            .with_role(BlockRole::DocTitle),
+        ];
         let md = export_blocks(&titled, ExportFmt::Markdown, &prefs);
         assert_eq!(md, "# Intro");
     }

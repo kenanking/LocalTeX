@@ -32,9 +32,11 @@ fn invalid_display_preserves_engine_error_and_other_blocks() {
         .unwrap_err()
         .to_string();
     assert!(preview.iter().any(|block| matches!(block, PreviewBlock::Error { source, error } if source.contains(r"\frac{") && error == &engine_error)));
-    assert!(preview
-        .iter()
-        .any(|block| matches!(block, PreviewBlock::Display { .. })));
+    assert!(
+        preview
+            .iter()
+            .any(|block| matches!(block, PreviewBlock::Display { .. }))
+    );
     assert_eq!(
         preview
             .iter()
@@ -526,9 +528,11 @@ fn display_tag_is_sidecar_not_typeset() {
     };
     let preview = document_preview(&[Block::new(BlockKind::Formula, r, r"$$E=mc^2 \tag{11}$$")]);
     match preview.as_slice() {
-        [PreviewBlock::Display {
-            eqno: Some(eqno), ..
-        }] => {
+        [
+            PreviewBlock::Display {
+                eqno: Some(eqno), ..
+            },
+        ] => {
             assert_eq!(eqno.raw, "11");
             assert!(
                 eqno.math.is_some(),
@@ -668,11 +672,12 @@ fn preview_layout_merges_header_spans() {
                 .iter()
                 .any(|c| cell_plain(c) == "OpenCLIP" && c.header)
     );
-    assert!(lay
-        .cells
-        .iter()
-        .find(|c| cell_plain(c) == "11.1")
-        .is_some_and(|c| c.numeric));
+    assert!(
+        lay.cells
+            .iter()
+            .find(|c| cell_plain(c) == "11.1")
+            .is_some_and(|c| c.numeric)
+    );
 }
 
 fn cell_plain(c: &PlacedCell) -> String {

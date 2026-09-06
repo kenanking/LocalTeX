@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use gpui::{Pixels, Point};
 
-use ink::{erase_and_split, StrokePt, ERASER_RADIUS};
+use ink::{ERASER_RADIUS, StrokePt, erase_and_split};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DrawTool {

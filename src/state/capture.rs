@@ -4,7 +4,7 @@ use std::time::Duration;
 use gpui::{AppContext, Context, Window};
 use image::RgbaImage;
 
-use super::intake::{is_ingest_image_path, IMAGE_EXTS};
+use super::intake::{IMAGE_EXTS, is_ingest_image_path};
 use super::session::Capture;
 use super::{AppState, MainWindowState};
 use crate::identity::APP_SLUG;

@@ -149,16 +149,27 @@ fn installed_models_dirs() -> Vec<PathBuf> {
 #[cfg(target_os = "windows")]
 fn installed_models_dirs() -> Vec<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
-    use windows::core::w;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::*;
+    use windows::core::w;
 
     let mut paths = Vec::new();
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
             let mut key = HKEY::default();
             unsafe {
-                if RegOpenKeyExW(root, w!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{4B509438-D116-4E0A-87F7-76023183DEA0}_is1"), None, KEY_QUERY_VALUE | view, &mut key) != ERROR_SUCCESS { continue; }
+                if RegOpenKeyExW(
+                    root,
+                    w!(
+                        "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{4B509438-D116-4E0A-87F7-76023183DEA0}_is1"
+                    ),
+                    None,
+                    KEY_QUERY_VALUE | view,
+                    &mut key,
+                ) != ERROR_SUCCESS
+                {
+                    continue;
+                }
                 let mut bytes = 0;
                 let flags = RRF_RT_REG_SZ;
                 if RegGetValueW(

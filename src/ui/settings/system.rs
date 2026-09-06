@@ -1,14 +1,14 @@
 use gpui::{
-    div, prelude::*, px, relative, rgb, svg, AnyElement, Entity, FocusHandle, MouseButton,
-    SharedString, Window,
+    AnyElement, Entity, FocusHandle, MouseButton, SharedString, Window, div, prelude::*, px,
+    relative, rgb, svg,
 };
 
 use super::super::theme;
-use super::super::widgets::{settings_group, Tooltip};
+use super::super::widgets::{Tooltip, settings_group};
 use super::SettingsPane;
 use crate::ocr::{ModelInfo, ModelRuntimeState};
 use crate::state::AppState;
-use crate::sysmon::{fmt_bytes, fmt_used_total, SysSnapshot};
+use crate::sysmon::{SysSnapshot, fmt_bytes, fmt_used_total};
 
 pub(super) fn system_page(
     settings: Entity<SettingsPane>,

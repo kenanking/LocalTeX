@@ -14,8 +14,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_LOWER_IL_INJECTED, LLKHF_UP, MSG, WH_KEYBOARD_LL,
+    CallNextHookEx, DispatchMessageW, GetMessageW, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+    LLKHF_LOWER_IL_INJECTED, LLKHF_UP, MSG, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL,
 };
 
 use super::DesktopCmd;
@@ -332,7 +332,7 @@ fn dispatch_chord(lparam: LPARAM) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        consider_event, gpui_key_to_vk, set_chords, HookState, PhysicalMods, WinChord, WIN_CHORDS,
+        HookState, PhysicalMods, WIN_CHORDS, WinChord, consider_event, gpui_key_to_vk, set_chords,
     };
     use crate::desktop::DesktopCmd;
 
@@ -426,12 +426,16 @@ mod tests {
         ]);
         let grabs = WIN_CHORDS.read().unwrap();
         assert_eq!(grabs.len(), 2);
-        assert!(grabs
-            .iter()
-            .any(|g| g.vk == VK_L && g.cmd == DesktopCmd::Show));
-        assert!(grabs
-            .iter()
-            .any(|g| g.vk == VK_M && g.cmd == DesktopCmd::Capture));
+        assert!(
+            grabs
+                .iter()
+                .any(|g| g.vk == VK_L && g.cmd == DesktopCmd::Show)
+        );
+        assert!(
+            grabs
+                .iter()
+                .any(|g| g.vk == VK_M && g.cmd == DesktopCmd::Capture)
+        );
     }
 
     #[test]

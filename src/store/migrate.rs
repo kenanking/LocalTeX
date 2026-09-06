@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
-use rusqlite::{params, Connection};
+use anyhow::{Result, anyhow};
+use rusqlite::{Connection, params};
 
 pub(super) const SCHEMA_VERSION: i32 = 3;
 
@@ -172,7 +172,7 @@ mod tests {
     use crate::doc::{Block, BlockKind, DocStatus, ImageSlot, Rect};
     use crate::store::{DateRange, Store};
     use image::{Rgba, RgbaImage};
-    use rusqlite::{params, Connection};
+    use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::SystemTime;
@@ -183,10 +183,12 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE snips(id TEXT PRIMARY KEY NOT NULL, created_at INTEGER NOT NULL, first_line TEXT NOT NULL, blocks_json TEXT NOT NULL, search_text TEXT NOT NULL, thumb_jpeg BLOB NOT NULL, ocr_s REAL, confidence REAL, ocr_blocks_json TEXT NOT NULL); PRAGMA user_version = 2; INSERT INTO snips VALUES ('id', 1, 'edited', '[]', 'edited', X'', NULL, NULL, '[original]'); CREATE TABLE snips_created_at(conflict TEXT);").unwrap();
         assert!(super::migrate(&conn).is_err());
-        assert!(!super::snips_column_names(&conn)
-            .unwrap()
-            .iter()
-            .any(|name| name == "raw_text"));
+        assert!(
+            !super::snips_column_names(&conn)
+                .unwrap()
+                .iter()
+                .any(|name| name == "raw_text")
+        );
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
@@ -260,9 +262,11 @@ mod tests {
             .unwrap();
 
         assert!(!columns.iter().any(|(name, _)| name == "image_relpath"));
-        assert!(columns
-            .iter()
-            .any(|(name, not_null)| name == "ocr_blocks_json" && *not_null));
+        assert!(
+            columns
+                .iter()
+                .any(|(name, not_null)| name == "ocr_blocks_json" && *not_null)
+        );
     }
 
     #[test]
