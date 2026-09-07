@@ -41,7 +41,7 @@ use gpui::{
 
 use crate::actions::{
     Capture, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp, RetryOcr,
-    StartDraw, ToggleFormat, ToggleSidebar, UploadImage,
+    StartDraw, ToggleSidebar, UploadImage,
 };
 use crate::i18n::t;
 use crate::identity::{APP_ID, APP_NAME};
@@ -246,10 +246,7 @@ pub(crate) fn set_app_menus(cx: &mut App) {
         Menu {
             name: t("menu.view").into(),
             disabled: false,
-            items: vec![
-                MenuItem::action(t("menu.toggle_format"), ToggleFormat),
-                MenuItem::action(t("menu.toggle_sidebar"), ToggleSidebar),
-            ],
+            items: vec![MenuItem::action(t("menu.toggle_sidebar"), ToggleSidebar)],
         },
     ]);
 }

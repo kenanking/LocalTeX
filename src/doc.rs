@@ -17,28 +17,10 @@ pub enum BlockKind {
     Table,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFmt {
-    #[default]
     Markdown,
     Latex,
-}
-
-impl ExportFmt {
-    pub fn toggle(self) -> Self {
-        match self {
-            ExportFmt::Markdown => ExportFmt::Latex,
-            ExportFmt::Latex => ExportFmt::Markdown,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ExportFmt::Markdown => "Markdown",
-            ExportFmt::Latex => "LaTeX",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,11 +302,6 @@ impl Document {
         out
     }
 
-    #[cfg(test)]
-    pub fn primary_copy(&self, fmt: ExportFmt, prefs: &crate::prefs::Prefs) -> String {
-        self.text_for(CopyKind::primary(self.snip_kind(), fmt), prefs)
-    }
-
     pub fn text_for(&self, kind: CopyKind, prefs: &crate::prefs::Prefs) -> String {
         if self.source_pending || self.source_error.is_some() {
             return self.raw_text.clone().unwrap_or_default();
@@ -423,28 +400,19 @@ mod tests {
     fn copy_habit_ignores_inapplicable_and_isolates_kinds() {
         let mut h = CopyHabit::default();
         assert!(!h.remember(SnipKind::Formula, CopyKind::Tsv));
-        assert_eq!(
-            h.resolve(SnipKind::Formula, ExportFmt::Markdown),
-            CopyKind::MdDisplay
-        );
+        assert_eq!(h.resolve(SnipKind::Formula), CopyKind::MdDisplay);
 
         assert!(h.remember(SnipKind::Table, CopyKind::Tsv));
         assert!(!h.remember(SnipKind::Table, CopyKind::Tsv));
-        assert_eq!(
-            h.resolve(SnipKind::Formula, ExportFmt::Markdown),
-            CopyKind::MdDisplay
-        );
-        assert_eq!(h.resolve(SnipKind::Table, ExportFmt::Latex), CopyKind::Tsv);
+        assert_eq!(h.resolve(SnipKind::Formula), CopyKind::MdDisplay);
+        assert_eq!(h.resolve(SnipKind::Table), CopyKind::Tsv);
     }
 
     #[test]
     fn copy_habit_preferred_drops_inapplicable_slot() {
         let h: CopyHabit = serde_json::from_str(r#"{"formula":"md_table"}"#).unwrap();
         assert_eq!(h.preferred(SnipKind::Formula), None);
-        assert_eq!(
-            h.resolve(SnipKind::Formula, ExportFmt::Latex),
-            CopyKind::Latex
-        );
+        assert_eq!(h.resolve(SnipKind::Formula), CopyKind::MdDisplay);
     }
 
     #[test]
@@ -479,22 +447,26 @@ mod tests {
     }
 
     #[test]
-    fn primary_copy_shares_kind_table_with_habit_resolve() {
-        let mut doc = Document::pending(Arc::new(RgbaImage::new(1, 1)));
-        doc.status = DocStatus::Ready;
-        doc.blocks = vec![Block::new(BlockKind::Formula, rect(0), r"x^{2}")];
+    fn copy_habit_defaults_render_without_a_format_switch() {
         let prefs = crate::prefs::Prefs::default();
-        assert_eq!(
-            doc.primary_copy(ExportFmt::Markdown, &prefs),
-            doc.text_for(
-                CopyKind::primary(SnipKind::Formula, ExportFmt::Markdown),
-                &prefs
-            )
-        );
         let habit = CopyHabit::default();
+        let formula = vec![Block::new(BlockKind::Formula, rect(0), r"x^{2}")];
         assert_eq!(
-            habit.resolve(SnipKind::Formula, ExportFmt::Markdown),
-            CopyKind::primary(SnipKind::Formula, ExportFmt::Markdown)
+            habit.resolve(SnipKind::Formula).render(&formula, &prefs),
+            "$$\nx^{2}\n$$"
+        );
+        let table = vec![Block::new(
+            BlockKind::Table,
+            rect(0),
+            "<table><tr><td>A</td></tr><tr><td>B</td></tr></table>",
+        )];
+        let rendered = habit.resolve(SnipKind::Table).render(&table, &prefs);
+        assert!(rendered.contains("| A |"));
+        assert!(rendered.contains("| B |"));
+        let text = vec![Block::new(BlockKind::Text, rect(0), "Hello")];
+        assert_eq!(
+            habit.resolve(SnipKind::Mixed).render(&text, &prefs),
+            "Hello"
         );
     }
 

@@ -14,7 +14,6 @@ actions!(
         SelectNext,
         SelectPrev,
         DeleteSelected,
-        ToggleFormat,
         RetryOcr,
         QuitApp,
         CloseWindow,

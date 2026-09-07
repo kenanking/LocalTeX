@@ -79,15 +79,6 @@ settings.launch_at_startup:
 settings.launch_at_startup_hint:
   en: Keeps LocalTeX ready in the tray when you sign in.
   zh-CN: 登录系统后自动启动 LocalTeX，并驻留系统托盘。
-settings.copy:
-  en: Copy
-  zh-CN: 复制
-settings.default_copy_family:
-  en: Default copy format
-  zh-CN: 默认复制格式
-settings.default_copy_family_hint:
-  en: Used when the app starts. The Copy row switch changes only this session.
-  zh-CN: 应用启动时使用的默认格式。识别结果下方的格式切换仅在本次运行中生效。
 settings.math_delimiters:
   en: Math delimiters
   zh-CN: 公式定界符
@@ -257,9 +248,6 @@ shortcut.draw:
 shortcut.copy:
   en: Copy last format
   zh-CN: 按上次使用的格式复制
-shortcut.toggle_format:
-  en: Toggle Markdown / LaTeX copy
-  zh-CN: 切换复制格式（Markdown / LaTeX）
 shortcut.delete:
   en: Delete selected snip
   zh-CN: 删除当前记录
@@ -303,9 +291,6 @@ menu.retry_ocr:
 menu.view:
   en: View
   zh-CN: 视图
-menu.toggle_format:
-  en: Toggle Markdown / LaTeX copy
-  zh-CN: 切换复制格式（Markdown / LaTeX）
 menu.toggle_sidebar:
   en: Toggle Sidebar
   zh-CN: 显示或隐藏侧边栏
@@ -448,9 +433,6 @@ detail.copy:
 detail.copied:
   en: Copied
   zh-CN: 已复制
-detail.fallback_copy:
-  en: Fallback copy when this kind of snip has no remembered format.
-  zh-CN: 此类内容尚无上次使用的复制格式时，使用此默认格式。
 detail.preview_stale:
   en: Preview is not up to date
   zh-CN: 预览尚未更新

@@ -16,7 +16,7 @@ impl AppState {
         let kind = if doc.source_pending || doc.source_error.is_some() {
             CopyKind::Markdown
         } else {
-            self.prefs.copy_habit.resolve(snip, self.export_fmt)
+            self.prefs.copy_habit.resolve(snip)
         };
         let text = doc.text_for(kind, &self.prefs);
         if text.is_empty() {

@@ -28,8 +28,8 @@ use super::theme;
 use super::window_drag::{WindowDrag, WindowDragCatcher};
 use crate::actions::{
     Capture, CloseSheet, CloseWindow, CopyExport, DeleteSelected, OpenDocx, OpenSettings,
-    PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSidebar,
-    ToggleSource, UploadImage,
+    PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleSidebar, ToggleSource,
+    UploadImage,
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
@@ -608,10 +608,6 @@ impl MainWindow {
         self.state.update(cx, |state, cx| state.delete_selected(cx));
     }
 
-    fn toggle_format(&mut self, _: &ToggleFormat, _: &mut Window, cx: &mut Context<Self>) {
-        self.state.update(cx, |state, cx| state.toggle_format(cx));
-    }
-
     fn retry(&mut self, _: &RetryOcr, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.snip_list_focus, cx);
         self.state.update(cx, |state, cx| state.retry_selected(cx));
@@ -828,7 +824,6 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::select_prev))
             .on_action(cx.listener(Self::delete_selected))
-            .on_action(cx.listener(Self::toggle_format))
             .on_action(cx.listener(Self::retry))
             .on_action(cx.listener(Self::toggle_source))
             .on_action(cx.listener(Self::on_toggle_sidebar))

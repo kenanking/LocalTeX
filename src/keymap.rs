@@ -6,8 +6,7 @@ use gpui::{App, KeyBinding, Keystroke};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{
-    Capture, CopyExport, DeleteSelected, OpenSettings, PasteSnip, StartDraw, ToggleFormat,
-    UploadImage,
+    Capture, CopyExport, DeleteSelected, OpenSettings, PasteSnip, StartDraw, UploadImage,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -19,7 +18,6 @@ pub enum ShortcutId {
     Paste,
     Draw,
     Copy,
-    ToggleFormat,
     Delete,
     Settings,
 }
@@ -33,7 +31,6 @@ impl ShortcutId {
             Self::Paste => "paste",
             Self::Draw => "draw",
             Self::Copy => "copy",
-            Self::ToggleFormat => "toggle_format",
             Self::Delete => "delete",
             Self::Settings => "settings",
         }
@@ -82,6 +79,22 @@ impl Spec {
 
 /// Missing key means catalog default. JSON `null` means unbound.
 pub type Overrides = BTreeMap<ShortcutId, Option<String>>;
+
+/// Ignore removed or newer shortcut IDs without discarding the user's other settings.
+pub fn deserialize_overrides<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Overrides, D::Error> {
+    let raw = BTreeMap::<String, Option<String>>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(key, chord)| {
+            CATALOG
+                .iter()
+                .find(|spec| spec.id.as_str() == key)
+                .map(|spec| (spec.id, chord))
+        })
+        .collect())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssignError {
@@ -143,15 +156,6 @@ pub const CATALOG: &[Spec] = &[
         default: "ctrl-c",
         context: None,
         required: true,
-        os: None,
-    },
-    Spec {
-        id: ShortcutId::ToggleFormat,
-        group: Group::Document,
-        label: "shortcut.toggle_format",
-        default: "ctrl-l",
-        context: None,
-        required: false,
         os: None,
     },
     Spec {
@@ -380,9 +384,6 @@ fn bind_catalog(cx: &mut App, spec: &Spec, chord: &str) {
         }
         ShortcutId::Copy => {
             cx.bind_keys([KeyBinding::new(chord, CopyExport, spec.context)]);
-        }
-        ShortcutId::ToggleFormat => {
-            cx.bind_keys([KeyBinding::new(chord, ToggleFormat, spec.context)]);
         }
         ShortcutId::Delete => {
             cx.bind_keys([KeyBinding::new(chord, DeleteSelected, spec.context)]);

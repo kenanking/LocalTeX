@@ -6,7 +6,6 @@ use std::thread::JoinHandle;
 
 use serde::{Deserialize, Serialize};
 
-use crate::doc::ExportFmt;
 use crate::identity::{self, APP_SLUG};
 use crate::keymap;
 
@@ -133,8 +132,6 @@ pub enum WindowCloseAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prefs {
-    #[serde(default)]
-    pub default_fmt: ExportFmt,
     #[serde(default = "default_true")]
     pub autocopy: bool,
     #[serde(default)]
@@ -161,7 +158,7 @@ pub struct Prefs {
     #[serde(default)]
     pub sidebar_pinned_collapsed: bool,
     /// Catalog overrides only. Missing key = default. `null` = unbound.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "keymap::deserialize_overrides")]
     pub shortcuts: keymap::Overrides,
     #[serde(default)]
     pub reading_width: ReadingWidth,
@@ -186,7 +183,6 @@ fn default_orig_strip_h() -> f32 {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
-            default_fmt: ExportFmt::Markdown,
             autocopy: true,
             copy_habit: crate::export::CopyHabit::default(),
             show_original: true,
@@ -414,22 +410,35 @@ mod tests {
     }
 
     #[test]
-    fn view_format_toggle_does_not_mutate_persisted_default() {
-        let prefs = Prefs::default();
-        let session = prefs.default_fmt.toggle();
-        assert_eq!(session, ExportFmt::Latex);
-        assert_eq!(prefs.default_fmt, ExportFmt::Markdown);
-    }
-
-    #[test]
-    fn default_fmt_round_trips_in_settings_json() {
-        let prefs = Prefs {
-            default_fmt: ExportFmt::Latex,
-            ..Prefs::default()
-        };
-        let raw = serde_json::to_string(&prefs).unwrap();
-        let loaded: Prefs = serde_json::from_str(&raw).unwrap();
-        assert_eq!(loaded.default_fmt, ExportFmt::Latex);
+    fn obsolete_format_settings_preserve_other_preferences() {
+        let prefs: Prefs = serde_json::from_str(
+            r#"{
+            "default_fmt": "latex",
+            "autocopy": false,
+            "ui_lang": "chinese",
+            "copy_habit": {"formula": "latex"},
+            "shortcuts": {"toggle_format": "ctrl-shift-l", "draw": "ctrl-shift-d", "upload": null}
+        }"#,
+        )
+        .unwrap();
+        assert!(!prefs.autocopy);
+        assert_eq!(prefs.ui_lang, crate::i18n::UiLang::Chinese);
+        assert_eq!(
+            prefs.copy_habit.resolve(crate::doc::SnipKind::Formula),
+            crate::export::CopyKind::Latex
+        );
+        assert_eq!(
+            keymap::effective(&prefs.shortcuts, crate::keymap::ShortcutId::Draw).as_deref(),
+            Some("ctrl-shift-d")
+        );
+        assert_eq!(
+            keymap::effective(&prefs.shortcuts, crate::keymap::ShortcutId::Upload),
+            None
+        );
+        assert_eq!(prefs.shortcuts.len(), 2);
+        let saved = serde_json::to_value(&prefs).unwrap();
+        assert!(saved.get("default_fmt").is_none());
+        assert!(saved["shortcuts"].get("toggle_format").is_none());
     }
 
     #[test]

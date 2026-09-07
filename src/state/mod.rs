@@ -6,7 +6,7 @@ use gpui::{App, AppContext, Context, Window, WindowHandle};
 use uuid::Uuid;
 
 use crate::desktop::DesktopCmd;
-use crate::doc::{Document, ExportFmt};
+use crate::doc::Document;
 use crate::i18n::t;
 use crate::identity::APP_SLUG;
 use crate::keymap::{self, AssignError, ShortcutId};
@@ -84,7 +84,6 @@ impl MainWindowState {
 
 pub struct AppState {
     library: Library,
-    export_fmt: ExportFmt,
     pub prefs: Prefs,
     prefs_writer: Option<PrefsWriter>,
     autostart_pending: bool,
@@ -113,7 +112,6 @@ impl AppState {
             .ok();
         Self {
             library: Library::new(),
-            export_fmt: prefs.default_fmt,
             prefs,
             prefs_writer,
             autostart_pending: false,
@@ -487,22 +485,6 @@ impl AppState {
         let next = (idx + delta).clamp(0, self.visible_ids().len() as isize - 1) as usize;
         let id = self.visible_ids()[next];
         self.select(id, cx);
-    }
-
-    pub fn export_fmt(&self) -> ExportFmt {
-        self.export_fmt
-    }
-
-    pub fn set_export_fmt(&mut self, fmt: ExportFmt, cx: &mut Context<Self>) {
-        if self.export_fmt == fmt {
-            return;
-        }
-        self.export_fmt = fmt;
-        cx.notify();
-    }
-
-    pub fn toggle_format(&mut self, cx: &mut Context<Self>) {
-        self.set_export_fmt(self.export_fmt.toggle(), cx);
     }
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {

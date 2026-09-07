@@ -2,7 +2,6 @@ use gpui::{Entity, div, prelude::*};
 
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{patch_prefs, picker};
-use crate::doc::ExportFmt;
 use crate::i18n::t;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs, ReadingWidth};
 use crate::state::AppState;
@@ -14,47 +13,6 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
         .gap_4()
         .w_full()
         .min_w_0()
-        .child(settings_group(
-            t("settings.copy"),
-            vec![
-                setting_row(
-                    t("settings.default_copy_family"),
-                    t("settings.default_copy_family_hint"),
-                    picker(
-                        210.,
-                        [
-                            seg_item(
-                                "pref-fmt-md",
-                                ExportFmt::Markdown.label(),
-                                prefs.default_fmt == ExportFmt::Markdown,
-                                {
-                                    let state = state.clone();
-                                    move |_, cx| {
-                                        patch_prefs(&state, cx, |p| {
-                                            p.default_fmt = ExportFmt::Markdown
-                                        })
-                                    }
-                                },
-                            ),
-                            seg_item(
-                                "pref-fmt-tex",
-                                ExportFmt::Latex.label(),
-                                prefs.default_fmt == ExportFmt::Latex,
-                                {
-                                    let state = state.clone();
-                                    move |_, cx| {
-                                        patch_prefs(&state, cx, |p| {
-                                            p.default_fmt = ExportFmt::Latex
-                                        })
-                                    }
-                                },
-                            ),
-                        ],
-                    ),
-                )
-                .into_any_element(),
-            ],
-        ))
         .child(settings_group(
             t("settings.math_delimiters"),
             vec![

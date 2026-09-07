@@ -13,11 +13,9 @@ use super::scroll::{
     ScrollAxis, ScrollbarTone, overlay_chrome_hovered, overlay_pointer_in_pane, overlay_scrollbar,
 };
 use super::theme;
-use super::widgets::{
-    IconKind, Tooltip, btn, copy_chip, kbd_chip, ocr_meta_bar, section_label, seg_item, segmented,
-};
+use super::widgets::{IconKind, btn, copy_chip, kbd_chip, ocr_meta_bar, section_label};
 use super::window_drag::WindowDrag;
-use crate::doc::{DocStatus, ExportFmt, ImageSlot, OcrMeta};
+use crate::doc::{DocStatus, ImageSlot, OcrMeta};
 use crate::export::CopyKind;
 use crate::i18n::t;
 use crate::keymap::{self, ShortcutId};
@@ -56,9 +54,6 @@ impl MainWindow {
                 first_line: doc.first_line(),
                 can_retry: doc.can_retry(),
                 ocr: doc.ocr,
-                export_fmt: state.export_fmt(),
-                format_chord: keymap::effective(&state.prefs.shortcuts, ShortcutId::ToggleFormat)
-                    .map(|c| keymap::chips(&c).join("+")),
                 image_missing: matches!(doc.image, ImageSlot::Missing),
                 show_original: state.prefs.show_original,
                 orig_strip_h: state.prefs.orig_strip_h,
@@ -329,18 +324,7 @@ impl MainWindow {
                     .child(preview_pane)
             })
             .when(ready, |d| {
-                d.child(self.render_copy_rows(
-                    CopyRowsView {
-                        doc_id,
-                        rows: &copy_rows,
-                        copied,
-                        ocr,
-                        export_fmt: snap.export_fmt,
-                        format_chord: snap.format_chord.as_deref(),
-                        pane_w: copy_pane_w,
-                    },
-                    cx,
-                ))
+                d.child(self.render_copy_rows(doc_id, &copy_rows, copied, ocr, copy_pane_w, cx))
             })
     }
 
@@ -522,18 +506,13 @@ impl MainWindow {
 
     fn render_copy_rows(
         &self,
-        view: CopyRowsView<'_>,
+        doc_id: Uuid,
+        rows: &[DerivedCopyRow],
+        copied: Option<(Uuid, CopyKind)>,
+        ocr: Option<OcrMeta>,
+        pane_w: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let CopyRowsView {
-            doc_id,
-            rows,
-            copied,
-            ocr,
-            export_fmt,
-            format_chord,
-            pane_w,
-        } = view;
         let current = self.state.read(cx).selected_doc().is_some_and(|doc| {
             !doc.source_pending
                 && doc.source_error.is_none()
@@ -543,12 +522,6 @@ impl MainWindow {
                     .as_ref()
                     .is_some_and(|d| d.id == doc.id && d.revision == doc.revision)
         });
-        let format_tip = match format_chord {
-            Some(chord) => format!("{} {chord}", t("detail.fallback_copy")),
-            None => t("detail.fallback_copy"),
-        };
-        let state_md = self.state.clone();
-        let state_tex = self.state.clone();
         let mut col = div()
             .w_full()
             .px_4()
@@ -557,44 +530,7 @@ impl MainWindow {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(section_label(t("detail.copy")))
-                    .child(
-                        div()
-                            .w(px(168.))
-                            .flex_shrink_0()
-                            .id("copy-export-fmt")
-                            .tooltip(Tooltip::text(format_tip))
-                            .child(segmented([
-                                seg_item(
-                                    "copy-fmt-md",
-                                    ExportFmt::Markdown.label(),
-                                    export_fmt == ExportFmt::Markdown,
-                                    move |_, cx| {
-                                        state_md.update(cx, |s, cx| {
-                                            s.set_export_fmt(ExportFmt::Markdown, cx)
-                                        });
-                                    },
-                                ),
-                                seg_item(
-                                    "copy-fmt-tex",
-                                    ExportFmt::Latex.label(),
-                                    export_fmt == ExportFmt::Latex,
-                                    move |_, cx| {
-                                        state_tex.update(cx, |s, cx| {
-                                            s.set_export_fmt(ExportFmt::Latex, cx)
-                                        });
-                                    },
-                                ),
-                            ])),
-                    ),
-            );
+            .child(section_label(t("detail.copy")));
 
         // GPUI will not grow an `.id()` node, so each wrap-line is a `w_full` flex
         // row and the chip *wrapper* is `flex_1` (fills the same inset as the preview).
@@ -647,24 +583,12 @@ impl MainWindow {
     }
 }
 
-struct CopyRowsView<'a> {
-    doc_id: Uuid,
-    rows: &'a [DerivedCopyRow],
-    copied: Option<(Uuid, CopyKind)>,
-    ocr: Option<OcrMeta>,
-    export_fmt: ExportFmt,
-    format_chord: Option<&'a str>,
-    pane_w: f32,
-}
-
 struct DetailSnap {
     id: Uuid,
     status: DocStatus,
     first_line: String,
     can_retry: bool,
     ocr: Option<OcrMeta>,
-    export_fmt: ExportFmt,
-    format_chord: Option<String>,
     image_missing: bool,
     show_original: bool,
     orig_strip_h: f32,

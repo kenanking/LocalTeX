@@ -87,18 +87,6 @@ impl CopyKind {
         }
     }
 
-    /// Coarse fallback used when the habit slot is empty or inapplicable.
-    pub fn primary(snip: SnipKind, fmt: ExportFmt) -> Self {
-        match (snip, fmt) {
-            (SnipKind::Formula, ExportFmt::Markdown) => Self::MdDisplay,
-            (SnipKind::Formula, ExportFmt::Latex) => Self::Latex,
-            (SnipKind::Table, ExportFmt::Markdown) => Self::MdTable,
-            (SnipKind::Table, ExportFmt::Latex) => Self::LatexTable,
-            (SnipKind::Mixed, ExportFmt::Markdown) => Self::Markdown,
-            (SnipKind::Mixed, ExportFmt::Latex) => Self::LatexDoc,
-        }
-    }
-
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.id() == id)
     }
@@ -155,9 +143,12 @@ impl CopyHabit {
         self.slot(snip).filter(|k| k.applies_to(snip))
     }
 
-    pub fn resolve(&self, snip: SnipKind, fmt: ExportFmt) -> CopyKind {
-        self.preferred(snip)
-            .unwrap_or_else(|| CopyKind::primary(snip, fmt))
+    pub fn resolve(&self, snip: SnipKind) -> CopyKind {
+        self.preferred(snip).unwrap_or(match snip {
+            SnipKind::Formula => CopyKind::MdDisplay,
+            SnipKind::Table => CopyKind::MdTable,
+            SnipKind::Mixed => CopyKind::Markdown,
+        })
     }
 }
 
