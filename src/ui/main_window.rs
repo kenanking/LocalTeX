@@ -28,8 +28,8 @@ use super::theme;
 use super::window_drag::{WindowDrag, WindowDragCatcher};
 use crate::actions::{
     Capture, CloseSheet, CloseWindow, CopyExport, DeleteSelected, OpenDocx, OpenSettings,
-    PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSource,
-    UploadImage,
+    PasteSnip, QuitApp, RetryOcr, SelectNext, SelectPrev, StartDraw, ToggleFormat, ToggleSidebar,
+    ToggleSource, UploadImage,
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
@@ -620,6 +620,15 @@ impl MainWindow {
         self.set_source_open(!self.source_panel.open, window, cx);
     }
 
+    fn on_toggle_sidebar(
+        &mut self,
+        _: &ToggleSidebar,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_sidebar(window, cx);
+    }
+
     fn quit(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
         self.state.update(cx, |state, cx| state.request_quit(cx));
     }
@@ -818,6 +827,7 @@ impl gpui::Render for MainWindow {
             .on_action(cx.listener(Self::toggle_format))
             .on_action(cx.listener(Self::retry))
             .on_action(cx.listener(Self::toggle_source))
+            .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::close_window))
             .on_drag_move::<ExternalPaths>(cx.listener(Self::on_file_drag_move))

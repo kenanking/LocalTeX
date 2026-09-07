@@ -19,6 +19,7 @@ actions!(
         QuitApp,
         CloseWindow,
         ToggleSource,
+        ToggleSidebar,
         DrawPen,
         DrawEraser,
         DrawUndo,

@@ -340,9 +340,9 @@ impl MainWindow {
                 IconKind::Collapse
             },
             if collapsed {
-                "Expand snips"
+                "Expand snips (Ctrl+B)"
             } else {
-                "Collapse sidebar"
+                "Collapse sidebar (Ctrl+B)"
             },
             false,
             true,

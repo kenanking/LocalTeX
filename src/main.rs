@@ -38,7 +38,7 @@ use gpui::{
 
 use crate::actions::{
     Capture, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp, RetryOcr,
-    StartDraw, ToggleFormat, UploadImage,
+    StartDraw, ToggleFormat, ToggleSidebar, UploadImage,
 };
 use crate::identity::{APP_ID, APP_NAME};
 use crate::state::AppState;
@@ -241,7 +241,10 @@ fn set_app_menus(cx: &mut App) {
         Menu {
             name: "View".into(),
             disabled: false,
-            items: vec![MenuItem::action("Toggle Markdown / LaTeX", ToggleFormat)],
+            items: vec![
+                MenuItem::action("Toggle Markdown / LaTeX", ToggleFormat),
+                MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            ],
         },
     ]);
 }

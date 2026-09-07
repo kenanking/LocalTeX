@@ -308,7 +308,7 @@ pub fn to_global_hotkey(chord: &str) -> Option<HotKey> {
 pub fn apply(cx: &mut App, over: &Overrides) {
     use crate::actions::{
         CloseSheet, CloseWindow, DrawEraser, DrawPen, DrawRedo, DrawUndo, QuitApp, RetryOcr,
-        SelectNext, SelectPrev, ToggleSource,
+        SelectNext, SelectPrev, ToggleSidebar, ToggleSource,
     };
     cx.clear_key_bindings();
     cx.bind_keys([
@@ -328,6 +328,7 @@ pub fn apply(cx: &mut App, over: &Overrides) {
         ),
         KeyBinding::new("ctrl-r", RetryOcr, None),
         KeyBinding::new("ctrl-e", ToggleSource, None),
+        KeyBinding::new("ctrl-b", ToggleSidebar, None),
         KeyBinding::new("ctrl-q", QuitApp, None),
         KeyBinding::new("ctrl-w", CloseWindow, None),
     ]);
