@@ -293,6 +293,7 @@ impl SettingsPane {
                                             &self.sys_snap,
                                             &model_info,
                                             snip_count,
+                                            state.read(cx).is_ram_only(),
                                         ))
                                     }),
                             ),

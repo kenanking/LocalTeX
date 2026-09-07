@@ -277,6 +277,8 @@ pub struct RecognizeOut {
     pub text: String,
     pub encode_s: f64,
     pub decode_s: f64,
+    /// Mean top-1 softmax over generated tokens (SOS/EOS excluded).
+    pub confidence: Option<f32>,
 }
 
 impl InkTex {
@@ -366,6 +368,8 @@ impl InkTex {
 
         let mut generated: Vec<i64> = vec![self.vocab.sos];
         let mut decode_s = 0.0f64;
+        let mut p_sum = 0.0f32;
+        let mut p_n = 0usize;
         for _ in 0..(MAX_LEN - 1) {
             let current = *generated.last().unwrap();
             let tgt_last = Tensor::from_array((vec![1i64, 1], vec![current]))?;
@@ -383,9 +387,10 @@ impl InkTex {
             let mut out = self.decoder.run(inputs)?;
             decode_s += t0.elapsed().as_secs_f64();
 
-            let next = {
+            let (next, p_top1) = {
                 let (_shape, logits) = out["logits"].try_extract_tensor::<f32>()?;
-                argmax(logits)
+                let (idx, p) = super::unirec::softmax_top1(logits);
+                (idx as i64, p)
             };
             self_k = out
                 .remove("self_k_out")
@@ -397,31 +402,33 @@ impl InkTex {
             if next == self.vocab.eos {
                 break;
             }
+            p_sum += p_top1;
+            p_n += 1;
         }
 
         Ok(RecognizeOut {
             text: self.vocab.decode_ids(&generated),
             encode_s,
             decode_s,
+            confidence: token_confidence(p_sum, p_n),
         })
     }
 }
 
-fn argmax(xs: &[f32]) -> i64 {
-    let mut best = 0i64;
-    let mut best_v = f32::NEG_INFINITY;
-    for (i, &v) in xs.iter().enumerate() {
-        if v > best_v {
-            best_v = v;
-            best = i as i64;
-        }
-    }
-    best
+fn token_confidence(p_sum: f32, p_n: usize) -> Option<f32> {
+    (p_n > 0).then(|| (p_sum / p_n as f32).clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_confidence_is_mean_top1() {
+        assert_eq!(token_confidence(1.5, 2), Some(0.75));
+        assert_eq!(token_confidence(0.0, 0), None);
+        assert_eq!(token_confidence(2.0, 1), Some(1.0));
+    }
 
     #[test]
     fn extract_empty_is_empty() {

@@ -419,6 +419,17 @@ mod tests {
     }
 
     #[test]
+    fn default_fmt_round_trips_in_settings_json() {
+        let prefs = Prefs {
+            default_fmt: ExportFmt::Latex,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&prefs).unwrap();
+        let loaded: Prefs = serde_json::from_str(&raw).unwrap();
+        assert_eq!(loaded.default_fmt, ExportFmt::Latex);
+    }
+
+    #[test]
     fn sidebar_pinned_collapsed_defaults_false_when_missing() {
         let p: Prefs = serde_json::from_str("{}").unwrap();
         assert!(!p.sidebar_pinned_collapsed);

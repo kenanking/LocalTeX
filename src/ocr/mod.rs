@@ -203,7 +203,12 @@ impl Engine {
         let mut traces = traces.to_vec();
         inktex::deburst(&mut traces);
         let result = ink.recognize(&traces).map(|out| {
-            ink_formula_result(out.text, image_size, (out.encode_s + out.decode_s) as f32)
+            ink_formula_result(
+                out.text,
+                image_size,
+                (out.encode_s + out.decode_s) as f32,
+                out.confidence,
+            )
         });
         drop(traces);
         drop(guard);
@@ -355,7 +360,12 @@ fn load_ink(dir: &Path) -> Result<InkTex> {
     Ok(ink)
 }
 
-fn ink_formula_result(text: String, (w, h): (u32, u32), elapsed_s: f32) -> OcrResult {
+fn ink_formula_result(
+    text: String,
+    (w, h): (u32, u32),
+    elapsed_s: f32,
+    confidence: Option<f32>,
+) -> OcrResult {
     let mut block = Block::new(
         BlockKind::Formula,
         Rect {
@@ -371,7 +381,7 @@ fn ink_formula_result(text: String, (w, h): (u32, u32), elapsed_s: f32) -> OcrRe
         blocks: vec![block],
         meta: Some(OcrMeta {
             elapsed_s,
-            confidence: 1.0,
+            confidence,
         }),
     }
 }
@@ -646,13 +656,16 @@ mod tests {
 
     #[test]
     fn ink_result_is_display_formula() {
-        let out = ink_formula_result("a+b".into(), (64, 32), 0.01);
+        let out = ink_formula_result("a+b".into(), (64, 32), 0.01, Some(0.81));
         assert_eq!(out.blocks.len(), 1);
         assert_eq!(out.blocks[0].kind, BlockKind::Formula);
         assert_eq!(out.blocks[0].text, "a+b");
         assert!(out.blocks[0].display);
         assert_eq!(out.blocks[0].bbox.w, 64);
         assert_eq!(out.blocks[0].bbox.h, 32);
+        let meta = out.meta.expect("ink meta");
+        assert!((meta.elapsed_s - 0.01).abs() < 1e-6);
+        assert_eq!(meta.confidence, Some(0.81));
     }
 
     #[test]

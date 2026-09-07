@@ -738,27 +738,30 @@ pub fn copy_chip(
     )
 }
 
+pub fn ocr_bar_label(meta: OcrMeta) -> String {
+    match meta.confidence {
+        Some(confidence) => format!(
+            "{}% · {:.2} s",
+            (confidence * 100.0).round() as i32,
+            meta.elapsed_s
+        ),
+        None => format!("{:.2} s", meta.elapsed_s),
+    }
+}
+
 pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
-    let color = if meta.confidence >= 0.85 {
-        theme::OK
-    } else if meta.confidence >= 0.65 {
-        theme::WARN
-    } else {
-        theme::DANGER
-    };
-    let width = meta.confidence.clamp(0.0, 1.0);
-    let label = format!(
-        "{}% · {:.2} s",
-        (meta.confidence * 100.0).round() as i32,
-        meta.elapsed_s
-    );
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .pt_1()
-        .min_w_0()
-        .child(
+    let shown = meta.confidence;
+    let label = ocr_bar_label(meta);
+    let mut row = div().flex().items_center().gap_2().pt_1().min_w_0();
+    if let Some(confidence) = shown {
+        let color = if confidence >= 0.85 {
+            theme::OK
+        } else if confidence >= 0.65 {
+            theme::WARN
+        } else {
+            theme::DANGER
+        };
+        row = row.child(
             div()
                 .flex_1()
                 .h(px(4.))
@@ -769,25 +772,42 @@ pub fn ocr_meta_bar(meta: OcrMeta) -> impl IntoElement {
                 .child(
                     div()
                         .h_full()
-                        .w(relative(width))
+                        .w(relative(confidence.clamp(0.0, 1.0)))
                         .rounded_full()
                         .bg(rgb(color)),
                 ),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .child(label),
-        )
+        );
+    }
+    row.child(
+        div()
+            .flex_shrink_0()
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child(label),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::IconKind;
+    use super::ocr_bar_label;
+    use crate::doc::OcrMeta;
     use crate::icon::Assets;
     use gpui::AssetSource;
+
+    #[test]
+    fn ocr_bar_omits_percentage_without_confidence() {
+        let meta = OcrMeta {
+            elapsed_s: 0.41,
+            confidence: None,
+        };
+        assert_eq!(ocr_bar_label(meta), "0.41 s");
+        let scored = OcrMeta {
+            elapsed_s: 0.41,
+            confidence: Some(0.72),
+        };
+        assert_eq!(ocr_bar_label(scored), "72% · 0.41 s");
+    }
 
     #[test]
     fn every_toolbar_kind_has_an_embedded_asset() {

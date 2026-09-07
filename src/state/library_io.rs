@@ -96,6 +96,7 @@ impl AppState {
 
     pub(super) fn persist_ready(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(writer) = self.store_writer() else {
+            self.enqueue_ocr_if_recognizing(id, cx);
             return;
         };
         let Some(doc) = self.library.get(id) else {
@@ -130,6 +131,17 @@ impl AppState {
             eprintln!("{APP_SLUG}: queue persist snip: {err:#}");
             self.flash_error("Couldn't save that snip", cx);
             self.schedule_persist_retry(id, cx);
+            self.enqueue_ocr_if_recognizing(id, cx);
+        }
+    }
+
+    fn enqueue_ocr_if_recognizing(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self
+            .library
+            .get(id)
+            .is_some_and(|doc| should_enqueue_ocr(&doc.status))
+        {
+            self.enqueue_ocr(id, cx);
         }
     }
 
@@ -433,6 +445,7 @@ impl AppState {
                 eprintln!("{APP_SLUG}: persist snip: {err:#}");
                 self.flash_error("Couldn't save that snip", cx);
                 self.schedule_persist_retry(id, cx);
+                self.enqueue_ocr_if_recognizing(id, cx);
             }
             (WriteKind::UpdateOcr { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: persist OCR {id}: {err:#}");
@@ -477,5 +490,21 @@ impl AppState {
             });
         })
         .detach();
+    }
+}
+
+fn should_enqueue_ocr(status: &DocStatus) -> bool {
+    matches!(status, DocStatus::Recognizing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizing_is_the_only_status_that_enqueues() {
+        assert!(should_enqueue_ocr(&DocStatus::Recognizing));
+        assert!(!should_enqueue_ocr(&DocStatus::Ready));
+        assert!(!should_enqueue_ocr(&DocStatus::Failed("disk".into())));
     }
 }

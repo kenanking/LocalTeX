@@ -18,6 +18,7 @@ use crate::state::AppState;
 pub(crate) const CAPTION_H: f32 = 32.0;
 pub(crate) const TOOLBAR_H: f32 = 44.0;
 pub(crate) const FOOTER_H: f32 = 28.0;
+pub(crate) const RAM_ONLY_STATUS: &str = "Library is in memory only · snips will be lost on quit";
 
 struct ToolbarState {
     capturing: bool,
@@ -513,7 +514,18 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     }
     match state.engine_status() {
         status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
-        EngineStatus::Ready => (theme::StatusKind::Ready, "Ready when you are".into()),
+        EngineStatus::Ready => {
+            let (kind, label) = ready_library_status(state.is_ram_only());
+            (kind, label.into())
+        }
+    }
+}
+
+fn ready_library_status(ram_only: bool) -> (theme::StatusKind, &'static str) {
+    if ram_only {
+        (theme::StatusKind::Idle, RAM_ONLY_STATUS)
+    } else {
+        (theme::StatusKind::Ready, "Ready when you are")
     }
 }
 
@@ -521,6 +533,20 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
 mod client_frame_tests {
     use super::*;
     use gpui::size;
+
+    #[test]
+    fn ready_status_warns_when_library_is_ram_only() {
+        assert!(matches!(
+            ready_library_status(true).0,
+            theme::StatusKind::Idle
+        ));
+        assert_eq!(ready_library_status(true).1, RAM_ONLY_STATUS);
+        assert!(matches!(
+            ready_library_status(false).0,
+            theme::StatusKind::Ready
+        ));
+        assert_eq!(ready_library_status(false).1, "Ready when you are");
+    }
 
     #[test]
     fn resize_edges_respect_tiling() {

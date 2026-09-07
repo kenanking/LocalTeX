@@ -98,13 +98,10 @@ impl Store {
                     continue;
                 }
             };
-            let ocr = match (ocr_s, confidence) {
-                (Some(elapsed_s), Some(confidence)) => Some(OcrMeta {
-                    elapsed_s: elapsed_s as f32,
-                    confidence: confidence as f32,
-                }),
-                _ => None,
-            };
+            let ocr = ocr_s.map(|elapsed_s| OcrMeta {
+                elapsed_s: elapsed_s as f32,
+                confidence: confidence.map(|value| value as f32),
+            });
             out.push(SnipListItem {
                 id,
                 created_at: system_time_from_ms(ms),
@@ -223,7 +220,7 @@ impl Store {
                 search_text,
                 thumb.clone(),
                 doc.ocr.map(|m| m.elapsed_s as f64),
-                doc.ocr.map(|m| m.confidence as f64),
+                doc.ocr.and_then(|m| m.confidence).map(|c| c as f64),
                 ocr_json,
                 doc.raw_text,
                 status_fields(&doc.status).0,
@@ -257,7 +254,7 @@ impl Store {
                 blocks_json,
                 search_text,
                 doc.ocr.map(|m| m.elapsed_s as f64),
-                doc.ocr.map(|m| m.confidence as f64),
+                doc.ocr.and_then(|m| m.confidence).map(|c| c as f64),
                 ocr_json,
                 doc.id.to_string(),
                 doc.raw_text,
@@ -762,7 +759,7 @@ mod tests {
         retry.id = id;
         retry.ocr = Some(OcrMeta {
             elapsed_s: 0.5,
-            confidence: 0.9,
+            confidence: Some(0.9),
         });
         store.update_ocr(&retry).unwrap();
         let ms0 = unix_ms(created);
@@ -798,14 +795,28 @@ mod tests {
         let mut doc = sample_doc("hello", SystemTime::now());
         doc.ocr = Some(OcrMeta {
             elapsed_s: 1.25,
-            confidence: 0.8,
+            confidence: Some(0.8),
         });
         store.insert_ready(&doc).unwrap();
         let item = &store.list().unwrap()[0];
         let meta = item.ocr.expect("ocr meta");
         assert!((meta.elapsed_s - 1.25).abs() < 1e-5);
-        assert!((meta.confidence - 0.8).abs() < 1e-5);
+        assert_eq!(meta.confidence, Some(0.8));
         let from = Document::from_list_item(item.clone());
         assert_eq!(from.ocr, item.ocr);
+    }
+
+    #[test]
+    fn round_trips_ocr_elapsed_without_confidence() {
+        let (store, _) = tmp_store();
+        let mut doc = sample_doc("hello", SystemTime::now());
+        doc.ocr = Some(OcrMeta {
+            elapsed_s: 0.4,
+            confidence: None,
+        });
+        store.insert_ready(&doc).unwrap();
+        let meta = store.list().unwrap()[0].ocr.expect("ocr meta");
+        assert!((meta.elapsed_s - 0.4).abs() < 1e-5);
+        assert_eq!(meta.confidence, None);
     }
 }

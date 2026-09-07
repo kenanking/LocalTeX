@@ -242,7 +242,7 @@ fn set_app_menus(cx: &mut App) {
             name: "View".into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Toggle Markdown / LaTeX", ToggleFormat),
+                MenuItem::action("Toggle Markdown / LaTeX copy", ToggleFormat),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },

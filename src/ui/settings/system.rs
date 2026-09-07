@@ -15,6 +15,7 @@ pub(super) fn system_page(
     snap: &SysSnapshot,
     models: &ModelInfo,
     snip_count: usize,
+    ram_only: bool,
 ) -> impl IntoElement + use<> {
     let mem_label = match (snap.mem_used, snap.mem_total) {
         (Some(used), Some(total)) => fmt_used_total(used, total),
@@ -101,10 +102,14 @@ pub(super) fn system_page(
                 .child(SharedString::from(path))
                 .into_any_element()
         })
-        .child(settings_group(
-            "Library",
-            vec![wipe_library_row(settings, snip_count)],
-        ))
+        .child(settings_group("Library", {
+            let mut rows = Vec::new();
+            if ram_only {
+                rows.push(ram_only_library_row());
+            }
+            rows.push(wipe_library_row(settings, snip_count));
+            rows
+        }))
         .child({
             let commit = env!("LOCALTEX_GIT_COMMIT");
             let label = if commit.is_empty() {
@@ -231,6 +236,30 @@ fn pack_tooltip(id: &str, detail: Option<&str>) -> String {
         Some(detail) if !detail.is_empty() => format!("{id} · {detail}"),
         _ => id.to_string(),
     }
+}
+
+fn ram_only_library_row() -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .min_w_0()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(theme::TEXT))
+                .child("Library is in memory only"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .whitespace_normal()
+                .child("Snips from this session will be lost when you quit."),
+        )
+        .into_any_element()
 }
 
 fn wipe_library_row(settings: Entity<SettingsPane>, snip_count: usize) -> AnyElement {

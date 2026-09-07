@@ -138,7 +138,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::ToggleFormat,
         group: Group::Document,
-        label: "Toggle Markdown / LaTeX",
+        label: "Toggle Markdown / LaTeX copy",
         default: "ctrl-l",
         context: None,
         required: false,

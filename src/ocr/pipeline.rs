@@ -181,7 +181,7 @@ impl Pipeline {
         let elapsed_s = t0.elapsed().as_secs_f32();
         let meta = conf.finish().map(|confidence| OcrMeta {
             elapsed_s,
-            confidence,
+            confidence: Some(confidence),
         });
 
         eprintln!(
@@ -193,7 +193,8 @@ impl Pipeline {
             encode_s,
             decode_s,
             decode_steps,
-            meta.map(|m| format!(", conf {:.2}", m.confidence))
+            meta.and_then(|m| m.confidence)
+                .map(|c| format!(", conf {c:.2}"))
                 .unwrap_or_default()
         );
         Ok(OcrResult { blocks, meta })

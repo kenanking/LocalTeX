@@ -32,6 +32,13 @@ impl ExportFmt {
             ExportFmt::Latex => ExportFmt::Markdown,
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ExportFmt::Markdown => "Markdown",
+            ExportFmt::Latex => "LaTeX",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,7 +162,7 @@ impl ImageSlot {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OcrMeta {
     pub elapsed_s: f32,
-    pub confidence: f32,
+    pub confidence: Option<f32>,
 }
 
 #[derive(Clone)]

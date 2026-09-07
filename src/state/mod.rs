@@ -183,6 +183,10 @@ impl AppState {
         matches!(self.persistence, PersistenceState::Loading)
     }
 
+    pub fn is_ram_only(&self) -> bool {
+        matches!(self.persistence, PersistenceState::RamOnly)
+    }
+
     pub(crate) fn main_window_visible(&self) -> bool {
         self.main_window.is_visible()
     }
@@ -484,9 +488,20 @@ impl AppState {
         self.select(id, cx);
     }
 
-    pub fn toggle_format(&mut self, cx: &mut Context<Self>) {
-        self.export_fmt = self.export_fmt.toggle();
+    pub fn export_fmt(&self) -> ExportFmt {
+        self.export_fmt
+    }
+
+    pub fn set_export_fmt(&mut self, fmt: ExportFmt, cx: &mut Context<Self>) {
+        if self.export_fmt == fmt {
+            return;
+        }
+        self.export_fmt = fmt;
         cx.notify();
+    }
+
+    pub fn toggle_format(&mut self, cx: &mut Context<Self>) {
+        self.set_export_fmt(self.export_fmt.toggle(), cx);
     }
 
     pub fn select(&mut self, id: Uuid, cx: &mut Context<Self>) {
