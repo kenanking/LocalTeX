@@ -11,6 +11,8 @@ use super::super::theme;
 use super::super::widgets::{IconKind, missing_image_slot};
 use super::super::window_drag::WindowDrag;
 use super::chrome::{orig_action_capsule, orig_hud_disc};
+use crate::i18n::t;
+
 pub const STRIP_MIN: f32 = 64.0;
 pub const STRIP_DEFAULT: f32 = 96.0;
 pub const STRIP_AUTO_CAP: f32 = 280.0;
@@ -178,7 +180,7 @@ impl MainWindow {
                                         .child(orig_hud_disc(
                                             "strip-zoom",
                                             IconKind::Corners,
-                                            "Open original",
+                                            t("orig.open"),
                                             {
                                                 let entity = entity.clone();
                                                 move |_, window, cx| {

@@ -3,6 +3,7 @@ use gpui::{AnyElement, App, Entity, SharedString, div, prelude::*, px, rgb};
 use super::super::theme;
 use super::super::widgets::{IconBtnSize, IconKind, btn, icon_btn_sized, kbd_chip, settings_group};
 use super::SettingsPane;
+use crate::i18n::t;
 use crate::keymap::{self, Group, ShortcutId};
 use crate::prefs::Prefs;
 use crate::state::AppState;
@@ -84,13 +85,11 @@ pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'stat
                         .text_sm()
                         .text_color(rgb(theme::MUTED))
                         .whitespace_normal()
-                        .child(
-                            "Click a shortcut, then press the new keys. Esc cancels. × removes it.",
-                        ),
+                        .child(t("settings.shortcuts_hint")),
                 )
                 .child(div().flex_shrink_0().child(btn(
                     "sc-reset-all",
-                    "Reset all",
+                    t("settings.reset_all"),
                     false,
                     true,
                     move |_, cx| {
@@ -99,7 +98,6 @@ pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'stat
                 ))),
         )
         .child(shortcut_group(
-            "Capture",
             Group::Capture,
             over,
             listen,
@@ -107,7 +105,6 @@ pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'stat
             &on_listen,
         ))
         .child(shortcut_group(
-            "Document",
             Group::Document,
             over,
             listen,
@@ -115,7 +112,6 @@ pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'stat
             &on_listen,
         ))
         .child(shortcut_group(
-            "Window",
             Group::Window,
             over,
             listen,
@@ -125,7 +121,6 @@ pub(super) fn shortcuts_page<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'stat
 }
 
 fn shortcut_group<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'static>(
-    title: &'static str,
     group: Group,
     over: &keymap::Overrides,
     listen: Option<ShortcutId>,
@@ -145,7 +140,7 @@ fn shortcut_group<F: Fn(Option<ShortcutId>, &mut App) + Clone + 'static>(
             )
         })
         .collect();
-    settings_group(title, rows)
+    settings_group(t(group.label_key()), rows)
 }
 
 fn shortcut_row(
@@ -190,7 +185,7 @@ fn shortcut_row(
                 div()
                     .text_sm()
                     .text_color(rgb(theme::ACCENT))
-                    .child("Press a shortcut"),
+                    .child(t("settings.press_shortcut")),
             );
     } else {
         keys = match &chord {
@@ -207,7 +202,7 @@ fn shortcut_row(
                     .text_sm()
                     .italic()
                     .text_color(rgb(theme::MUTED))
-                    .child("Unbound"),
+                    .child(t("settings.unbound")),
             ),
         };
     }
@@ -226,7 +221,7 @@ fn shortcut_row(
                     .child(icon_btn_sized(
                         SharedString::from(format!("sc-unbind-{}", spec.id.as_str())),
                         IconKind::Close,
-                        "Remove shortcut",
+                        t("settings.remove_shortcut"),
                         false,
                         true,
                         IconBtnSize {
@@ -254,7 +249,7 @@ fn shortcut_row(
                     .child(icon_btn_sized(
                         SharedString::from(format!("sc-reset-{}", spec.id.as_str())),
                         IconKind::Reset,
-                        "Reset to default",
+                        t("settings.reset_to_default"),
                         false,
                         true,
                         IconBtnSize {
@@ -297,7 +292,7 @@ fn shortcut_row(
                         .text_sm()
                         .text_color(rgb(theme::TEXT))
                         .whitespace_normal()
-                        .child(SharedString::from(spec.label.to_string())),
+                        .child(SharedString::from(t(spec.label))),
                 )
                 .when(spec.global(), |d| {
                     d.child(
@@ -310,7 +305,7 @@ fn shortcut_row(
                             .bg(theme::accent_soft())
                             .text_color(rgb(theme::ACCENT))
                             .text_xs()
-                            .child("Global"),
+                            .child(t("settings.global")),
                     )
                 }),
         )

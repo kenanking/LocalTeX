@@ -30,10 +30,10 @@ impl DatePreset {
 }
 
 pub const DATE_PRESETS: [(&str, &str, DatePreset); 4] = [
-    ("date-all", "All", DatePreset::All),
-    ("date-today", "Today", DatePreset::Today),
-    ("date-7d", "7d", DatePreset::Last7Days),
-    ("date-30d", "30d", DatePreset::Last30Days),
+    ("date-all", "history.all", DatePreset::All),
+    ("date-today", "history.today", DatePreset::Today),
+    ("date-7d", "history.days_7", DatePreset::Last7Days),
+    ("date-30d", "history.days_30", DatePreset::Last30Days),
 ];
 
 pub struct Library {

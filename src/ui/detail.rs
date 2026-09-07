@@ -19,6 +19,7 @@ use super::widgets::{
 use super::window_drag::WindowDrag;
 use crate::doc::{DocStatus, ExportFmt, ImageSlot, OcrMeta};
 use crate::export::CopyKind;
+use crate::i18n::t;
 use crate::keymap::{self, ShortcutId};
 use crate::preview::DerivedCopyRow;
 use crate::state::AppState;
@@ -185,9 +186,15 @@ impl MainWindow {
                                 .text_xs()
                                 .child(snap.first_line.clone()),
                         )
-                        .child(btn("retry", "Retry", true, can_retry, move |_, cx| {
-                            retry_state.update(cx, |s, cx| s.retry_selected(cx));
-                        })),
+                        .child(btn(
+                            "retry",
+                            t("detail.retry"),
+                            true,
+                            can_retry,
+                            move |_, cx| {
+                                retry_state.update(cx, |s, cx| s.retry_selected(cx));
+                            },
+                        )),
                 )
             })
             .when(snap.show_original, |d| d.child(orig))
@@ -283,19 +290,24 @@ impl MainWindow {
                                     .bg(rgb(theme::BG_RAISED))
                                     .text_sm()
                                     .text_color(rgb(theme::MUTED))
-                                    .child("Updating…"),
+                                    .child(t("detail.updating")),
                             )
                         })
                         .when(ready && !source_open && self.preview.hover, |d| {
                             d.child(div().absolute().top(px(8.)).right(px(8.)).child(
-                                orig_hud_disc("edit-source", IconKind::Draw, "Edit source", {
-                                    let entity = entity.clone();
-                                    move |_, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.set_source_open(true, window, cx);
-                                        });
-                                    }
-                                }),
+                                orig_hud_disc(
+                                    "edit-source",
+                                    IconKind::Draw,
+                                    t("detail.edit_source"),
+                                    {
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.set_source_open(true, window, cx);
+                                            });
+                                        }
+                                    },
+                                ),
                             ))
                         });
                 div()
@@ -410,7 +422,7 @@ impl MainWindow {
                                 source_hud_disc(
                                     "src-revert",
                                     IconKind::Reset,
-                                    "Revert OCR",
+                                    t("detail.revert_ocr"),
                                     edited,
                                     {
                                         let entity = entity.clone();
@@ -424,38 +436,55 @@ impl MainWindow {
                             ))
                             .child(source_hud_sep())
                             .child(div().opacity(if can_undo { 1. } else { 0.38 }).child(
-                                source_hud_disc("src-undo", IconKind::Undo, "Undo", can_undo, {
-                                    let entity = entity.clone();
-                                    move |_, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.source_panel.editor.update(cx, |ed, cx| {
-                                                ed.undo_click(window, cx);
+                                source_hud_disc(
+                                    "src-undo",
+                                    IconKind::Undo,
+                                    t("detail.undo"),
+                                    can_undo,
+                                    {
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.source_panel.editor.update(cx, |ed, cx| {
+                                                    ed.undo_click(window, cx);
+                                                });
                                             });
-                                        });
-                                    }
-                                }),
+                                        }
+                                    },
+                                ),
                             ))
                             .child(div().opacity(if can_redo { 1. } else { 0.38 }).child(
-                                source_hud_disc("src-redo", IconKind::Redo, "Redo", can_redo, {
-                                    let entity = entity.clone();
-                                    move |_, window, cx| {
-                                        entity.update(cx, |this, cx| {
-                                            this.source_panel.editor.update(cx, |ed, cx| {
-                                                ed.redo_click(window, cx);
+                                source_hud_disc(
+                                    "src-redo",
+                                    IconKind::Redo,
+                                    t("detail.redo"),
+                                    can_redo,
+                                    {
+                                        let entity = entity.clone();
+                                        move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.source_panel.editor.update(cx, |ed, cx| {
+                                                    ed.redo_click(window, cx);
+                                                });
                                             });
-                                        });
-                                    }
-                                }),
+                                        }
+                                    },
+                                ),
                             )),
                     )
-                    .child(source_done_disc("src-hide", IconKind::Check, "Done", {
-                        let entity = entity.clone();
-                        move |_, window, cx| {
-                            entity.update(cx, |this, cx| {
-                                this.set_source_open(false, window, cx);
-                            });
-                        }
-                    })),
+                    .child(source_done_disc(
+                        "src-hide",
+                        IconKind::Check,
+                        t("detail.done"),
+                        {
+                            let entity = entity.clone();
+                            move |_, window, cx| {
+                                entity.update(cx, |this, cx| {
+                                    this.set_source_open(false, window, cx);
+                                });
+                            }
+                        },
+                    )),
             )
     }
 
@@ -515,10 +544,8 @@ impl MainWindow {
                     .is_some_and(|d| d.id == doc.id && d.revision == doc.revision)
         });
         let format_tip = match format_chord {
-            Some(chord) => {
-                format!("Fallback copy when this kind of snip has no remembered format. {chord}")
-            }
-            None => "Fallback copy when this kind of snip has no remembered format.".into(),
+            Some(chord) => format!("{} {chord}", t("detail.fallback_copy")),
+            None => t("detail.fallback_copy"),
         };
         let state_md = self.state.clone();
         let state_tex = self.state.clone();
@@ -537,7 +564,7 @@ impl MainWindow {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(section_label("Copy"))
+                    .child(section_label(t("detail.copy")))
                     .child(
                         div()
                             .w(px(168.))
@@ -584,9 +611,11 @@ impl MainWindow {
                 let kind = row.kind;
                 let text = row.payload.clone();
                 let hint = if !current {
-                    SharedString::from("Preview is not up to date")
+                    SharedString::from(t("detail.preview_stale"))
                 } else if copied.is_some_and(|(_, k)| k == kind) {
-                    SharedString::from("Copied")
+                    SharedString::from(t("detail.copied"))
+                } else if kind == CopyKind::MsWord {
+                    SharedString::from(t("copy.word_hint"))
                 } else {
                     row.hint.clone()
                 };
@@ -595,7 +624,7 @@ impl MainWindow {
                 let state = self.state.clone();
                 line = line.child(copy_chip(
                     SharedString::from(format!("copy-{}", kind.id())),
-                    kind.label(),
+                    copy_kind_label(kind),
                     kind.symbol(),
                     hint,
                     is_copied,
@@ -659,6 +688,17 @@ fn preview_column_width(
     (frame_w - chrome_w).min(reading_cap).max(1.0)
 }
 
+fn copy_kind_label(kind: CopyKind) -> String {
+    match kind {
+        CopyKind::MdInline => t("copy.inline"),
+        CopyKind::MdDisplay => t("copy.display"),
+        CopyKind::Equation => t("copy.equation"),
+        CopyKind::MdTable => t("copy.md_table"),
+        CopyKind::LatexTable => t("copy.latex_table"),
+        other => other.label().to_string(),
+    }
+}
+
 fn empty_state(
     state: Entity<AppState>,
     capturing: bool,
@@ -683,13 +723,13 @@ fn empty_state(
                 .text_lg()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(theme::TEXT))
-                .child("Snip the screen"),
+                .child(t("detail.empty_title")),
         )
         .child(
             div()
                 .text_sm()
                 .text_color(rgb(theme::MUTED))
-                .child("Capture text, formulas, or tables — copy as Markdown or LaTeX."),
+                .child(t("detail.empty_body")),
         )
         .child(
             div()
@@ -697,7 +737,7 @@ fn empty_state(
                 .items_center()
                 .gap_2()
                 .mt_2()
-                .child(btn("empty-snip", "Snip", true, !capturing, {
+                .child(btn("empty-snip", t("detail.snip"), true, !capturing, {
                     let state = state.clone();
                     move |_, cx| {
                         state.update(cx, |s, cx| s.request_capture(cx));
@@ -712,7 +752,7 @@ fn empty_state(
                 .gap_2()
                 .child(btn(
                     "empty-paste",
-                    "Paste",
+                    t("detail.paste"),
                     false,
                     !capturing,
                     move |_, cx| {

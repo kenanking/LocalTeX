@@ -6,6 +6,7 @@ use image::RgbaImage;
 use uuid::Uuid;
 
 use crate::doc::{DocStatus, Document, ImageSlot};
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 
 use super::AppState;
@@ -28,7 +29,7 @@ impl AppState {
                 if let Some(img) = img {
                     this.ingest_drawing(pts, img, cx);
                 } else {
-                    this.flash_error("That drawing is empty", cx);
+                    this.flash_error(t("err.empty_drawing"), cx);
                 }
             }) {
                 eprintln!("{APP_SLUG}: stroke ingest: {err}");

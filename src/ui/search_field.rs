@@ -52,6 +52,19 @@ impl SearchField {
         self.buf.content.to_string()
     }
 
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder == placeholder {
+            return;
+        }
+        self.placeholder = placeholder;
+        cx.notify();
+    }
+
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         if self.buf.selected_range.is_empty() {
             self.move_to(self.buf.previous_boundary(self.cursor_offset()), cx);
@@ -462,7 +475,7 @@ impl Render for SearchField {
             .id("search-field")
             .accessibility_id("search-field")
             .role(gpui::Role::TextInput)
-            .aria_label("Search history")
+            .aria_label(crate::i18n::t("history.search_aria"))
             .aria_value(self.buf.content.clone())
             .on_a11y_action(gpui::AccessibleAction::SetValue, move |data, _, cx| {
                 if let Some(gpui::accesskit::ActionData::Value(text)) = data {

@@ -7,6 +7,7 @@ use image::RgbaImage;
 use super::intake::{IMAGE_EXTS, is_ingest_image_path};
 use super::session::Capture;
 use super::{AppState, MainWindowState};
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 
 const SHEET_DISMISS_SETTLE: Duration = Duration::from_millis(250);
@@ -180,7 +181,7 @@ impl AppState {
 
     fn request_paste_fallback(&mut self, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
-            self.flash_error("Clipboard is empty — copy an image first", cx);
+            self.flash_error(t("err.clipboard_empty"), cx);
             return;
         };
         let image_bytes = item.entries().iter().find_map(|entry| match entry {
@@ -206,7 +207,7 @@ impl AppState {
             self.offer_files(paths, cx);
             return;
         }
-        self.flash_error("Nothing to paste — copy an image first", cx);
+        self.flash_error(t("err.nothing_to_paste"), cx);
     }
 
     fn spawn_paste_image<F>(&mut self, decode: F, cx: &mut Context<Self>)
@@ -225,7 +226,7 @@ impl AppState {
                 }
                 Err(err) => {
                     eprintln!("{APP_SLUG}: clipboard image: {err}");
-                    this.flash_error("Couldn't read that clipboard image", cx);
+                    this.flash_error(t("err.clipboard_image"), cx);
                 }
             }) {
                 eprintln!("{APP_SLUG}: paste task: {err}");
@@ -308,7 +309,7 @@ impl AppState {
                     eprintln!("{APP_SLUG}: open main window: {err:#}");
                     state.update(cx, |state, cx| {
                         state.main_window = MainWindowState::Closed;
-                        state.flash_error("Couldn't open the main window", cx);
+                        state.flash_error(t("err.open_main"), cx);
                     });
                 }
             });

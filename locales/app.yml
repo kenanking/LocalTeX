@@ -1,0 +1,742 @@
+_version: 2
+
+language.system:
+  en: System
+  zh-CN: 跟随系统
+
+settings.tab.general:
+  en: General
+  zh-CN: 常规
+settings.tab.formatting:
+  en: Formatting
+  zh-CN: 格式
+settings.tab.shortcuts:
+  en: Shortcuts
+  zh-CN: 快捷键
+settings.tab.system:
+  en: System
+  zh-CN: 系统
+settings.aria:
+  en: Settings
+  zh-CN: 设置
+settings.appearance:
+  en: Appearance
+  zh-CN: 外观
+settings.language:
+  en: Language
+  zh-CN: 语言
+settings.language_hint:
+  en: Choose the interface language. Changes apply immediately.
+  zh-CN: 选择界面语言，更改立即生效。
+settings.font_size:
+  en: Font size
+  zh-CN: 字号
+settings.font_size_hint:
+  en: Source editor and preview use the same size.
+  zh-CN: 源码编辑器和预览使用相同字号。
+settings.font_small:
+  en: Small
+  zh-CN: 小
+settings.font_medium:
+  en: Medium
+  zh-CN: 中
+settings.font_large:
+  en: Large
+  zh-CN: 大
+settings.capture:
+  en: Capture
+  zh-CN: 截图
+settings.hide_while_snipping:
+  en: Hide window while snipping
+  zh-CN: 截图时隐藏窗口
+settings.hide_while_snipping_hint:
+  en: Show the window as soon as you finish selecting.
+  zh-CN: 框选结束后立刻显示窗口。
+settings.show_original:
+  en: Show original after recognition
+  zh-CN: 识别后显示原图
+settings.show_original_hint:
+  en: Snip image above the recognized document.
+  zh-CN: 在识别结果上方显示原图。
+settings.autocopy:
+  en: Copy result automatically
+  zh-CN: 识别后自动复制
+settings.autocopy_hint:
+  en: Copies the last text format you used for this kind of snip.
+  zh-CN: 按此类内容上次使用的格式自动复制识别结果。
+settings.window:
+  en: Window
+  zh-CN: 窗口
+settings.minimize_on_close:
+  en: Minimize on close
+  zh-CN: 关闭时最小化
+settings.minimize_on_close_hint:
+  en: Hides to the tray with no taskbar icon. Off quits; Ctrl+Q always quits.
+  zh-CN: 启用后，关闭窗口会隐藏到系统托盘；禁用后则退出应用。Ctrl+Q 始终退出应用。
+settings.launch_at_startup:
+  en: Launch at startup
+  zh-CN: 登录时启动
+settings.launch_at_startup_hint:
+  en: Keeps LocalTeX ready in the tray when you sign in.
+  zh-CN: 登录系统后自动启动 LocalTeX，并驻留系统托盘。
+settings.copy:
+  en: Copy
+  zh-CN: 复制
+settings.default_copy_family:
+  en: Default copy format
+  zh-CN: 默认复制格式
+settings.default_copy_family_hint:
+  en: Used when the app starts. The Copy row switch changes only this session.
+  zh-CN: 应用启动时使用的默认格式。识别结果下方的格式切换仅在本次运行中生效。
+settings.math_delimiters:
+  en: Math delimiters
+  zh-CN: 公式定界符
+settings.inline_math:
+  en: Inline math
+  zh-CN: 行内公式
+settings.inline_math_hint:
+  en: Wraps inline formulas in Markdown and mixed LaTeX export.
+  zh-CN: 用于 Markdown 和混合 LaTeX 导出中的行内公式。
+settings.display_math:
+  en: Display math
+  zh-CN: 行间公式
+settings.display_math_hint:
+  en: Wraps display formulas in document exports. Equation format is also available when copying.
+  zh-CN: 用于文档导出中的行间公式。复制时也可选择 equation 环境。
+settings.preview:
+  en: Preview
+  zh-CN: 预览
+settings.reading_width:
+  en: Reading width
+  zh-CN: 阅读宽度
+settings.reading_width_hint:
+  en: Limits the preview width in wide windows. Tables and display math can still scroll.
+  zh-CN: 限制宽窗口中的预览宽度，表格和行间公式仍可横向滚动。
+settings.width_narrow:
+  en: Narrow
+  zh-CN: 窄
+settings.width_medium:
+  en: Medium
+  zh-CN: 中
+settings.width_wide:
+  en: Wide
+  zh-CN: 宽
+settings.shortcuts_hint:
+  en: Click a shortcut, then press the new keys. Esc cancels. × removes it.
+  zh-CN: 点击快捷键后按下新的组合键。按 Esc 取消，点击 × 清除绑定。
+settings.reset_all:
+  en: Reset all
+  zh-CN: 全部重置
+settings.press_shortcut:
+  en: Press a shortcut
+  zh-CN: 按下快捷键
+settings.unbound:
+  en: Unbound
+  zh-CN: 未绑定
+settings.global:
+  en: Global
+  zh-CN: 全局
+settings.remove_shortcut:
+  en: Remove shortcut
+  zh-CN: 移除快捷键
+settings.reset_to_default:
+  en: Reset to default
+  zh-CN: 恢复默认
+settings.this_machine:
+  en: This machine
+  zh-CN: 本机
+settings.cpu:
+  en: CPU
+  zh-CN: CPU
+settings.memory:
+  en: Memory
+  zh-CN: 内存
+settings.data_drive:
+  en: Data drive
+  zh-CN: 数据盘
+settings.app_data:
+  en: App data
+  zh-CN: 应用数据
+settings.storage:
+  en: Storage
+  zh-CN: 存储
+settings.legend_system:
+  en: System
+  zh-CN: 系统
+settings.ocr_models:
+  en: OCR models
+  zh-CN: OCR 模型
+settings.library:
+  en: Library
+  zh-CN: 资料库
+settings.snips:
+  en: Snips
+  zh-CN: 记录
+settings.models:
+  en: Models
+  zh-CN: 模型
+settings.binary:
+  en: Binary
+  zh-CN: 程序
+settings.measuring:
+  en: measuring…
+  zh-CN: 统计中…
+settings.missing:
+  en: Missing
+  zh-CN: 缺失
+settings.files_missing:
+  en: files missing
+  zh-CN: 缺少模型文件
+settings.version_unavailable:
+  en: Version unavailable
+  zh-CN: 无法读取版本
+settings.git_unavailable:
+  en: Git unavailable
+  zh-CN: Git 不可用
+settings.git_unavailable_tip:
+  en: Build has no Git commit metadata.
+  zh-CN: 该构建没有 Git 提交信息。
+settings.ram_only_title:
+  en: Library is in memory only
+  zh-CN: 资料库仅存在于内存
+settings.ram_only_body:
+  en: Snips from this session will be lost when you quit.
+  zh-CN: 本次运行中的记录尚未保存到磁盘，退出应用后将丢失。
+settings.delete_all_snips:
+  en: Delete all snips
+  zh-CN: 删除全部记录
+settings.wipe_hint:
+  en: Settings and OCR models are kept. This cannot be undone.
+  zh-CN: 保留设置和 OCR 模型。此操作无法撤销。
+settings.wipe_body:
+  en: This permanently deletes all records, recognized text, and stored images. Settings and OCR models are kept.
+  zh-CN: 将永久删除全部记录、识别文本和已保存的原图。保留设置和 OCR 模型。
+settings.delete_this_snip_q:
+  en: Delete this snip?
+  zh-CN: 删除这条记录？
+settings.delete_all_snips_q:
+  en: Delete all %{n} snips?
+  zh-CN: 删除全部 %{n} 条记录？
+settings.delete_snip:
+  en: Delete snip
+  zh-CN: 删除记录
+settings.delete_n_snips:
+  en: Delete %{n} snips
+  zh-CN: 删除 %{n} 条
+settings.cancel:
+  en: Cancel
+  zh-CN: 取消
+settings.cpu_history:
+  en: CPU history — last %{n} s
+  zh-CN: CPU 使用率 · 最近 %{n} 秒
+
+shortcut.group.capture:
+  en: Capture
+  zh-CN: 截图
+shortcut.group.document:
+  en: Document
+  zh-CN: 文档
+shortcut.group.window:
+  en: Window
+  zh-CN: 窗口
+shortcut.capture:
+  en: Create snip from screenshot
+  zh-CN: 截图识别
+shortcut.show:
+  en: Toggle main window
+  zh-CN: 显示或隐藏主窗口
+shortcut.upload:
+  en: Import images
+  zh-CN: 导入图片
+shortcut.paste:
+  en: Paste image or path from clipboard
+  zh-CN: 从剪贴板粘贴图片或路径
+shortcut.draw:
+  en: Create snip from drawing
+  zh-CN: 手写公式
+shortcut.copy:
+  en: Copy last format
+  zh-CN: 按上次使用的格式复制
+shortcut.toggle_format:
+  en: Toggle Markdown / LaTeX copy
+  zh-CN: 切换复制格式（Markdown / LaTeX）
+shortcut.delete:
+  en: Delete selected snip
+  zh-CN: 删除当前记录
+shortcut.settings:
+  en: Settings
+  zh-CN: 设置
+
+menu.snip:
+  en: Snip
+  zh-CN: 截图
+menu.upload_image:
+  en: Import Images…
+  zh-CN: 导入图片…
+menu.paste_image:
+  en: Paste Image
+  zh-CN: 粘贴图片
+menu.draw_snip:
+  en: Draw Snip
+  zh-CN: 手写公式
+menu.copy:
+  en: Copy
+  zh-CN: 复制
+menu.open_docx:
+  en: Open DOCX
+  zh-CN: 打开 DOCX
+menu.settings:
+  en: Settings
+  zh-CN: 设置
+menu.quit:
+  en: Quit
+  zh-CN: 退出
+menu.edit:
+  en: Edit
+  zh-CN: 编辑
+menu.delete_snip:
+  en: Delete Snip
+  zh-CN: 删除记录
+menu.retry_ocr:
+  en: Retry OCR
+  zh-CN: 重新识别
+menu.view:
+  en: View
+  zh-CN: 视图
+menu.toggle_format:
+  en: Toggle Markdown / LaTeX copy
+  zh-CN: 切换复制格式（Markdown / LaTeX）
+menu.toggle_sidebar:
+  en: Toggle Sidebar
+  zh-CN: 显示或隐藏侧边栏
+
+tray.capture:
+  en: Capture
+  zh-CN: 截图
+tray.show:
+  en: Show
+  zh-CN: 显示
+tray.quit:
+  en: Quit
+  zh-CN: 退出
+
+chrome.library:
+  en: Library
+  zh-CN: 资料库
+chrome.minimize:
+  en: Minimize
+  zh-CN: 最小化
+chrome.restore:
+  en: Restore
+  zh-CN: 还原
+chrome.maximize:
+  en: Maximize
+  zh-CN: 最大化
+chrome.close:
+  en: Close
+  zh-CN: 关闭
+chrome.upload_tip:
+  en: Import images Ctrl+O
+  zh-CN: 导入图片 Ctrl+O
+chrome.paste_tip:
+  en: Paste image or path from clipboard Ctrl+V
+  zh-CN: 从剪贴板粘贴图片或路径 Ctrl+V
+chrome.draw_tip:
+  en: Create snip from drawing Ctrl+D
+  zh-CN: 手写公式 Ctrl+D
+chrome.delete_tip:
+  en: Delete snip Delete
+  zh-CN: 删除记录 Delete
+chrome.settings_tip:
+  en: Settings Ctrl+,
+  zh-CN: 设置 Ctrl+,
+chrome.open_word:
+  en: Open as Word document
+  zh-CN: 以 Word 文档打开
+chrome.loading_library:
+  en: Loading library…
+  zh-CN: 正在加载资料库…
+chrome.capturing:
+  en: Capturing…
+  zh-CN: 正在截图…
+chrome.ready:
+  en: Ready when you are
+  zh-CN: 就绪
+chrome.ram_only_status:
+  en: Library is in memory only · snips will be lost on quit
+  zh-CN: 资料库仅在内存中 · 退出后记录会丢失
+chrome.models_missing:
+  en: Models missing · %{path}
+  zh-CN: 缺少模型 · %{path}
+chrome.ctrl_c_to_copy:
+  en: Ctrl+C to copy
+  zh-CN: Ctrl+C 复制
+
+history.aria:
+  en: Snip history
+  zh-CN: 识别历史
+history.snips:
+  en: Snips
+  zh-CN: 记录
+history.empty:
+  en: No snips in this range
+  zh-CN: 此时间范围内暂无记录
+history.expand:
+  en: Expand snips (Ctrl+B)
+  zh-CN: 展开列表 (Ctrl+B)
+history.collapse:
+  en: Collapse sidebar (Ctrl+B)
+  zh-CN: 收起侧边栏 (Ctrl+B)
+history.search_placeholder:
+  en: Search text or LaTeX
+  zh-CN: 搜索文本或 LaTeX
+history.search_aria:
+  en: Search history
+  zh-CN: 搜索历史
+history.all:
+  en: All
+  zh-CN: 全部
+history.today:
+  en: Today
+  zh-CN: 今天
+history.days_7:
+  en: 7d
+  zh-CN: 近7天
+history.days_30:
+  en: 30d
+  zh-CN: 近30天
+history.now:
+  en: now
+  zh-CN: 刚刚
+history.just_now:
+  en: just now
+  zh-CN: 刚刚
+history.seconds_ago:
+  en: "%{n}s ago"
+  zh-CN: "%{n} 秒前"
+history.minutes_ago:
+  en: "%{n}m ago"
+  zh-CN: "%{n} 分钟前"
+history.hours_ago:
+  en: "%{n}h ago"
+  zh-CN: "%{n} 小时前"
+
+detail.empty_title:
+  en: Snip the screen
+  zh-CN: 截图识别
+detail.empty_body:
+  en: Capture text, formulas, or tables — copy as Markdown or LaTeX.
+  zh-CN: 截取文字、公式或表格，识别后复制为 Markdown 或 LaTeX。
+detail.snip:
+  en: Snip
+  zh-CN: 截图
+detail.paste:
+  en: Paste
+  zh-CN: 粘贴
+detail.retry:
+  en: Retry
+  zh-CN: 重试
+detail.updating:
+  en: Updating…
+  zh-CN: 更新中…
+detail.edit_source:
+  en: Edit source
+  zh-CN: 编辑源码
+detail.copy:
+  en: Copy
+  zh-CN: 复制
+detail.copied:
+  en: Copied
+  zh-CN: 已复制
+detail.fallback_copy:
+  en: Fallback copy when this kind of snip has no remembered format.
+  zh-CN: 此类内容尚无上次使用的复制格式时，使用此默认格式。
+detail.preview_stale:
+  en: Preview is not up to date
+  zh-CN: 预览尚未更新
+detail.image_missing:
+  en: Image missing
+  zh-CN: 图片缺失
+detail.unavailable:
+  en: Unavailable
+  zh-CN: 不可用
+detail.no_content:
+  en: No content
+  zh-CN: 无内容
+detail.recognizing:
+  en: Recognizing…
+  zh-CN: 识别中…
+detail.no_preview_yet:
+  en: No preview yet.
+  zh-CN: 尚无预览。
+detail.loading:
+  en: Loading…
+  zh-CN: 加载中…
+detail.preview_unavailable:
+  en: Preview unavailable
+  zh-CN: 无法预览
+detail.copy_source:
+  en: Copy source
+  zh-CN: 复制源码
+detail.revert_ocr:
+  en: Revert OCR
+  zh-CN: 恢复识别结果
+detail.undo:
+  en: Undo
+  zh-CN: 撤销
+detail.redo:
+  en: Redo
+  zh-CN: 重做
+detail.done:
+  en: Done
+  zh-CN: 完成
+
+copy.inline:
+  en: Inline
+  zh-CN: 行内公式
+copy.display:
+  en: Display
+  zh-CN: 行间公式
+copy.equation:
+  en: Equation
+  zh-CN: equation 环境
+copy.md_table:
+  en: Markdown table
+  zh-CN: Markdown 表格
+copy.latex_table:
+  en: LaTeX table
+  zh-CN: LaTeX 表格
+copy.word_hint:
+  en: Paste as Word equation
+  zh-CN: 粘贴为 Word 公式
+
+intake.drop:
+  en: Drop to recognize
+  zh-CN: 松开鼠标开始识别
+intake.recognizing:
+  en: Recognizing
+  zh-CN: 识别中
+intake.complete:
+  en: Complete
+  zh-CN: 完成
+intake.no_images:
+  en: No images
+  zh-CN: 没有图片
+intake.only_formats:
+  en: Only PNG, JPEG, and WebP are recognized.
+  zh-CN: 仅支持 PNG、JPEG 和 WebP 格式的图片。
+intake.one_image:
+  en: 1 image will be recognized.
+  zh-CN: 将识别 1 张图片。
+intake.n_images:
+  en: "%{n} images will be recognized."
+  zh-CN: 将识别 %{n} 张图片。
+intake.progress:
+  en: "%{current} of %{total}"
+  zh-CN: "%{current} / %{total}"
+intake.recognized_n:
+  en: Recognized %{n}
+  zh-CN: 已识别 %{n} 张
+intake.all_recognized:
+  en: All images recognized
+  zh-CN: 已全部识别
+intake.finished_failed:
+  en: Finished with %{n} failed
+  zh-CN: 识别完成，%{n} 张失败
+intake.remaining:
+  en: REMAINING
+  zh-CN: 剩余
+intake.no_images_drop:
+  en: No images in this drop
+  zh-CN: 拖入的内容中没有可识别的图片
+
+draw.title:
+  en: Draw a formula
+  zh-CN: 手写公式
+draw.clear:
+  en: Clear
+  zh-CN: 清空
+draw.cancel:
+  en: Cancel
+  zh-CN: 取消
+draw.recognize:
+  en: Recognize
+  zh-CN: 识别
+draw.pen:
+  en: Pen 1
+  zh-CN: 画笔 1
+draw.eraser:
+  en: Eraser 2
+  zh-CN: 橡皮擦 2
+draw.undo:
+  en: Undo 3
+  zh-CN: 撤销 3
+draw.redo:
+  en: Redo 4
+  zh-CN: 重做 4
+draw.dots:
+  en: Dots
+  zh-CN: 点阵
+draw.lines:
+  en: Lines
+  zh-CN: 横线
+draw.blank:
+  en: Blank
+  zh-CN: 空白
+
+orig.copy_image:
+  en: Copy image
+  zh-CN: 复制图片
+orig.save_as:
+  en: Save as
+  zh-CN: 另存为
+orig.show_in_folder:
+  en: Show in folder
+  zh-CN: 在文件夹中显示
+orig.not_saved:
+  en: Image isn't saved yet
+  zh-CN: 图片尚未保存
+orig.close:
+  en: Close
+  zh-CN: 关闭
+orig.open:
+  en: Open original
+  zh-CN: 打开原图
+
+model.declared:
+  en: Declared
+  zh-CN: 待校验
+model.checking:
+  en: Checking…
+  zh-CN: 校验中…
+model.verified:
+  en: Verified
+  zh-CN: 已校验
+model.unstamped:
+  en: Unstamped
+  zh-CN: 无版本元数据
+model.mismatch:
+  en: Mismatch
+  zh-CN: 版本不匹配
+
+err.autostart:
+  en: Couldn't change launch at startup
+  zh-CN: 无法更改登录时启动设置
+err.shortcut_modifier:
+  en: Global shortcuts need a supported key and modifier
+  zh-CN: 全局快捷键需要支持的按键和修饰键
+err.save_before_quit:
+  en: Couldn't save changes. Please retry before quitting.
+  zh-CN: 无法保存更改。请重试后再退出。
+err.save_snip:
+  en: Couldn't save that snip
+  zh-CN: 无法保存该记录
+err.save_edits:
+  en: Couldn't save those edits
+  zh-CN: 无法保存修改
+err.update_snip:
+  en: Couldn't update that snip
+  zh-CN: 无法更新该记录
+err.remove_snip_files:
+  en: Couldn't remove all snip files
+  zh-CN: 无法删除全部记录文件
+err.clear_library:
+  en: Couldn't clear the snip library
+  zh-CN: 无法清空资料库
+err.empty_drawing:
+  en: That drawing is empty
+  zh-CN: 画布为空，请先书写公式
+err.clipboard_empty:
+  en: Clipboard is empty — copy an image first
+  zh-CN: 剪贴板是空的，请先复制一张图片
+err.nothing_to_paste:
+  en: Nothing to paste — copy an image first
+  zh-CN: 没有可粘贴的内容，请先复制一张图片
+err.clipboard_image:
+  en: Couldn't read that clipboard image
+  zh-CN: 无法读取剪贴板中的图片
+err.open_main:
+  en: Couldn't open the main window
+  zh-CN: 无法打开主窗口
+err.copy_image:
+  en: Couldn't copy that image
+  zh-CN: 无法复制该图片
+err.save_image:
+  en: Couldn't save that image
+  zh-CN: 无法保存该图片
+err.image_not_saved:
+  en: Image isn't saved yet
+  zh-CN: 图片尚未保存
+err.open_folder:
+  en: Couldn't open that folder
+  zh-CN: 无法打开该文件夹
+err.open_word:
+  en: Couldn't open a Word document
+  zh-CN: 无法打开 Word 文档
+err.delete_snip:
+  en: Couldn't delete that snip
+  zh-CN: 无法删除该记录
+err.load_original:
+  en: Couldn't load the original image
+  zh-CN: 无法加载原图
+err.load_text:
+  en: Couldn't load recognized text
+  zh-CN: 无法加载识别结果
+err.original_missing:
+  en: Original image is missing
+  zh-CN: 原图缺失
+err.snip_gone:
+  en: Snip is gone
+  zh-CN: 该记录已不存在
+err.hotkeys_unavailable:
+  en: Global hotkeys are unavailable
+  zh-CN: 全局快捷键不可用
+err.tray_unavailable:
+  en: System tray is unavailable
+  zh-CN: 系统托盘不可用
+
+source.cant_parse_tabular:
+  en: Can't parse this tabular yet.
+  zh-CN: 暂时无法解析此 LaTeX 表格。
+source.tabular_unclosed:
+  en: Tabular is missing its closing command.
+  zh-CN: LaTeX 表格缺少结束命令。
+
+settings.drive_usage:
+  en: "%{percent}% · %{free} free"
+  zh-CN: "%{percent}% · 可用 %{free}"
+intake.result_summary:
+  en: "Recognized %{succeeded} of %{total} · %{failed} failed"
+  zh-CN: "已识别 %{succeeded} / %{total} 张，%{failed} 张失败"
+
+detail.source_content:
+  en: Source content
+  zh-CN: 源码内容
+
+model.source_bundled:
+  en: Beside executable
+  zh-CN: 程序目录
+model.source_test:
+  en: Test executable parent
+  zh-CN: 测试程序的上级目录
+model.source_linux:
+  en: Linux prefix
+  zh-CN: Linux 安装目录
+model.source_user:
+  en: User data directory
+  zh-CN: 用户数据目录
+model.source_windows:
+  en: Windows installation
+  zh-CN: Windows 安装目录
+model.source_specified:
+  en: Specified directory
+  zh-CN: 指定目录
+model.manifest_loaded:
+  en: Model manifest loaded
+  zh-CN: 已加载模型清单
+model.manifest_missing:
+  en: Model manifest missing
+  zh-CN: 缺少模型清单
+model.manifest_invalid:
+  en: Invalid model manifest
+  zh-CN: 模型清单无效

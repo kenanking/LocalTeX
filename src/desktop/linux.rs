@@ -5,14 +5,28 @@ use std::sync::mpsc::Sender;
 use ksni::blocking::TrayMethods;
 
 use crate::desktop::DesktopCmd;
+use crate::i18n::t;
 use crate::icon;
 use crate::identity::{APP_NAME, APP_SLUG};
 
 pub fn start_tray(tx: Sender<DesktopCmd>) {
     let tray = LocalTexTray { tx };
-    if let Err(err) = tray.spawn() {
-        eprintln!("{APP_SLUG}: tray spawn: {err}");
+    match tray.spawn() {
+        Ok(handle) => TRAY.with(|slot| *slot.borrow_mut() = Some(handle)),
+        Err(err) => eprintln!("{APP_SLUG}: tray spawn: {err}"),
     }
+}
+
+thread_local! {
+    static TRAY: RefCell<Option<ksni::blocking::Handle<LocalTexTray>>> = const { RefCell::new(None) };
+}
+
+pub fn refresh_tray_language() {
+    TRAY.with(|slot| {
+        if let Some(handle) = slot.borrow().as_ref() {
+            handle.update(|_| {});
+        }
+    });
 }
 
 struct LocalTexTray {
@@ -54,7 +68,7 @@ impl ksni::Tray for LocalTexTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Capture".into(),
+                label: t("tray.capture"),
                 activate: Box::new(|this: &mut LocalTexTray| {
                     send(&this.tx, DesktopCmd::Capture);
                 }),
@@ -62,7 +76,7 @@ impl ksni::Tray for LocalTexTray {
             }
             .into(),
             StandardItem {
-                label: "Show".into(),
+                label: t("tray.show"),
                 activate: Box::new(|this: &mut LocalTexTray| {
                     send(&this.tx, DesktopCmd::Show);
                 }),
@@ -71,7 +85,7 @@ impl ksni::Tray for LocalTexTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Quit".into(),
+                label: t("tray.quit"),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|this: &mut LocalTexTray| {
                     send(&this.tx, DesktopCmd::Quit);

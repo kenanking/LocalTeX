@@ -20,6 +20,7 @@ use super::widgets::{
 use super::window_drag::WindowDrag;
 use crate::cache::{ROW_HEIGHT_PX, THUMB_VIEWPORT_MULT};
 use crate::doc::ImageSlot;
+use crate::i18n::t;
 use crate::library::DATE_PRESETS;
 
 pub(crate) const SIDEBAR_MIN: f32 = 208.0;
@@ -131,7 +132,7 @@ impl MainWindow {
         let mut list = div()
             .id("history")
             .role(gpui::Role::ListBox)
-            .aria_label("Snip history")
+            .aria_label(t("history.aria"))
             .key_context("SnipList")
             .track_focus(&self.snip_list_focus)
             .on_mouse_down(
@@ -159,7 +160,7 @@ impl MainWindow {
             list = list.child(div().px_2().pb_2().child(segmented(DATE_PRESETS.map(
                 |(id, label, preset)| {
                     let state = state_ent.clone();
-                    seg_item(id, label, date_preset == preset, move |_, cx| {
+                    seg_item(id, t(label), date_preset == preset, move |_, cx| {
                         state.update(cx, |s, cx| s.set_date_preset(preset, cx));
                     })
                 },
@@ -177,7 +178,7 @@ impl MainWindow {
                         .pt_4()
                         .text_xs()
                         .text_color(rgb(theme::MUTED))
-                        .child("No snips in this range")
+                        .child(t("history.empty"))
                 })
                 .into_any_element()
         } else {
@@ -340,9 +341,9 @@ impl MainWindow {
                 IconKind::Collapse
             },
             if collapsed {
-                "Expand snips (Ctrl+B)"
+                t("history.expand")
             } else {
-                "Collapse sidebar (Ctrl+B)"
+                t("history.collapse")
             },
             false,
             true,
@@ -363,12 +364,14 @@ impl MainWindow {
             .when(collapsed, |d| d.justify_center())
             .when(!collapsed, |d| d.px_3().gap_1())
             .when(!collapsed, |d| {
-                d.child(section_label("Snips")).child(div().flex_1()).child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .child(SharedString::from(n_docs.to_string())),
-                )
+                d.child(section_label(t("history.snips")))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::MUTED))
+                            .child(SharedString::from(n_docs.to_string())),
+                    )
             })
             .child(chevron)
     }

@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use super::theme;
+use crate::i18n::t;
 use crate::state::{IntakeBatch, IntakeCounts, IntakeWork};
 
 use super::intake_paper::{IntakePaperSpec, intake_paper_spec};
@@ -239,25 +240,39 @@ impl IntakePresentation {
 
     pub fn status(&self) -> (theme::StatusKind, String) {
         if self.counts.images == 0 {
-            return (theme::StatusKind::Error, "No images in this drop".into());
+            return (theme::StatusKind::Error, t("intake.no_images_drop"));
         }
         let (done, total) = self.progress();
         if self.phase != IntakePhase::Running {
             return if self.failed == 0 {
-                (theme::StatusKind::Ready, format!("Recognized {total}"))
+                (
+                    theme::StatusKind::Ready,
+                    rust_i18n::t!("intake.recognized_n", n = total).into_owned(),
+                )
             } else {
                 (
                     theme::StatusKind::Error,
-                    format!(
-                        "Recognized {} of {total} · {} failed",
-                        self.succeeded, self.failed
-                    ),
+                    rust_i18n::t!(
+                        "intake.result_summary",
+                        succeeded = self.succeeded,
+                        total = total,
+                        failed = self.failed
+                    )
+                    .into_owned(),
                 )
             };
         }
         (
             theme::StatusKind::Busy,
-            format!("Recognizing {} of {total}", (done + 1).min(total)),
+            format!(
+                "{} {}",
+                t("intake.recognizing"),
+                rust_i18n::t!(
+                    "intake.progress",
+                    current = (done + 1).min(total),
+                    total = total
+                )
+            ),
         )
     }
 
@@ -668,7 +683,7 @@ fn render_more(count: usize) -> AnyElement {
                         .text_size(px(8.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(rgb(0x85817a))
-                        .child("REMAINING"),
+                        .child(t("intake.remaining")),
                 ),
         )
         .into_any_element()
@@ -682,11 +697,9 @@ fn render_complete(batch: &IntakePresentation) -> AnyElement {
     let generation = batch.generation;
     let (_, failed) = batch.results();
     let label = if failed == 0 {
-        "All images recognized".to_string()
-    } else if failed == 1 {
-        "Finished with 1 failed".to_string()
+        t("intake.all_recognized")
     } else {
-        format!("Finished with {failed} failed")
+        rust_i18n::t!("intake.finished_failed", n = failed).into_owned()
     };
     let mut effect = div()
         .mt_3()
@@ -796,50 +809,50 @@ fn intake_copy(
 ) -> (String, String) {
     if let Some(batch) = batch {
         if batch.counts.images == 0 {
-            return (
-                "No images".into(),
-                "Only PNG, JPEG, and WebP are recognized.".into(),
-            );
+            return (t("intake.no_images"), t("intake.only_formats"));
         }
         let (done, total) = batch.progress();
         if batch.phase != IntakePhase::Running {
             let (succeeded, failed) = batch.results();
             let sub = if failed == 0 {
-                if total == 1 {
-                    "1 image recognized".into()
-                } else {
-                    format!("{total} images recognized")
-                }
+                rust_i18n::t!("intake.recognized_n", n = total).into_owned()
             } else {
-                format!("{succeeded} of {total} images recognized · {failed} failed")
+                rust_i18n::t!(
+                    "intake.result_summary",
+                    succeeded = succeeded,
+                    total = total,
+                    failed = failed
+                )
+                .into_owned()
             };
-            return ("Complete".into(), sub);
+            return (t("intake.complete"), sub);
         }
         let current = (done + 1).min(total);
-        return ("Recognizing".into(), format!("{current} of {total}"));
+        return (
+            t("intake.recognizing"),
+            rust_i18n::t!("intake.progress", current = current, total = total).into_owned(),
+        );
     }
     let sub = count_line(counts);
     match kind {
-        IntakeKind::Hover if counts.images == 0 => (
-            "No images".into(),
-            "Only PNG, JPEG, and WebP are recognized.".into(),
-        ),
-        IntakeKind::Hover => ("Drop to recognize".into(), sub),
-        IntakeKind::Flash if counts.images == 0 => (
-            "No images".into(),
-            "Only PNG, JPEG, and WebP are recognized.".into(),
-        ),
-        IntakeKind::Flash => ("Recognizing".into(), sub),
+        IntakeKind::Hover if counts.images == 0 => {
+            (t("intake.no_images"), t("intake.only_formats"))
+        }
+        IntakeKind::Hover => (t("intake.drop"), sub),
+        IntakeKind::Flash if counts.images == 0 => {
+            (t("intake.no_images"), t("intake.only_formats"))
+        }
+        IntakeKind::Flash => (t("intake.recognizing"), sub),
     }
 }
 
 fn count_line(counts: IntakeCounts) -> String {
     if counts.images == 0 {
-        "Only PNG, JPEG, and WebP are recognized.".into()
+        t("intake.only_formats")
     } else if counts.images == 1 {
-        "1 image will be recognized.".into()
+        t("intake.one_image")
     } else {
-        format!("{} images will be recognized.", counts.images)
+        rust_i18n::t!("intake.n_images", n = counts.images).into_owned()
     }
 }
 
@@ -1035,8 +1048,14 @@ mod tests {
         assert_eq!(
             intake_copy(IntakeKind::Flash, presentation.counts, Some(&presentation)),
             (
-                "Complete".into(),
-                "1 of 2 images recognized · 1 failed".into()
+                t("intake.complete"),
+                rust_i18n::t!(
+                    "intake.result_summary",
+                    succeeded = 1,
+                    total = 2,
+                    failed = 1
+                )
+                .into_owned()
             )
         );
     }
@@ -1048,7 +1067,7 @@ mod tests {
                 images: 3,
                 skipped: 4,
             }),
-            "3 images will be recognized."
+            rust_i18n::t!("intake.n_images", n = 3).into_owned()
         );
     }
 }

@@ -40,6 +40,7 @@ unicode-segmentation = "1"
 latex2mathml = "0.2.3"
 tex2word-math = "1.0.6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+rust-i18n = "4"
 
 [build-dependencies]
 # Host-gated by CARGO_CFG_TARGET_OS in build.rs; no-op on Linux/macOS.
@@ -77,6 +78,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Registry",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
+    "Win32_Globalization",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

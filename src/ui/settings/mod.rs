@@ -9,12 +9,14 @@ use gpui::{
 use super::scroll::{ScrollAxis, ScrollThumbDrag, ScrollbarTone, overlay_scrollbar};
 use super::theme;
 use super::widgets::{pill_tab, segmented, setting_row, switch};
+use crate::i18n::{self, UiLang, t};
 use crate::keymap::ShortcutId;
 use crate::prefs::Prefs;
 use crate::state::AppState;
 
 mod formatting;
 mod general;
+mod language;
 mod shortcuts;
 mod system;
 
@@ -35,15 +37,26 @@ pub enum SettingsTab {
 }
 
 const TABS: [(&str, &str, SettingsTab); 4] = [
-    ("set-general", "General", SettingsTab::General),
-    ("set-formatting", "Formatting", SettingsTab::Formatting),
-    ("set-shortcuts", "Shortcuts", SettingsTab::Shortcuts),
-    ("set-system", "System", SettingsTab::System),
+    ("set-general", "settings.tab.general", SettingsTab::General),
+    (
+        "set-formatting",
+        "settings.tab.formatting",
+        SettingsTab::Formatting,
+    ),
+    (
+        "set-shortcuts",
+        "settings.tab.shortcuts",
+        SettingsTab::Shortcuts,
+    ),
+    ("set-system", "settings.tab.system", SettingsTab::System),
 ];
 
 pub struct SettingsPane {
     pub(crate) focus: FocusHandle,
     tab: SettingsTab,
+    language_open: bool,
+    language_index: usize,
+    language_focus: FocusHandle,
     listen: Option<ShortcutId>,
     scroll: ScrollHandle,
     thumb: Rc<RefCell<Option<ScrollThumbDrag>>>,
@@ -60,6 +73,9 @@ impl SettingsPane {
         Self {
             focus: cx.focus_handle(),
             tab: SettingsTab::General,
+            language_open: false,
+            language_index: 0,
+            language_focus: cx.focus_handle().tab_index(0),
             listen: None,
             scroll: ScrollHandle::new(),
             thumb: Rc::new(RefCell::new(None)),
@@ -89,6 +105,7 @@ impl SettingsPane {
     pub fn hide(&mut self) {
         self.set_listen(None);
         self.visible = false;
+        self.language_open = false;
         self.wipe_confirmation_open = false;
     }
 
@@ -188,6 +205,7 @@ impl SettingsPane {
             move |tab, cx: &mut App| {
                 entity.update(cx, |this, cx| {
                     this.tab = tab;
+                    this.language_open = false;
                     this.set_listen(None);
                     this.reset_scroll();
                     cx.notify();
@@ -212,15 +230,17 @@ impl SettingsPane {
             .bg(rgb(theme::BG_SUNKEN))
             .border_1()
             .border_color(rgb(theme::BORDER));
-        for (id, label, t) in TABS {
+        for (id, label, tab_id) in TABS {
             let on_tab = on_tab.clone();
-            tabs_row = tabs_row.child(pill_tab(id, label, tab == t, move |_, cx| on_tab(t, cx)));
+            tabs_row = tabs_row.child(pill_tab(id, t(label), tab == tab_id, move |_, cx| {
+                on_tab(tab_id, cx)
+            }));
         }
 
         div()
             .id("settings")
             .role(gpui::Role::Pane)
-            .aria_label("Settings")
+            .aria_label(t("settings.aria"))
             .track_focus(&self.focus)
             .tab_stop(false)
             .relative()
@@ -274,7 +294,16 @@ impl SettingsPane {
                                     .flex_col()
                                     .gap_4()
                                     .when(tab == SettingsTab::General, |d| {
-                                        d.child(general_page(state.clone(), &prefs))
+                                        d.child(general_page(
+                                            state.clone(),
+                                            &prefs,
+                                            self.language_picker(
+                                                state.clone(),
+                                                prefs.ui_lang,
+                                                window,
+                                                cx,
+                                            ),
+                                        ))
                                     })
                                     .when(tab == SettingsTab::Formatting, |d| {
                                         d.child(formatting_page(state.clone(), &prefs))
@@ -319,16 +348,19 @@ fn picker(width: f32, items: impl IntoIterator<Item = AnyElement>) -> impl IntoE
 fn bool_row(
     state: &Entity<AppState>,
     id: &'static str,
-    title: &'static str,
-    hint: &'static str,
+    title_key: &'static str,
+    hint_key: &'static str,
     value: bool,
     set: fn(&mut Prefs, bool),
 ) -> AnyElement {
     let state = state.clone();
+    let title = t(title_key);
+    let hint = t(hint_key);
+    let switch_label = title.clone();
     setting_row(
         title,
         hint,
-        switch(id, title, value, move |_, cx| {
+        switch(id, switch_label, value, move |_, cx| {
             state.update(cx, |s, cx| {
                 s.update_prefs(cx, |p| set(p, !value));
             });
@@ -339,4 +371,11 @@ fn bool_row(
 
 fn patch_prefs(state: &Entity<AppState>, cx: &mut App, f: impl FnOnce(&mut Prefs)) {
     state.update(cx, |s, cx| s.update_prefs(cx, f));
+}
+
+fn patch_ui_lang(state: &Entity<AppState>, cx: &mut App, lang: UiLang) {
+    i18n::set_language(lang);
+    state.update(cx, |s, cx| s.update_prefs(cx, |p| p.ui_lang = lang));
+    crate::set_app_menus(cx);
+    crate::desktop::refresh_tray_language();
 }

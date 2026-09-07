@@ -6,7 +6,8 @@ use gpui::{
 use super::super::theme;
 use super::super::widgets::{Tooltip, settings_group};
 use super::SettingsPane;
-use crate::ocr::{ModelInfo, ModelRuntimeState};
+use crate::i18n::t;
+use crate::ocr::{ModelInfo, ModelManifestState, ModelRuntimeState};
 use crate::state::AppState;
 use crate::sysmon::{SysSnapshot, fmt_bytes, fmt_used_total};
 
@@ -25,16 +26,21 @@ pub(super) fn system_page(
         (Some(used), Some(total)) => {
             let rss = snap.app_rss.unwrap_or(0).min(used);
             composition_block(
-                "Memory",
+                t("settings.memory"),
                 mem_label,
                 total,
                 vec![
-                    ("set-mem-sys", "System", used - rss, theme::SEG_NEUTRAL),
-                    ("set-mem-app", "LocalTeX", rss, theme::ACCENT),
+                    (
+                        "set-mem-sys",
+                        t("settings.legend_system"),
+                        used - rss,
+                        theme::SEG_NEUTRAL,
+                    ),
+                    ("set-mem-app", "LocalTeX".into(), rss, theme::ACCENT),
                 ],
             )
         }
-        _ => stat_line("Memory", None, mem_label),
+        _ => stat_line(t("settings.memory"), None, mem_label),
     };
 
     let mut panel = div()
@@ -51,26 +57,41 @@ pub(super) fn system_page(
         if let (Some(total), Some(free)) = (disk.drive_total, disk.drive_free) {
             let used_frac = (total - free.min(total)) as f32 / total.max(1) as f32;
             panel = panel.child(stat_line(
-                "Data drive",
+                t("settings.data_drive"),
                 Some(used_frac),
-                format!("{:.0}% · {} free", used_frac * 100., fmt_bytes(free)),
+                rust_i18n::t!(
+                    "settings.drive_usage",
+                    percent = format!("{:.0}", used_frac * 100.),
+                    free = fmt_bytes(free)
+                )
+                .into_owned(),
             ));
         }
         panel = panel.child(composition_block(
-            "App data",
+            t("settings.app_data"),
             fmt_bytes(disk.app_footprint()),
             disk.app_footprint(),
             vec![
-                ("set-disk-models", "Models", disk.models, theme::ACCENT),
-                ("set-disk-snips", "Snips", disk.snips, theme::OK),
-                ("set-disk-bin", "Binary", disk.binary, theme::WARN),
+                (
+                    "set-disk-models",
+                    t("settings.models"),
+                    disk.models,
+                    theme::ACCENT,
+                ),
+                ("set-disk-snips", t("settings.snips"), disk.snips, theme::OK),
+                (
+                    "set-disk-bin",
+                    t("settings.binary"),
+                    disk.binary,
+                    theme::WARN,
+                ),
             ],
         ));
     } else {
         panel = panel.child(hairline()).child(stat_row_shell(
-            "Storage",
+            t("settings.storage"),
             div().into_any_element(),
-            "measuring…".into(),
+            t("settings.measuring"),
         ));
     }
 
@@ -81,12 +102,24 @@ pub(super) fn system_page(
         .w_full()
         .min_w_0()
         .child(settings_group(
-            "This machine",
+            t("settings.this_machine"),
             vec![panel.into_any_element()],
         ))
-        .child(settings_group("OCR models", vec![model_pack_list(models)]))
+        .child(settings_group(
+            t("settings.ocr_models"),
+            vec![model_pack_list(models)],
+        ))
         .child({
-            let path = format!("{} · {}", models.source, models.dir().display());
+            let source = match models.source {
+                "Beside executable" => t("model.source_bundled"),
+                "Test executable parent" => t("model.source_test"),
+                "Linux prefix" => t("model.source_linux"),
+                "User data directory" => t("model.source_user"),
+                "Windows installation" => t("model.source_windows"),
+                "Specified directory" => t("model.source_specified"),
+                other => other.to_string(),
+            };
+            let path = format!("{source} · {}", models.dir().display());
             div()
                 .id("model-dir")
                 .px_1()
@@ -97,12 +130,16 @@ pub(super) fn system_page(
                 .overflow_hidden()
                 .tooltip(Tooltip::text(format!(
                     "{} · {path}",
-                    models.manifest().label()
+                    t(match models.manifest() {
+                        ModelManifestState::Loaded => "model.manifest_loaded",
+                        ModelManifestState::Missing => "model.manifest_missing",
+                        ModelManifestState::Invalid => "model.manifest_invalid",
+                    })
                 )))
                 .child(SharedString::from(path))
                 .into_any_element()
         })
-        .child(settings_group("Library", {
+        .child(settings_group(t("settings.library"), {
             let mut rows = Vec::new();
             if ram_only {
                 rows.push(ram_only_library_row());
@@ -113,9 +150,9 @@ pub(super) fn system_page(
         .child({
             let commit = env!("LOCALTEX_GIT_COMMIT");
             let label = if commit.is_empty() {
-                "Git unavailable"
+                t("settings.git_unavailable")
             } else {
-                &commit[..12.min(commit.len())]
+                commit[..12.min(commit.len())].to_string()
             };
             div()
                 .id("app-version")
@@ -124,9 +161,9 @@ pub(super) fn system_page(
                 .text_color(rgb(theme::MUTED))
                 .whitespace_nowrap()
                 .tooltip(Tooltip::text(if commit.is_empty() {
-                    "Git metadata was unavailable when this app was built."
+                    t("settings.git_unavailable_tip")
                 } else {
-                    commit
+                    commit.to_string()
                 }))
                 .child(format!("LocalTeX {} · {label}", env!("CARGO_PKG_VERSION")))
         })
@@ -170,10 +207,16 @@ fn pack_line(
     detail: Option<&str>,
 ) -> impl IntoElement + use<> {
     let (label, color) = if !available {
-        ("Missing", theme::DANGER)
+        (t("settings.missing"), theme::DANGER)
     } else {
         (
-            runtime.label(),
+            t(match runtime {
+                ModelRuntimeState::Declared => "model.declared",
+                ModelRuntimeState::Checking => "model.checking",
+                ModelRuntimeState::Verified => "model.verified",
+                ModelRuntimeState::Unstamped => "model.unstamped",
+                ModelRuntimeState::Mismatch => "model.mismatch",
+            }),
             match runtime {
                 ModelRuntimeState::Verified => theme::OK,
                 ModelRuntimeState::Mismatch => theme::DANGER,
@@ -219,7 +262,7 @@ fn pack_line(
 
 fn pack_identity(available: bool, declared: Option<&str>, observed: Option<&str>) -> String {
     if !available {
-        return "files missing".into();
+        return t("settings.files_missing");
     }
     match (declared, observed) {
         (Some(declared), Some(observed)) if declared != observed => {
@@ -227,7 +270,7 @@ fn pack_identity(available: bool, declared: Option<&str>, observed: Option<&str>
         }
         (Some(declared), _) => declared.to_string(),
         (None, Some(observed)) => observed.to_string(),
-        (None, None) => "Version unavailable".into(),
+        (None, None) => t("settings.version_unavailable"),
     }
 }
 
@@ -250,14 +293,14 @@ fn ram_only_library_row() -> AnyElement {
                 .text_sm()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(theme::TEXT))
-                .child("Library is in memory only"),
+                .child(t("settings.ram_only_title")),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .whitespace_normal()
-                .child("Snips from this session will be lost when you quit."),
+                .child(t("settings.ram_only_body")),
         )
         .into_any_element()
 }
@@ -274,16 +317,14 @@ fn wipe_library_row(settings: Entity<SettingsPane>, snip_count: usize) -> AnyEle
                 .text_sm()
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(theme::TEXT))
-                .child("Delete all snips"),
+                .child(t("settings.delete_all_snips")),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .whitespace_normal()
-                .child(
-                    "Removes every snip and the database. Settings stay. This cannot be undone.",
-                ),
+                .child(t("settings.wipe_hint")),
         )
         .child(wipe_btn(settings, snip_count > 0))
         .into_any_element()
@@ -320,7 +361,7 @@ fn wipe_btn(settings: Entity<SettingsPane>, enabled: bool) -> impl IntoElement {
             div()
                 .text_sm()
                 .whitespace_nowrap()
-                .child("Delete all snips"),
+                .child(t("settings.delete_all_snips")),
         )
 }
 
@@ -332,14 +373,14 @@ pub(crate) fn wipe_confirmation(
     window: &Window,
 ) -> AnyElement {
     let title = if snip_count == 1 {
-        "Delete this snip?".to_string()
+        t("settings.delete_this_snip_q")
     } else {
-        format!("Delete all {} snips?", format_count(snip_count))
+        rust_i18n::t!("settings.delete_all_snips_q", n = format_count(snip_count)).into_owned()
     };
     let delete_label = if snip_count == 1 {
-        "Delete snip".to_string()
+        t("settings.delete_snip")
     } else {
-        format!("Delete {} snips", format_count(snip_count))
+        rust_i18n::t!("settings.delete_n_snips", n = format_count(snip_count)).into_owned()
     };
     let cancel_focused = cancel_focus.is_focused(window);
     let settings_for_scrim = settings.clone();
@@ -411,7 +452,7 @@ pub(crate) fn wipe_confirmation(
                                         .text_xs()
                                         .text_color(rgb(theme::MUTED))
                                         .whitespace_normal()
-                                        .child("This permanently removes the snips, recognized text, and stored images from this machine. Settings and OCR models stay."),
+                                        .child(t("settings.wipe_body")),
                                 ),
                         ),
                 )
@@ -450,7 +491,7 @@ pub(crate) fn wipe_confirmation(
                                     settings_for_cancel
                                         .update(cx, |pane, cx| pane.dismiss_wipe_confirmation(cx));
                                 })
-                                .child("Cancel"),
+                                .child(t("settings.cancel")),
                         )
                         .child(
                             div()
@@ -493,7 +534,8 @@ fn format_count(count: usize) -> String {
     formatted
 }
 
-fn status_text(label: &'static str, color: u32) -> AnyElement {
+fn status_text(label: impl Into<SharedString>, color: u32) -> AnyElement {
+    let label = label.into();
     div()
         .text_xs()
         .font_weight(gpui::FontWeight::MEDIUM)
@@ -506,7 +548,8 @@ const STAT_LABEL_W: f32 = 64.0;
 const STAT_VALUE_W: f32 = 128.0;
 const BAR_H: f32 = 6.0;
 
-fn stat_row_shell(label: &'static str, viz: AnyElement, value: String) -> AnyElement {
+fn stat_row_shell(label: impl Into<SharedString>, viz: AnyElement, value: String) -> AnyElement {
+    let label = label.into();
     div()
         .flex()
         .items_center()
@@ -536,7 +579,7 @@ fn stat_row_shell(label: &'static str, viz: AnyElement, value: String) -> AnyEle
         .into_any_element()
 }
 
-fn stat_line(label: &'static str, frac: Option<f32>, value: String) -> AnyElement {
+fn stat_line(label: impl Into<SharedString>, frac: Option<f32>, value: String) -> AnyElement {
     stat_row_shell(
         label,
         div()
@@ -565,11 +608,15 @@ fn cpu_line(snap: &SysSnapshot) -> AnyElement {
         .h(px(18.))
         .flex()
         .gap(px(1.))
-        .tooltip(Tooltip::text(format!(
-            "CPU history — last {} s",
-            crate::sysmon::CPU_HIST_LEN as u64 * crate::sysmon::SAMPLE_INTERVAL.as_millis() as u64
-                / 1000
-        )));
+        .tooltip(Tooltip::text(
+            rust_i18n::t!(
+                "settings.cpu_history",
+                n = crate::sysmon::CPU_HIST_LEN as u64
+                    * crate::sysmon::SAMPLE_INTERVAL.as_millis() as u64
+                    / 1000
+            )
+            .into_owned(),
+        ));
     // Each bar sits in a full-height slot pinned to the bottom: gpui 0.2
     // `items_end` does not bottom-align flex_1 children here, and without a
     // shared baseline the bars ragged-hang from the top.
@@ -581,7 +628,7 @@ fn cpu_line(snap: &SysSnapshot) -> AnyElement {
         graph = graph.child(spark_slot(h, cpu_color(v)));
     }
     stat_row_shell(
-        "CPU",
+        t("settings.cpu"),
         graph.into_any_element(),
         snap.cpu_pct
             .map(|p| format!("{p:.0}%"))
@@ -619,10 +666,10 @@ fn hairline() -> AnyElement {
 }
 
 fn composition_block(
-    row_label: &'static str,
+    row_label: impl Into<SharedString>,
     value: String,
     denom: u64,
-    segs: Vec<(&'static str, &'static str, u64, u32)>,
+    segs: Vec<(&'static str, String, u64, u32)>,
 ) -> AnyElement {
     let denom = denom.max(1) as f32;
     let cap = px(BAR_H / 2.);

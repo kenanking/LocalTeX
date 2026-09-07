@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::desktop::DesktopCmd;
 use crate::doc::{Document, ExportFmt};
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 use crate::keymap::{self, AssignError, ShortcutId};
 use crate::library::Library;
@@ -249,7 +250,7 @@ impl AppState {
                     }
                     Err(err) => {
                         eprintln!("{APP_SLUG}: autostart: {err:#}");
-                        this.flash_error("Couldn't change launch at startup", cx);
+                        this.flash_error(t("err.autostart"), cx);
                     }
                 }
                 cx.notify();
@@ -266,7 +267,7 @@ impl AppState {
     ) -> Result<Option<ShortcutId>, AssignError> {
         let stolen = keymap::assign(&mut self.prefs.shortcuts, id, chord).inspect_err(|&err| {
             if keymap::spec(id).global() && err == AssignError::Invalid {
-                self.flash_error("Global shortcuts need a supported key and modifier", cx);
+                self.flash_error(t("err.shortcut_modifier"), cx);
             }
         })?;
         self.commit_shortcuts(cx);
@@ -356,7 +357,7 @@ impl AppState {
                 let _ = this.update(cx, |this, cx| {
                     this.persistence = previous;
                     this.resume_pending_work(cx);
-                    this.flash_error("Couldn't save changes. Please retry before quitting.", cx);
+                    this.flash_error(t("err.save_before_quit"), cx);
                 });
                 return;
             }
@@ -535,7 +536,7 @@ impl AppState {
             DesktopCmd::Reveal => self.restore_main(cx),
             DesktopCmd::Quit => self.request_quit(cx),
             #[cfg(any(target_os = "windows", target_os = "macos"))]
-            DesktopCmd::ServiceFailed(message) => self.flash_error(message, cx),
+            DesktopCmd::ServiceFailed(message) => self.flash_error(t(message), cx),
         }
     }
 }

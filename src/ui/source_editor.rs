@@ -702,7 +702,7 @@ impl Render for SourceEditor {
             .id("source-editor")
             .accessibility_id("source-editor")
             .role(gpui::Role::MultilineTextInput)
-            .aria_label("Source content")
+            .aria_label(crate::i18n::t("detail.source_content"))
             .aria_value(self.buf.content.clone())
             .on_a11y_action(gpui::AccessibleAction::SetValue, move |data, _, cx| {
                 if let Some(gpui::accesskit::ActionData::Value(text)) = data {

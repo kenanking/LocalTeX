@@ -3,6 +3,7 @@ use gpui::{Entity, div, prelude::*};
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{patch_prefs, picker};
 use crate::doc::ExportFmt;
+use crate::i18n::t;
 use crate::prefs::{BlockDelim, InlineDelim, Prefs, ReadingWidth};
 use crate::state::AppState;
 
@@ -14,11 +15,11 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
         .w_full()
         .min_w_0()
         .child(settings_group(
-            "Copy",
+            t("settings.copy"),
             vec![
                 setting_row(
-                    "Default copy family",
-                    "Used when the app starts. The Copy row switch changes only this session.",
+                    t("settings.default_copy_family"),
+                    t("settings.default_copy_family_hint"),
                     picker(
                         210.,
                         [
@@ -55,11 +56,11 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
             ],
         ))
         .child(settings_group(
-            "Math delimiters",
+            t("settings.math_delimiters"),
             vec![
                 setting_row(
-                    "Inline math",
-                    "Wraps inline formulas in Markdown and mixed LaTeX export.",
+                    t("settings.inline_math"),
+                    t("settings.inline_math_hint"),
                     picker(
                         150.,
                         [
@@ -94,8 +95,8 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
                 )
                 .into_any_element(),
                 setting_row(
-                    "Display math",
-                    "Wraps longer formulas in document export. Snip copy also offers equation.",
+                    t("settings.display_math"),
+                    t("settings.display_math_hint"),
                     picker(
                         210.,
                         [
@@ -145,55 +146,57 @@ pub(super) fn formatting_page(state: Entity<AppState>, prefs: &Prefs) -> impl In
             ],
         ))
         .child(settings_group(
-            "Preview",
-            vec![setting_row(
-                "Reading width",
-                "Caps the copy column in a wide window. Tables and display math can still scroll.",
-                picker(
-                    210.,
-                    [
-                        seg_item(
-                            "pref-read-n",
-                            "Narrow",
-                            prefs.reading_width == ReadingWidth::Narrow,
-                            {
-                                let state = state.clone();
-                                move |_, cx| {
-                                    patch_prefs(&state, cx, |p| {
-                                        p.reading_width = ReadingWidth::Narrow
-                                    })
-                                }
-                            },
-                        ),
-                        seg_item(
-                            "pref-read-m",
-                            "Medium",
-                            prefs.reading_width == ReadingWidth::Medium,
-                            {
-                                let state = state.clone();
-                                move |_, cx| {
-                                    patch_prefs(&state, cx, |p| {
-                                        p.reading_width = ReadingWidth::Medium
-                                    })
-                                }
-                            },
-                        ),
-                        seg_item(
-                            "pref-read-w",
-                            "Wide",
-                            prefs.reading_width == ReadingWidth::Wide,
-                            {
-                                let state = state.clone();
-                                move |_, cx| {
-                                    patch_prefs(&state, cx, |p| {
-                                        p.reading_width = ReadingWidth::Wide
-                                    })
-                                }
-                            },
-                        ),
-                    ],
-                ),
-            )
-            .into_any_element()],
+            t("settings.preview"),
+            vec![
+                setting_row(
+                    t("settings.reading_width"),
+                    t("settings.reading_width_hint"),
+                    picker(
+                        210.,
+                        [
+                            seg_item(
+                                "pref-read-n",
+                                t("settings.width_narrow"),
+                                prefs.reading_width == ReadingWidth::Narrow,
+                                {
+                                    let state = state.clone();
+                                    move |_, cx| {
+                                        patch_prefs(&state, cx, |p| {
+                                            p.reading_width = ReadingWidth::Narrow
+                                        })
+                                    }
+                                },
+                            ),
+                            seg_item(
+                                "pref-read-m",
+                                t("settings.width_medium"),
+                                prefs.reading_width == ReadingWidth::Medium,
+                                {
+                                    let state = state.clone();
+                                    move |_, cx| {
+                                        patch_prefs(&state, cx, |p| {
+                                            p.reading_width = ReadingWidth::Medium
+                                        })
+                                    }
+                                },
+                            ),
+                            seg_item(
+                                "pref-read-w",
+                                t("settings.width_wide"),
+                                prefs.reading_width == ReadingWidth::Wide,
+                                {
+                                    let state = state.clone();
+                                    move |_, cx| {
+                                        patch_prefs(&state, cx, |p| {
+                                            p.reading_width = ReadingWidth::Wide
+                                        })
+                                    }
+                                },
+                            ),
+                        ],
+                    ),
+                )
+                .into_any_element(),
+            ],
         ))
 }

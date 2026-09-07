@@ -11,6 +11,7 @@ use super::main_window::{MainWindow, View};
 use super::theme;
 use super::widgets::{IconKind, icon_btn, status_dot};
 use crate::doc::DocStatus;
+use crate::i18n::t;
 use crate::keymap::{self, ShortcutId};
 use crate::ocr::EngineStatus;
 use crate::state::AppState;
@@ -18,7 +19,6 @@ use crate::state::AppState;
 pub(crate) const CAPTION_H: f32 = 32.0;
 pub(crate) const TOOLBAR_H: f32 = 44.0;
 pub(crate) const FOOTER_H: f32 = 28.0;
-pub(crate) const RAM_ONLY_STATUS: &str = "Library is in memory only · snips will be lost on quit";
 
 struct ToolbarState {
     capturing: bool,
@@ -50,10 +50,10 @@ impl MainWindow {
         let state = self.state.clone();
         let capture_tip = {
             let over = &self.state.read(cx).prefs.shortcuts;
-            let label = keymap::spec(ShortcutId::Capture).label;
+            let label = t(keymap::spec(ShortcutId::Capture).label);
             match keymap::effective(over, ShortcutId::Capture) {
                 Some(chord) => format!("{label}  {}", keymap::chips(&chord).join("+")),
-                None => label.to_string(),
+                None => label,
             }
         };
         let view = self.view.clone();
@@ -138,7 +138,7 @@ impl MainWindow {
             .child(div().flex_1())
             .child(window_control(
                 "window-minimize",
-                "Minimize",
+                t("chrome.minimize"),
                 false,
                 div()
                     .w(px(11.))
@@ -154,9 +154,9 @@ impl MainWindow {
             .child(window_control(
                 "window-maximize",
                 if window.is_maximized() {
-                    "Restore"
+                    t("chrome.restore")
                 } else {
-                    "Maximize"
+                    t("chrome.maximize")
                 },
                 false,
                 div()
@@ -168,7 +168,7 @@ impl MainWindow {
             ))
             .child(window_control(
                 "window-close",
-                "Close",
+                t("chrome.close"),
                 true,
                 svg()
                     .path(IconKind::Close.asset_path())
@@ -204,7 +204,7 @@ impl MainWindow {
             .child(icon_btn(
                 "topbar-home",
                 IconKind::Library,
-                "Library",
+                t("chrome.library"),
                 matches!(view, View::Library),
                 true,
                 {
@@ -234,7 +234,7 @@ impl MainWindow {
             .child(icon_btn(
                 "tool-upload",
                 IconKind::Upload,
-                "Upload snip  Ctrl+O",
+                t("chrome.upload_tip"),
                 false,
                 !capturing,
                 {
@@ -247,7 +247,7 @@ impl MainWindow {
             .child(icon_btn(
                 "tool-paste",
                 IconKind::Paste,
-                "Paste image or path from clipboard  Ctrl+V",
+                t("chrome.paste_tip"),
                 false,
                 !capturing,
                 {
@@ -263,7 +263,7 @@ impl MainWindow {
             .child(icon_btn(
                 "tool-draw",
                 IconKind::Draw,
-                "Create snip from drawing  Ctrl+D",
+                t("chrome.draw_tip"),
                 matches!(view, View::Draw),
                 !capturing,
                 {
@@ -277,7 +277,7 @@ impl MainWindow {
             .child(icon_btn(
                 "tool-word",
                 IconKind::Word,
-                "Open as Word document",
+                t("chrome.open_word"),
                 false,
                 can_open_docx,
                 {
@@ -309,7 +309,7 @@ impl MainWindow {
                     .child(icon_btn(
                         "tool-delete",
                         IconKind::Delete,
-                        "Delete snip  Delete",
+                        t("chrome.delete_tip"),
                         false,
                         has_selected && matches!(view, View::Library),
                         {
@@ -322,7 +322,7 @@ impl MainWindow {
                     .child(icon_btn(
                         "tool-settings",
                         IconKind::Settings,
-                        "Settings  Ctrl+,",
+                        t("chrome.settings_tip"),
                         matches!(view, View::Settings),
                         true,
                         {
@@ -364,7 +364,7 @@ impl MainWindow {
 
 fn window_control(
     id: &'static str,
-    hint: &'static str,
+    hint: impl Into<SharedString>,
     close: bool,
     glyph: AnyElement,
     on_click: impl Fn(&mut Window, &mut gpui::App) + 'static,
@@ -499,10 +499,10 @@ fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
 
 pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
     if state.is_bootstrapping() {
-        return (theme::StatusKind::Busy, "Loading library…".into());
+        return (theme::StatusKind::Busy, t("chrome.loading_library"));
     }
     if state.is_capturing() {
-        return (theme::StatusKind::Busy, "Capturing…".into());
+        return (theme::StatusKind::Busy, t("chrome.capturing"));
     }
     if let Some(err) = state.error_message() {
         return (theme::StatusKind::Error, err.to_string());
@@ -513,19 +513,19 @@ pub(crate) fn chrome(state: &AppState) -> (theme::StatusKind, String) {
         return (theme::StatusKind::Error, err.clone());
     }
     match state.engine_status() {
-        status @ EngineStatus::MissingModels { .. } => (theme::StatusKind::Idle, status.label()),
-        EngineStatus::Ready => {
-            let (kind, label) = ready_library_status(state.is_ram_only());
-            (kind, label.into())
-        }
+        EngineStatus::MissingModels { dir } => (
+            theme::StatusKind::Idle,
+            rust_i18n::t!("chrome.models_missing", path = dir.display().to_string()).into_owned(),
+        ),
+        EngineStatus::Ready => ready_library_status(state.is_ram_only()),
     }
 }
 
-fn ready_library_status(ram_only: bool) -> (theme::StatusKind, &'static str) {
+fn ready_library_status(ram_only: bool) -> (theme::StatusKind, String) {
     if ram_only {
-        (theme::StatusKind::Idle, RAM_ONLY_STATUS)
+        (theme::StatusKind::Idle, t("chrome.ram_only_status"))
     } else {
-        (theme::StatusKind::Ready, "Ready when you are")
+        (theme::StatusKind::Ready, t("chrome.ready"))
     }
 }
 
@@ -540,12 +540,12 @@ mod client_frame_tests {
             ready_library_status(true).0,
             theme::StatusKind::Idle
         ));
-        assert_eq!(ready_library_status(true).1, RAM_ONLY_STATUS);
+        assert_eq!(ready_library_status(true).1, t("chrome.ram_only_status"));
         assert!(matches!(
             ready_library_status(false).0,
             theme::StatusKind::Ready
         ));
-        assert_eq!(ready_library_status(false).1, "Ready when you are");
+        assert_eq!(ready_library_status(false).1, t("chrome.ready"));
     }
 
     #[test]

@@ -5,6 +5,7 @@ use gpui::{
 
 use super::theme;
 use crate::doc::OcrMeta;
+use crate::i18n::t;
 
 // The pinned GPUI exposes no disabled setter for Div accessibility properties.
 // Keep its layout and input handling, adding the native disabled state only.
@@ -473,7 +474,7 @@ pub fn missing_image_slot(width: Pixels, height: Pixels) -> gpui::Div {
         .justify_center()
         .text_xs()
         .text_color(rgb(theme::MUTED))
-        .child("Image missing")
+        .child(t("detail.image_missing"))
 }
 
 pub fn seg_item(
@@ -661,7 +662,7 @@ pub fn copy_chip(
 ) -> impl IntoElement {
     let id = id.into();
     let label = if copied {
-        SharedString::from("Copied")
+        SharedString::from(t("detail.copied"))
     } else {
         label.into()
     };

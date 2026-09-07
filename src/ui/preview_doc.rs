@@ -10,6 +10,7 @@ use super::scroll::{ScrollChrome, h_scroll_pane, hscroll_should_center};
 use super::selectable::{PreviewSel, selectable_run, selectable_text};
 use super::theme;
 use crate::doc::DocStatus;
+use crate::i18n::t;
 use crate::math::ScriptKind;
 use crate::prefs::ContentFontSize;
 use crate::preview::{
@@ -66,7 +67,7 @@ impl MainWindow {
                 return div()
                     .text_sm()
                     .text_color(rgb(theme::MUTED))
-                    .child("No content")
+                    .child(t("detail.no_content"))
                     .into_any_element();
             }
         }
@@ -82,10 +83,10 @@ impl MainWindow {
 
         if blocks.is_empty() {
             let msg = match status {
-                DocStatus::Recognizing => "Recognizing…",
-                DocStatus::Ready if has_derived => "No preview yet.",
-                DocStatus::Ready => "Loading…",
-                DocStatus::Failed(_) => "",
+                DocStatus::Recognizing => t("detail.recognizing"),
+                DocStatus::Ready if has_derived => t("detail.no_preview_yet"),
+                DocStatus::Ready => t("detail.loading"),
+                DocStatus::Failed(_) => String::new(),
             };
             return div()
                 .id("preview-empty")
@@ -332,12 +333,12 @@ impl MainWindow {
                                 .text_size(px(m.caption))
                                 .line_height(px(m.table_line))
                                 .text_color(rgb(theme::TEXT))
-                                .child("Preview unavailable"),
+                                .child(t("detail.preview_unavailable")),
                         )
                         .child(div().flex_shrink_0().child(super::widgets::icon_btn_sized(
                             format!("{id}-copy"),
                             super::widgets::IconKind::Copy,
-                            "Copy source",
+                            t("detail.copy_source"),
                             false,
                             true,
                             super::widgets::IconBtnSize {

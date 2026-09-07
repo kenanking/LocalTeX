@@ -33,6 +33,7 @@ use crate::actions::{
 };
 use crate::doc::DocStatus;
 use crate::export::CopyKind;
+use crate::i18n::t;
 use crate::state::{AppState, IntakeCounts, classify_image_paths};
 
 #[derive(Clone)]
@@ -153,7 +154,7 @@ impl MainWindow {
             cx.notify();
         })
         .detach();
-        let search = cx.new(|cx| SearchField::new("Search text or LaTeX", cx));
+        let search = cx.new(|cx| SearchField::new(t("history.search_placeholder"), cx));
         cx.observe(&search, |this, field, cx| {
             let query = field.read(cx).text();
             this.state
@@ -715,6 +716,9 @@ impl Focusable for MainWindow {
 
 impl gpui::Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.search.update(cx, |field, cx| {
+            field.set_placeholder(t("history.search_placeholder"), cx);
+        });
         let (status_kind, status_label, capturing, has_docs, n_docs) = {
             let state = self.state.read(cx);
             let (status_kind, status_label) = self
@@ -727,7 +731,7 @@ impl gpui::Render for MainWindow {
                 theme::StatusKind::Busy | theme::StatusKind::Error
             ) && self.preview.sel.borrow().selected_text().is_some()
             {
-                "Ctrl+C to copy".into()
+                t("chrome.ctrl_c_to_copy")
             } else {
                 status_label
             };

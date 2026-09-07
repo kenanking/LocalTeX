@@ -14,6 +14,7 @@ use super::geom::{
     film_pan_offset, zoom_factor_for_wheel, zoom_percent,
 };
 use crate::doc::ImageSlot;
+use crate::i18n::t;
 
 impl MainWindow {
     pub(crate) fn render_orig_overlay(
@@ -284,15 +285,20 @@ impl MainWindow {
                     cx,
                 ))
             })
-            .child(orig_hud_disc("hud-close", IconKind::Close, "Close", {
-                move |_, window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.unzoom();
-                        window.focus(&this.snip_list_focus, cx);
-                        cx.notify();
-                    });
-                }
-            }))
+            .child(orig_hud_disc(
+                "hud-close",
+                IconKind::Close,
+                t("orig.close"),
+                {
+                    move |_, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.unzoom();
+                            window.focus(&this.snip_list_focus, cx);
+                            cx.notify();
+                        });
+                    }
+                },
+            ))
     }
 
     fn render_orig_film(

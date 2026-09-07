@@ -25,27 +25,16 @@ use imgops::RgbImg;
 use inktex::{INK_FILES, InkTex};
 use pipeline::{OPENDOC_FILES, Pipeline};
 
-use model_info::{FileStamp, PackReport, inspect_stamps};
-pub use model_info::{ModelInfo, ModelRuntimeState};
 #[cfg(test)]
-use model_info::{ModelManifestState, reconcile_pack};
+use model_info::reconcile_pack;
+use model_info::{FileStamp, PackReport, inspect_stamps};
+pub use model_info::{ModelInfo, ModelManifestState, ModelRuntimeState};
 pub use pipeline::OcrResult;
 
 #[derive(Debug, Clone)]
 pub enum EngineStatus {
     Ready,
     MissingModels { dir: PathBuf },
-}
-
-impl EngineStatus {
-    pub fn label(&self) -> String {
-        match self {
-            EngineStatus::Ready => "Ready".into(),
-            EngineStatus::MissingModels { dir } => {
-                format!("Models missing · {}", dir.display())
-            }
-        }
-    }
 }
 
 struct Sessions {

@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::doc::SnipKind;
 use crate::export::CopyKind;
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 
 use super::AppState;
@@ -71,7 +72,7 @@ impl AppState {
                 Err(err) => {
                     eprintln!("{APP_SLUG}: open docx: {err:#}");
                     let _ = this.update(cx, |this, cx| {
-                        this.flash_error("Couldn't open a Word document", cx);
+                        this.flash_error(t("err.open_word"), cx);
                     });
                 }
             }
@@ -103,7 +104,7 @@ impl AppState {
             && let Err(err) = writer.delete(id)
         {
             eprintln!("{APP_SLUG}: queue delete snip: {err:#}");
-            self.flash_error("Couldn't delete that snip", cx);
+            self.flash_error(t("err.delete_snip"), cx);
         }
         if let Some(id) = self.library.selected() {
             self.ensure_detail(id, cx);
@@ -128,7 +129,7 @@ impl AppState {
             && let Err(err) = writer.wipe()
         {
             eprintln!("{APP_SLUG}: queue wipe library: {err:#}");
-            self.flash_error("Couldn't clear the snip library", cx);
+            self.flash_error(t("err.clear_library"), cx);
         }
         cx.notify();
     }

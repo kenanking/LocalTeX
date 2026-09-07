@@ -5,10 +5,26 @@ use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::desktop::DesktopCmd;
+use crate::i18n::t;
 use crate::icon;
 use crate::identity::{APP_NAME, APP_SLUG};
 
-pub fn start_tray(tx: Sender<DesktopCmd>) -> Option<TrayIcon> {
+pub struct Tray {
+    _icon: TrayIcon,
+    capture: MenuItem,
+    show: MenuItem,
+    quit: MenuItem,
+}
+
+impl Tray {
+    pub fn refresh_language(&self) {
+        self.capture.set_text(t("tray.capture"));
+        self.show.set_text(t("tray.show"));
+        self.quit.set_text(t("tray.quit"));
+    }
+}
+
+pub fn start_tray(tx: Sender<DesktopCmd>) -> Option<Tray> {
     let icon = match app_icon() {
         Ok(icon) => icon,
         Err(err) => {
@@ -17,9 +33,9 @@ pub fn start_tray(tx: Sender<DesktopCmd>) -> Option<TrayIcon> {
         }
     };
 
-    let capture = MenuItem::with_id("capture", "Capture", true, None);
-    let show = MenuItem::with_id("show", "Show", true, None);
-    let quit = MenuItem::with_id("quit", "Quit", true, None);
+    let capture = MenuItem::with_id("capture", t("tray.capture"), true, None);
+    let show = MenuItem::with_id("show", t("tray.show"), true, None);
+    let quit = MenuItem::with_id("quit", t("tray.quit"), true, None);
     let menu = Menu::new();
     for result in [
         menu.append(&capture),
@@ -82,7 +98,12 @@ pub fn start_tray(tx: Sender<DesktopCmd>) -> Option<TrayIcon> {
         }
     });
 
-    Some(tray)
+    Some(Tray {
+        _icon: tray,
+        capture,
+        show,
+        quit,
+    })
 }
 
 fn app_icon() -> Result<Icon, String> {

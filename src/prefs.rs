@@ -167,6 +167,8 @@ pub struct Prefs {
     pub reading_width: ReadingWidth,
     #[serde(default)]
     pub content_font: ContentFontSize,
+    #[serde(default)]
+    pub ui_lang: crate::i18n::UiLang,
 }
 
 fn default_true() -> bool {
@@ -199,6 +201,7 @@ impl Default for Prefs {
             shortcuts: keymap::Overrides::new(),
             reading_width: ReadingWidth::Medium,
             content_font: ContentFontSize::Medium,
+            ui_lang: crate::i18n::UiLang::default(),
         }
     }
 }
@@ -499,6 +502,23 @@ mod tests {
         let raw = serde_json::to_string(&p).unwrap();
         let q: Prefs = serde_json::from_str(&raw).unwrap();
         assert_eq!(q.content_font, ContentFontSize::Small);
+    }
+
+    #[test]
+    fn ui_lang_defaults_system_when_missing() {
+        let p: Prefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.ui_lang, crate::i18n::UiLang::System);
+    }
+
+    #[test]
+    fn ui_lang_round_trips_chinese() {
+        let p = Prefs {
+            ui_lang: crate::i18n::UiLang::Chinese,
+            ..Prefs::default()
+        };
+        let raw = serde_json::to_string(&p).unwrap();
+        let q: Prefs = serde_json::from_str(&raw).unwrap();
+        assert_eq!(q.ui_lang, crate::i18n::UiLang::Chinese);
     }
 
     #[test]

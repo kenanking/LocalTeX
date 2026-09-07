@@ -4,10 +4,15 @@ use gpui::{AnyElement, Entity, div, prelude::*};
 use super::super::widgets::switch;
 use super::super::widgets::{seg_item, setting_row, settings_group};
 use super::{bool_row, patch_prefs, picker};
+use crate::i18n::t;
 use crate::prefs::{ContentFontSize, Prefs, WindowCloseAction};
 use crate::state::AppState;
 
-pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoElement + use<> {
+pub(super) fn general_page(
+    state: Entity<AppState>,
+    prefs: &Prefs,
+    language_picker: AnyElement,
+) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()
@@ -15,17 +20,23 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
         .w_full()
         .min_w_0()
         .child(settings_group(
-            "Appearance",
+            t("settings.appearance"),
             vec![
                 setting_row(
-                    "Font size",
-                    "Source editor and preview use the same size.",
+                    t("settings.language"),
+                    t("settings.language_hint"),
+                    language_picker,
+                )
+                .into_any_element(),
+                setting_row(
+                    t("settings.font_size"),
+                    t("settings.font_size_hint"),
                     picker(
                         210.,
                         [
                             seg_item(
                                 "pref-font-s",
-                                "Small",
+                                t("settings.font_small"),
                                 prefs.content_font == ContentFontSize::Small,
                                 {
                                     let state = state.clone();
@@ -38,7 +49,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                             ),
                             seg_item(
                                 "pref-font-m",
-                                "Medium",
+                                t("settings.font_medium"),
                                 prefs.content_font == ContentFontSize::Medium,
                                 {
                                     let state = state.clone();
@@ -51,7 +62,7 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
                             ),
                             seg_item(
                                 "pref-font-l",
-                                "Large",
+                                t("settings.font_large"),
                                 prefs.content_font == ContentFontSize::Large,
                                 {
                                     let state = state.clone();
@@ -69,43 +80,46 @@ pub(super) fn general_page(state: Entity<AppState>, prefs: &Prefs) -> impl IntoE
             ],
         ))
         .child(settings_group(
-            "Capture",
+            t("settings.capture"),
             vec![
                 bool_row(
                     &state,
                     "pref-hide",
-                    "Hide window while snipping",
-                    "Show the window as soon as you finish selecting.",
+                    "settings.hide_while_snipping",
+                    "settings.hide_while_snipping_hint",
                     prefs.hide_on_capture,
                     |p, v| p.hide_on_capture = v,
                 ),
                 bool_row(
                     &state,
                     "pref-orig",
-                    "Show original after recognize",
-                    "Snip image above the recognized document.",
+                    "settings.show_original",
+                    "settings.show_original_hint",
                     prefs.show_original,
                     |p, v| p.show_original = v,
                 ),
                 bool_row(
                     &state,
                     "pref-copy",
-                    "Copy result automatically",
-                    "Copies the last text format you used for this kind of snip.",
+                    "settings.autocopy",
+                    "settings.autocopy_hint",
                     prefs.autocopy,
                     |p, v| p.autocopy = v,
                 ),
             ],
         ))
-        .child(settings_group("Window", window_rows(&state, prefs)))
+        .child(settings_group(
+            t("settings.window"),
+            window_rows(&state, prefs),
+        ))
 }
 
 fn window_rows(state: &Entity<AppState>, prefs: &Prefs) -> Vec<AnyElement> {
     let mut rows = vec![bool_row(
         state,
         "pref-close-min",
-        "Minimize on close",
-        "Hides to the tray with no taskbar icon. Off quits; Ctrl+Q always quits.",
+        "settings.minimize_on_close",
+        "settings.minimize_on_close_hint",
         prefs.close_action == WindowCloseAction::Minimize,
         |p, v| {
             p.close_action = if v {
@@ -124,11 +138,11 @@ fn window_rows(state: &Entity<AppState>, prefs: &Prefs) -> Vec<AnyElement> {
 fn autostart_row(state: &Entity<AppState>, value: bool) -> AnyElement {
     let state = state.clone();
     setting_row(
-        "Launch at startup",
-        "Keeps LocalTeX ready in the tray when you sign in.",
+        t("settings.launch_at_startup"),
+        t("settings.launch_at_startup_hint"),
         switch(
             "pref-autostart",
-            "Launch at startup",
+            t("settings.launch_at_startup"),
             value,
             move |_, cx| {
                 state.update(cx, |state, cx| state.set_launch_at_startup(!value, cx));

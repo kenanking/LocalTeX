@@ -4,6 +4,7 @@ use gpui::{AppContext, Context};
 use uuid::Uuid;
 
 use crate::doc::{Block, DocStatus, ImageSlot, PersistState};
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 use crate::store::{WriteEvent, WriteKind, WriteResult};
 
@@ -129,7 +130,7 @@ impl AppState {
                 d.persist = PersistState::New;
             }
             eprintln!("{APP_SLUG}: queue persist snip: {err:#}");
-            self.flash_error("Couldn't save that snip", cx);
+            self.flash_error(t("err.save_snip"), cx);
             self.schedule_persist_retry(id, cx);
             self.enqueue_ocr_if_recognizing(id, cx);
         }
@@ -231,7 +232,7 @@ impl AppState {
         }
         if let Err(err) = writer.update_blocks(doc) {
             eprintln!("{APP_SLUG}: queue persist edits: {err:#}");
-            self.flash_error("Couldn't save those edits", cx);
+            self.flash_error(t("err.save_edits"), cx);
             self.schedule_persist_retry(id, cx);
         }
     }
@@ -443,27 +444,27 @@ impl AppState {
                     doc.persist = PersistState::New;
                 }
                 eprintln!("{APP_SLUG}: persist snip: {err:#}");
-                self.flash_error("Couldn't save that snip", cx);
+                self.flash_error(t("err.save_snip"), cx);
                 self.schedule_persist_retry(id, cx);
                 self.enqueue_ocr_if_recognizing(id, cx);
             }
             (WriteKind::UpdateOcr { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: persist OCR {id}: {err:#}");
-                self.flash_error("Couldn't update that snip", cx);
+                self.flash_error(t("err.update_snip"), cx);
                 self.schedule_persist_retry(id, cx);
             }
             (WriteKind::UpdateBlocks { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: persist edits {id}: {err:#}");
-                self.flash_error("Couldn't save those edits", cx);
+                self.flash_error(t("err.save_edits"), cx);
                 self.schedule_persist_retry(id, cx);
             }
             (WriteKind::Delete { id }, Err(err)) => {
                 eprintln!("{APP_SLUG}: delete snip {id}: {err:#}");
-                self.flash_error("Couldn't remove all snip files", cx);
+                self.flash_error(t("err.remove_snip_files"), cx);
             }
             (WriteKind::Wipe, Err(err)) => {
                 eprintln!("{APP_SLUG}: wipe library: {err:#}");
-                self.flash_error("Couldn't clear the snip library", cx);
+                self.flash_error(t("err.clear_library"), cx);
             }
             (WriteKind::UpdateOcr { id }, Ok(WriteResult::Done)) => {
                 self.documents.clear_persist_retry(id);

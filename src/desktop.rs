@@ -71,7 +71,7 @@ struct Services {
     #[cfg(not(target_os = "windows"))]
     grabs: GrabSet,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
-    _tray: Option<tray_icon::TrayIcon>,
+    _tray: Option<other::Tray>,
 }
 
 thread_local! {
@@ -89,7 +89,7 @@ pub fn spawn() -> (Sender<DesktopCmd>, Receiver<DesktopCmd>) {
     #[cfg(target_os = "windows")]
     if let Err(err) = win_hotkey::install_chord_hook(tx.clone()) {
         eprintln!("{APP_SLUG}: global hotkeys: {err}");
-        let _ = tx.send(DesktopCmd::ServiceFailed("Global hotkeys are unavailable"));
+        let _ = tx.send(DesktopCmd::ServiceFailed("err.hotkeys_unavailable"));
     }
     #[cfg(target_os = "windows")]
     win::install_session_end_hook(tx.clone());
@@ -99,7 +99,7 @@ pub fn spawn() -> (Sender<DesktopCmd>, Receiver<DesktopCmd>) {
     let tray = other::start_tray(tx.clone());
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     if tray.is_none() {
-        let _ = tx.send(DesktopCmd::ServiceFailed("System tray is unavailable"));
+        let _ = tx.send(DesktopCmd::ServiceFailed("err.tray_unavailable"));
     }
     SERVICES.with(|slot| {
         *slot.borrow_mut() = Some(Services {
@@ -381,6 +381,22 @@ pub fn set_os_cursor_visible(visible: bool) {
 pub fn reassert_hidden_os_cursor() {
     #[cfg(target_os = "linux")]
     linux::reassert_hidden_os_cursor();
+}
+
+/// Refresh existing native menu items on the UI thread after a locale change.
+pub fn refresh_tray_language() {
+    #[cfg(target_os = "linux")]
+    linux::refresh_tray_language();
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    SERVICES.with(|slot| {
+        if let Some(tray) = slot
+            .borrow()
+            .as_ref()
+            .and_then(|services| services._tray.as_ref())
+        {
+            tray.refresh_language();
+        }
+    });
 }
 
 #[cfg(test)]

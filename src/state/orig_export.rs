@@ -7,6 +7,7 @@ use image::RgbaImage;
 use uuid::Uuid;
 
 use crate::doc::ImageSlot;
+use crate::i18n::t;
 use crate::identity::APP_SLUG;
 use crate::store::Store;
 
@@ -32,31 +33,25 @@ impl AppState {
 
     pub fn copy_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(job) = self.orig_png_job(id) else {
-            self.flash_error("Couldn't copy that image", cx);
+            self.flash_error(t("err.copy_image"), cx);
             return;
         };
         cx.spawn(async move |this, cx| {
             let bytes = cx
                 .background_spawn(async move { load_png_bytes(job) })
                 .await;
-            finish_orig_work(
-                this,
-                cx,
-                "copy original",
-                "Couldn't copy that image",
-                |this, cx| {
-                    crate::desktop::write_clipboard_png(bytes?, cx)?;
-                    this.flash_orig_copy(id, cx);
-                    Ok(())
-                },
-            );
+            finish_orig_work(this, cx, "copy original", "err.copy_image", |this, cx| {
+                crate::desktop::write_clipboard_png(bytes?, cx)?;
+                this.flash_orig_copy(id, cx);
+                Ok(())
+            });
         })
         .detach();
     }
 
     pub fn save_original_as(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let Some(job) = self.orig_png_job(id) else {
-            self.flash_error("Couldn't save that image", cx);
+            self.flash_error(t("err.save_image"), cx);
             return;
         };
         let stem = self
@@ -77,38 +72,26 @@ impl AppState {
             let written = cx
                 .background_spawn(async move { save_orig_png(job, &dest) })
                 .await;
-            finish_orig_work(
-                this,
-                cx,
-                "save original",
-                "Couldn't save that image",
-                |_, _| written,
-            );
+            finish_orig_work(this, cx, "save original", "err.save_image", |_, _| written);
         })
         .detach();
     }
 
     pub fn reveal_original(&mut self, id: Uuid, cx: &mut Context<Self>) {
         if !self.can_reveal_original(id) {
-            self.flash_error("Image isn't saved yet", cx);
+            self.flash_error(t("err.image_not_saved"), cx);
             return;
         }
         let Some(store) = self.store() else {
-            self.flash_error("Image isn't saved yet", cx);
+            self.flash_error(t("err.image_not_saved"), cx);
             return;
         };
         cx.spawn(async move |this, cx| {
             let path = cx.background_spawn(async move { store.png_path(id) }).await;
-            finish_orig_work(
-                this,
-                cx,
-                "reveal original",
-                "Couldn't open that folder",
-                |_, cx| {
-                    cx.reveal_path(&path?);
-                    Ok(())
-                },
-            );
+            finish_orig_work(this, cx, "reveal original", "err.open_folder", |_, cx| {
+                cx.reveal_path(&path?);
+                Ok(())
+            });
         })
         .detach();
     }
@@ -167,7 +150,7 @@ fn finish_orig_work(
     if let Err(err) = this.update(cx, |this, cx| {
         if let Err(err) = work(this, cx) {
             eprintln!("{APP_SLUG}: {op}: {err:#}");
-            this.flash_error(fail_msg, cx);
+            this.flash_error(t(fail_msg), cx);
         }
     }) {
         eprintln!("{APP_SLUG}: {op} task: {err}");

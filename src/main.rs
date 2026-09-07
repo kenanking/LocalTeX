@@ -3,6 +3,8 @@
 // are WINDOWS-subsystem. Default `cargo run` stays CONSOLE so logs still print.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod actions;
 mod autostart;
 mod cache;
@@ -10,6 +12,7 @@ mod capture;
 mod desktop;
 mod doc;
 mod export;
+mod i18n;
 mod icon;
 mod identity;
 mod imgutil;
@@ -40,6 +43,7 @@ use crate::actions::{
     Capture, CopyExport, DeleteSelected, OpenDocx, OpenSettings, PasteSnip, QuitApp, RetryOcr,
     StartDraw, ToggleFormat, ToggleSidebar, UploadImage,
 };
+use crate::i18n::t;
 use crate::identity::{APP_ID, APP_NAME};
 use crate::state::AppState;
 use crate::ui::MainWindow;
@@ -109,6 +113,7 @@ fn run(mut seat: instance::Seat) {
         .with_assets(crate::icon::Assets)
         .run(move |cx: &mut App| {
             let prefs = crate::prefs::Prefs::load();
+            crate::i18n::set_language(prefs.ui_lang);
             crate::keymap::apply(cx, &prefs.shortcuts);
             set_app_menus(cx);
 
@@ -212,38 +217,38 @@ unsafe fn pin_display_vulkan() {
     }
 }
 
-fn set_app_menus(cx: &mut App) {
+pub(crate) fn set_app_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu {
             name: APP_NAME.into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Snip", Capture),
-                MenuItem::action("Upload Image…", UploadImage),
-                MenuItem::action("Paste Image", PasteSnip),
-                MenuItem::action("Draw Snip", StartDraw),
-                MenuItem::action("Copy", CopyExport),
-                MenuItem::action("Open DOCX", OpenDocx),
+                MenuItem::action(t("menu.snip"), Capture),
+                MenuItem::action(t("menu.upload_image"), UploadImage),
+                MenuItem::action(t("menu.paste_image"), PasteSnip),
+                MenuItem::action(t("menu.draw_snip"), StartDraw),
+                MenuItem::action(t("menu.copy"), CopyExport),
+                MenuItem::action(t("menu.open_docx"), OpenDocx),
                 MenuItem::separator(),
-                MenuItem::action("Settings", OpenSettings),
+                MenuItem::action(t("menu.settings"), OpenSettings),
                 MenuItem::separator(),
-                MenuItem::action("Quit", QuitApp),
+                MenuItem::action(t("menu.quit"), QuitApp),
             ],
         },
         Menu {
-            name: "Edit".into(),
+            name: t("menu.edit").into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Delete Snip", DeleteSelected),
-                MenuItem::action("Retry OCR", RetryOcr),
+                MenuItem::action(t("menu.delete_snip"), DeleteSelected),
+                MenuItem::action(t("menu.retry_ocr"), RetryOcr),
             ],
         },
         Menu {
-            name: "View".into(),
+            name: t("menu.view").into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Toggle Markdown / LaTeX copy", ToggleFormat),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action(t("menu.toggle_format"), ToggleFormat),
+                MenuItem::action(t("menu.toggle_sidebar"), ToggleSidebar),
             ],
         },
     ]);

@@ -5,6 +5,7 @@ use gpui::{
 
 use super::{DrawPaper, DrawTool};
 use crate::actions::{DrawEraser, DrawPen, DrawRedo, DrawUndo};
+use crate::i18n::t;
 use crate::ui::main_window::{MainWindow, View};
 use crate::ui::theme;
 use crate::ui::widgets::{
@@ -77,9 +78,9 @@ impl MainWindow {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(theme::BORDER))
-                    .child(section_label("Draw a formula"))
+                    .child(section_label(t("draw.title")))
                     .child(div().flex_1())
-                    .child(ghost_btn("draw-clear", "Clear", has_ink, {
+                    .child(ghost_btn("draw-clear", t("draw.clear"), has_ink, {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
@@ -88,7 +89,7 @@ impl MainWindow {
                             });
                         }
                     }))
-                    .child(ghost_btn("draw-cancel", "Cancel", true, {
+                    .child(ghost_btn("draw-cancel", t("draw.cancel"), true, {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
@@ -96,7 +97,7 @@ impl MainWindow {
                             });
                         }
                     }))
-                    .child(btn("draw-go", "Recognize", true, has_ink, {
+                    .child(btn("draw-go", t("draw.recognize"), true, has_ink, {
                         let entity = cx.entity();
                         move |_, cx| {
                             entity.update(cx, |this, cx| {
@@ -286,7 +287,7 @@ fn draw_dock(
         .child(icon_btn_kbd(
             "draw-pen",
             IconKind::Draw,
-            "Pen  1",
+            t("draw.pen"),
             '1',
             tool == DrawTool::Pen,
             true,
@@ -304,7 +305,7 @@ fn draw_dock(
         .child(icon_btn_kbd(
             "draw-eraser",
             IconKind::Eraser,
-            "Eraser  2",
+            t("draw.eraser"),
             '2',
             tool == DrawTool::Eraser,
             true,
@@ -323,7 +324,7 @@ fn draw_dock(
         .child(icon_btn_kbd(
             "draw-undo",
             IconKind::Undo,
-            "Undo  3",
+            t("draw.undo"),
             '3',
             false,
             can_undo,
@@ -340,7 +341,7 @@ fn draw_dock(
         .child(icon_btn_kbd(
             "draw-redo",
             IconKind::Redo,
-            "Redo  4",
+            t("draw.redo"),
             '4',
             false,
             can_redo,
@@ -355,32 +356,47 @@ fn draw_dock(
             },
         ))
         .child(div().w(px(148.)).ml(px(4.)).child(segmented([
-            seg_item("draw-paper-dots", "Dots", paper == DrawPaper::Dots, {
-                let entity = cx.entity();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.board.set_paper(DrawPaper::Dots);
-                        cx.notify();
-                    });
-                }
-            }),
-            seg_item("draw-paper-lines", "Lines", paper == DrawPaper::Lines, {
-                let entity = cx.entity();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.board.set_paper(DrawPaper::Lines);
-                        cx.notify();
-                    });
-                }
-            }),
-            seg_item("draw-paper-blank", "Blank", paper == DrawPaper::Blank, {
-                let entity = cx.entity();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.board.set_paper(DrawPaper::Blank);
-                        cx.notify();
-                    });
-                }
-            }),
+            seg_item(
+                "draw-paper-dots",
+                t("draw.dots"),
+                paper == DrawPaper::Dots,
+                {
+                    let entity = cx.entity();
+                    move |_, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.board.set_paper(DrawPaper::Dots);
+                            cx.notify();
+                        });
+                    }
+                },
+            ),
+            seg_item(
+                "draw-paper-lines",
+                t("draw.lines"),
+                paper == DrawPaper::Lines,
+                {
+                    let entity = cx.entity();
+                    move |_, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.board.set_paper(DrawPaper::Lines);
+                            cx.notify();
+                        });
+                    }
+                },
+            ),
+            seg_item(
+                "draw-paper-blank",
+                t("draw.blank"),
+                paper == DrawPaper::Blank,
+                {
+                    let entity = cx.entity();
+                    move |_, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.board.set_paper(DrawPaper::Blank);
+                            cx.notify();
+                        });
+                    }
+                },
+            ),
         ])))
 }

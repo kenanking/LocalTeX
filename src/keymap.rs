@@ -47,6 +47,16 @@ pub enum Group {
     Window,
 }
 
+impl Group {
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Capture => "shortcut.group.capture",
+            Self::Document => "shortcut.group.document",
+            Self::Window => "shortcut.group.window",
+        }
+    }
+}
+
 /// Catalog-facing OS commands. Tray Quit is not a shortcut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GlobalCmd {
@@ -84,7 +94,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Capture,
         group: Group::Capture,
-        label: "Create snip from screenshot",
+        label: "shortcut.capture",
         default: "ctrl-alt-m",
         context: None,
         required: false,
@@ -93,7 +103,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Show,
         group: Group::Window,
-        label: "Toggle main window",
+        label: "shortcut.show",
         default: "ctrl-alt-l",
         context: None,
         required: false,
@@ -102,7 +112,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Upload,
         group: Group::Capture,
-        label: "Upload snip",
+        label: "shortcut.upload",
         default: "ctrl-o",
         context: None,
         required: false,
@@ -111,7 +121,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Paste,
         group: Group::Capture,
-        label: "Paste image or path from clipboard",
+        label: "shortcut.paste",
         default: "ctrl-v",
         context: None,
         required: true,
@@ -120,7 +130,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Draw,
         group: Group::Capture,
-        label: "Create snip from drawing",
+        label: "shortcut.draw",
         default: "ctrl-d",
         context: None,
         required: false,
@@ -129,7 +139,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Copy,
         group: Group::Document,
-        label: "Copy last format",
+        label: "shortcut.copy",
         default: "ctrl-c",
         context: None,
         required: true,
@@ -138,7 +148,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::ToggleFormat,
         group: Group::Document,
-        label: "Toggle Markdown / LaTeX copy",
+        label: "shortcut.toggle_format",
         default: "ctrl-l",
         context: None,
         required: false,
@@ -147,7 +157,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Delete,
         group: Group::Document,
-        label: "Delete selected snip",
+        label: "shortcut.delete",
         default: "delete",
         context: Some("SnipList && !SearchField"),
         required: true,
@@ -156,7 +166,7 @@ pub const CATALOG: &[Spec] = &[
     Spec {
         id: ShortcutId::Settings,
         group: Group::Window,
-        label: "Settings",
+        label: "shortcut.settings",
         default: "ctrl-,",
         context: None,
         required: false,

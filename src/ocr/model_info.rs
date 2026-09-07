@@ -20,18 +20,6 @@ pub enum ModelRuntimeState {
     Mismatch,
 }
 
-impl ModelRuntimeState {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Declared => "Declared",
-            Self::Checking => "Checking…",
-            Self::Verified => "Verified",
-            Self::Unstamped => "Unstamped",
-            Self::Mismatch => "Mismatch",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct FileStamp {
     pub(super) schema: Option<String>,
@@ -86,16 +74,6 @@ pub(crate) struct PackReport {
     pub(super) state: ModelRuntimeState,
     pub(super) pack_id: Option<String>,
     pub(super) detail: Option<String>,
-}
-
-impl ModelManifestState {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Loaded => "Loaded",
-            Self::Missing => "Missing",
-            Self::Invalid => "Invalid",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

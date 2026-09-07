@@ -4,6 +4,7 @@ use uuid::Uuid;
 use super::super::main_window::MainWindow;
 use super::super::theme;
 use super::super::widgets::{ButtonElement, IconKind, Tooltip};
+use crate::i18n::t;
 
 pub(crate) fn hud_pill() -> gpui::Div {
     div()
@@ -23,15 +24,16 @@ pub(crate) fn hud_pill() -> gpui::Div {
 pub(crate) fn orig_hud_disc(
     id: impl Into<SharedString>,
     icon: IconKind,
-    tooltip: &'static str,
+    tooltip: impl Into<SharedString>,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
     let id = id.into();
+    let tooltip = tooltip.into();
     div()
         .id(id.clone())
         .accessibility_id(id)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(tooltip.clone())
         .focusable()
         .tab_stop(true)
         .size(px(28.))
@@ -59,16 +61,17 @@ pub(crate) fn orig_hud_disc(
 pub(crate) fn source_hud_disc(
     id: impl Into<SharedString>,
     icon: IconKind,
-    tooltip: &'static str,
+    tooltip: impl Into<SharedString>,
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
     let id = id.into();
+    let tooltip = tooltip.into();
     let element = div()
         .id(id.clone())
         .accessibility_id(id)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(tooltip.clone())
         .when(enabled, |d| d.focusable().tab_stop(true))
         .size(px(20.))
         .rounded_full()
@@ -93,15 +96,16 @@ pub(crate) fn source_hud_disc(
 pub(crate) fn source_done_disc(
     id: impl Into<SharedString>,
     icon: IconKind,
-    tooltip: &'static str,
+    tooltip: impl Into<SharedString>,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {
     let id = id.into();
+    let tooltip = tooltip.into();
     div()
         .id(id.clone())
         .accessibility_id(id)
         .role(gpui::Role::Button)
-        .aria_label(tooltip)
+        .aria_label(tooltip.clone())
         .focusable()
         .tab_stop(true)
         .size(px(24.))
@@ -174,7 +178,7 @@ pub(crate) fn orig_action_capsule(
             } else {
                 IconKind::Copy
             },
-            "Copy image",
+            t("orig.copy_image"),
             true,
             {
                 let entity = entity.clone();
@@ -189,7 +193,7 @@ pub(crate) fn orig_action_capsule(
         .child(orig_capsule_btn(
             SharedString::from(format!("{id_prefix}-save")),
             IconKind::Save,
-            "Save as",
+            t("orig.save_as"),
             true,
             {
                 let entity = entity.clone();
@@ -206,9 +210,9 @@ pub(crate) fn orig_action_capsule(
             SharedString::from(format!("{id_prefix}-reveal")),
             IconKind::Folder,
             if reveal_enabled {
-                "Show in folder"
+                t("orig.show_in_folder")
             } else {
-                "Image isn't saved yet"
+                t("orig.not_saved")
             },
             reveal_enabled,
             {
@@ -229,7 +233,7 @@ fn orig_capsule_sep() -> gpui::Div {
 fn orig_capsule_btn(
     id: SharedString,
     icon: IconKind,
-    label: &'static str,
+    label: impl Into<SharedString>,
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl gpui::IntoElement {

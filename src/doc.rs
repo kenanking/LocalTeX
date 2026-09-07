@@ -293,17 +293,17 @@ impl Document {
 
     pub fn age_label(&self) -> String {
         let Ok(elapsed) = SystemTime::now().duration_since(self.created_at) else {
-            return "now".into();
+            return crate::i18n::t("history.now");
         };
         let secs = elapsed.as_secs();
         if secs < 5 {
-            "just now".into()
+            crate::i18n::t("history.just_now")
         } else if secs < 60 {
-            format!("{secs}s ago")
+            rust_i18n::t!("history.seconds_ago", n = secs).into_owned()
         } else if secs < 3600 {
-            format!("{}m ago", secs / 60)
+            rust_i18n::t!("history.minutes_ago", n = secs / 60).into_owned()
         } else {
-            format!("{}h ago", secs / 3600)
+            rust_i18n::t!("history.hours_ago", n = secs / 3600).into_owned()
         }
     }
 
